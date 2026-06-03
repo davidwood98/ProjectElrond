@@ -161,6 +161,11 @@ class AnthropicProviderTest {
         assertTrue(result.exceptionOrNull() is AIException.Network)
     }
 
+    @Test(expected = IllegalArgumentException::class)
+    fun `non-https base url is rejected`() {
+        AnthropicConfig(apiKey = "k", baseUrl = "http://api.anthropic.com")
+    }
+
     @Test
     fun `unparseable success body maps to AIException Parse`() = runTest {
         val engine = MockEngine {

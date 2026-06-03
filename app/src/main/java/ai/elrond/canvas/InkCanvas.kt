@@ -117,6 +117,7 @@ private fun createTouchListener(
                     currentPointerId = pointerId
                     if (erase) {
                         erasing = true
+                        viewModel.beginEraseGesture() // one undo step per gesture
                         viewModel.eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
                     } else {
                         currentStrokeId =

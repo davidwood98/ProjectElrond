@@ -64,9 +64,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Roadmap (POC order)
 
 1. ~~CLAUDE.md + project structure~~ (done)
-2. Basic note canvas with S Pen ink input
-3. Room schema for notes, pages, notebooks
-4. AI backend module with Anthropic API integration
-5. `/Q` trigger detection + ML Kit recognition
-6. AI response rendering on canvas
-7. TODO extraction, calendar integration
+2. ~~Basic note canvas with S Pen ink input~~ (done — verified on emulator)
+3. ~~Room schema for notes, pages, notebooks~~ (done)
+4. ~~AI backend module with Anthropic API integration~~ (done)
+5. ~~`/Q` trigger detection + ML Kit recognition~~ (done — strokes grouped into handwriting lines by vertical span; per debounce only the last-stroke line is recognized; `/Q` inline → that line is the question, bare `/Q` → line above is the question; other lines sent as labelled page context; response in a temporary card overlay; model pre-warmed at startup)
+6. ~~AI response rendering on canvas~~ (done — `AiInkNote`s in Caveat handwriting font (bundled, OFL — `licenses/CAVEAT_OFL.txt`), purple AI ink vs navy user ink, placed below the trigger line, drag to move / corner-handle to resize / ✕ to remove; stroke undo/redo with per-eraser-gesture grouping, max 50 steps)
+7. ~~Room persistence + note browser~~ (done — canvas auto-saves strokes (800ms debounce + onCleared flush) via `NoteRepository.replaceStrokes`; notes load on open; landing page grid with stroke-polyline thumbnails, timestamp titles, long-press delete with confirmation, FAB, empty state; navigation-compose `notes` ↔ `note/{pageId}`; manual DI via `ElrondApplication`)
+8. TODO extraction, calendar integration (NOTE: calendar permissions were removed from the manifest per security audit — re-add READ/WRITE_CALENDAR in the same change that ships this)
+
+## Security posture (audited 2026-06-04)
+
+- Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
+- **Known accepted risk (POC only):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
+- AI notes (`AiInkNote`) are not persisted yet — only ink strokes survive restart.
+
+## Environment Notes (build)
+
+- Two SDKs are in play: Android Studio (Windows) uses `sdk.dir=C:\...\Android\Sdk` in `local.properties`; WSL builds use the Linux SDK at `~/android-sdk` (swap `sdk.dir` temporarily during WSL builds, then restore — never leave the WSL path in the file or Studio breaks).
+- The Anthropic API key is read from `anthropic.apiKey` in `local.properties` into `BuildConfig.ANTHROPIC_API_KEY`. Without it the app runs with the AI disabled (a config-error card appears on `/Q`).
+- ML Kit downloads the en-US handwriting model on first `/Q` use — first trigger needs network.

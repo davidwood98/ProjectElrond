@@ -82,6 +82,67 @@ class NoteRepositoryTest {
         coVerify { pageDao.touch("page-1", FIXED_TIME) }
     }
 
+    @Test
+    fun `ensureDefaultNotebook creates one on first launch`() = runTest {
+        coEvery { notebookDao.first() } returns null
+        val slot = slot<NotebookEntity>()
+        coEvery { notebookDao.insert(capture(slot)) } returns Unit
+
+        val notebook = repository.ensureDefaultNotebook()
+
+        assertEquals(NoteRepository.DEFAULT_NOTEBOOK_NAME, slot.captured.name)
+        assertEquals("fixed-id", notebook.id)
+    }
+
+    @Test
+    fun `ensureDefaultNotebook reuses the existing notebook`() = runTest {
+        val existing = NotebookEntity(id = "nb-existing", name = "My Notes", createdAt = 1L)
+        coEvery { notebookDao.first() } returns existing
+
+        val notebook = repository.ensureDefaultNotebook()
+
+        assertEquals("nb-existing", notebook.id)
+        coVerify(exactly = 0) { notebookDao.insert(any()) }
+    }
+
+    @Test
+    fun `deletePage delegates to dao`() = runTest {
+        repository.deletePage("page-1")
+
+        coVerify { pageDao.deleteById("page-1") }
+    }
+
+    @Test
+    fun `replaceStrokes rewrites page strokes atomically and touches page`() = runTest {
+        repository.replaceStrokes("page-1", emptyList())
+
+        coVerify { strokeDao.replaceForPage("page-1", emptyList()) }
+        coVerify { pageDao.touch("page-1", FIXED_TIME) }
+    }
+
+    @Test
+    fun `loadStrokePreview decodes stored points and normalizes them`() = runTest {
+        val entity = StrokeEntity(
+            id = "s1",
+            pageId = "page-1",
+            brushFamily = "pressure-pen",
+            colorArgb = 0,
+            brushSize = 4f,
+            brushEpsilon = 0.1f,
+            inputsJson = """[
+                {"x":100.0,"y":200.0,"t":0,"pressure":1.0,"tilt":0.0,"orientation":0.0},
+                {"x":300.0,"y":200.0,"t":16,"pressure":1.0,"tilt":0.0,"orientation":0.0}
+            ]""",
+            createdAt = 1L,
+        )
+        coEvery { strokeDao.getForPage("page-1") } returns listOf(entity)
+
+        val preview = repository.loadStrokePreview("page-1")
+
+        // 200-unit-wide horizontal stroke → normalized to 0..1 on x, 0 on y.
+        assertEquals(listOf(listOf(0f to 0f, 1f to 0f)), preview)
+    }
+
     companion object {
         private const val FIXED_TIME = 1_780_000_000_000
     }

@@ -83,6 +83,10 @@ object StrokeSerialization {
         return Stroke(brush, batch)
     }
 
+    /** Raw (x, y) polyline from a stored stroke — for thumbnails; no ink natives. */
+    fun decodePoints(inputsJson: String): List<Pair<Float, Float>> =
+        json.decodeFromString<List<SerializedStrokeInput>>(inputsJson).map { it.x to it.y }
+
     private fun familyKey(family: BrushFamily): String = when (family) {
         StockBrushes.markerLatest -> FAMILY_MARKER
         StockBrushes.highlighterLatest -> FAMILY_HIGHLIGHTER

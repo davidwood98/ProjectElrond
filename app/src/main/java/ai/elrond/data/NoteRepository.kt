@@ -31,6 +31,10 @@ class NoteRepository(
         return entity.toDomain()
     }
 
+    /** Returns the first notebook, creating the default one on first launch. */
+    suspend fun ensureDefaultNotebook(): Notebook =
+        notebookDao.first()?.toDomain() ?: createNotebook(DEFAULT_NOTEBOOK_NAME)
+
     // --- Pages ---
 
     fun observePages(notebookId: String): Flow<List<NotePage>> =
@@ -60,6 +64,11 @@ class NoteRepository(
 
     suspend fun getPage(pageId: String): NotePage? = pageDao.getById(pageId)?.toDomain()
 
+    /** Deletes the page; its strokes cascade-delete via the foreign key. */
+    suspend fun deletePage(pageId: String) {
+        pageDao.deleteById(pageId)
+    }
+
     // --- Strokes ---
 
     suspend fun saveStrokes(pageId: String, strokes: List<Stroke>, isAiInk: Boolean = false) {
@@ -82,8 +91,42 @@ class NoteRepository(
     suspend fun loadStrokes(pageId: String): List<Stroke> =
         strokeDao.getForPage(pageId).map(StrokeSerialization::toStroke)
 
+    /** Atomically rewrites the page's strokes — canvas auto-save (handles erase/undo too). */
+    suspend fun replaceStrokes(pageId: String, strokes: List<Stroke>, isAiInk: Boolean = false) {
+        val now = clock()
+        strokeDao.replaceForPage(
+            pageId,
+            strokes.map { stroke ->
+                StrokeSerialization.toEntity(
+                    stroke = stroke,
+                    id = newId(),
+                    pageId = pageId,
+                    createdAt = now,
+                    isAiInk = isAiInk,
+                )
+            },
+        )
+        pageDao.touch(pageId, now)
+    }
+
+    /**
+     * Lightweight stroke polylines for note-card thumbnails, normalized to 0..1.
+     * Decodes stored points directly — no ink natives, cheap enough for lists.
+     */
+    suspend fun loadStrokePreview(pageId: String, maxStrokes: Int = PREVIEW_MAX_STROKES): List<List<Pair<Float, Float>>> {
+        val polylines = strokeDao.getForPage(pageId)
+            .take(maxStrokes)
+            .map { StrokeSerialization.decodePoints(it.inputsJson) }
+        return StrokePreviewNormalizer.normalize(polylines)
+    }
+
     suspend fun clearStrokes(pageId: String) {
         strokeDao.deleteForPage(pageId)
         pageDao.touch(pageId, clock())
+    }
+
+    companion object {
+        const val DEFAULT_NOTEBOOK_NAME = "My Notes"
+        const val PREVIEW_MAX_STROKES = 60
     }
 }

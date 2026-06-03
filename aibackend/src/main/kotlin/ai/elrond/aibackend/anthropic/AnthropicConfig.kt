@@ -6,6 +6,11 @@ data class AnthropicConfig(
     val model: String = DEFAULT_MODEL,
     val baseUrl: String = DEFAULT_BASE_URL,
 ) {
+    init {
+        // Fail fast on transport-security misconfiguration.
+        require(baseUrl.startsWith("https://")) { "baseUrl must use https" }
+    }
+
     companion object {
         /**
          * Default model. Originally specified as claude-sonnet-4-20250514, but that

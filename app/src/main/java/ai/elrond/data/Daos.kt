@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -23,6 +24,9 @@ interface NotebookDao {
 
     @Query("SELECT * FROM notebooks WHERE id = :id")
     suspend fun getById(id: String): NotebookEntity?
+
+    @Query("SELECT * FROM notebooks ORDER BY createdAt LIMIT 1")
+    suspend fun first(): NotebookEntity?
 }
 
 @Dao
@@ -51,6 +55,10 @@ interface NotePageDao {
 
     @Query("UPDATE note_pages SET customTitle = :title, modifiedAt = :modifiedAt WHERE id = :id")
     suspend fun rename(id: String, title: String?, modifiedAt: Long)
+
+    /** Strokes cascade-delete via the pageId foreign key. */
+    @Query("DELETE FROM note_pages WHERE id = :id")
+    suspend fun deleteById(id: String)
 }
 
 @Dao
@@ -69,6 +77,13 @@ interface StrokeDao {
 
     @Query("DELETE FROM strokes WHERE pageId = :pageId")
     suspend fun deleteForPage(pageId: String)
+
+    /** Atomic full-page rewrite — used by canvas auto-save. */
+    @Transaction
+    suspend fun replaceForPage(pageId: String, strokes: List<StrokeEntity>) {
+        deleteForPage(pageId)
+        insertAll(strokes)
+    }
 }
 
 @Dao

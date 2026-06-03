@@ -1,0 +1,81 @@
+package ai.elrond.notes
+
+import ai.elrond.data.NoteRepository
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Before
+import org.junit.Test
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class NoteListViewModelTest {
+
+    private val dispatcher = StandardTestDispatcher()
+    private val repository = mockk<NoteRepository>(relaxed = true)
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(dispatcher)
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    private fun page(id: String) = NotePage(
+        id = id,
+        notebookId = "nb-1",
+        customTitle = null,
+        createdAt = 1L,
+        modifiedAt = 2L,
+    )
+
+    @Test
+    fun `pages exposes the repository timeline`() = runTest(dispatcher) {
+        every { repository.observeTimeline() } returns flowOf(listOf(page("p1"), page("p2")))
+        val viewModel = NoteListViewModel(repository)
+
+        backgroundScope.launch { viewModel.pages.collect { } }
+        advanceUntilIdle()
+
+        assertEquals(listOf("p1", "p2"), viewModel.pages.value.map { it.id })
+    }
+
+    @Test
+    fun `createNote bootstraps default notebook and reports new page id`() = runTest(dispatcher) {
+        every { repository.observeTimeline() } returns flowOf(emptyList())
+        coEvery { repository.ensureDefaultNotebook() } returns Notebook("nb-1", "My Notes", 1L)
+        coEvery { repository.createPage("nb-1") } returns page("new-page")
+        val viewModel = NoteListViewModel(repository)
+
+        var openedId: String? = null
+        viewModel.createNote { openedId = it }
+        advanceUntilIdle()
+
+        assertEquals("new-page", openedId)
+    }
+
+    @Test
+    fun `deleteNote delegates to repository`() = runTest(dispatcher) {
+        every { repository.observeTimeline() } returns flowOf(emptyList())
+        val viewModel = NoteListViewModel(repository)
+
+        viewModel.deleteNote("p1")
+        advanceUntilIdle()
+
+        coVerify { repository.deletePage("p1") }
+    }
+}
