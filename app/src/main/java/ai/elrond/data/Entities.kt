@@ -63,6 +63,34 @@ data class StrokeEntity(
     val isAiInk: Boolean = false,
 )
 
+/**
+ * A persisted AI response rendered on the canvas as handwriting-style text.
+ * Position and size are stored so the box stays where the user left it.
+ */
+@Entity(
+    tableName = "ai_notes",
+    foreignKeys = [
+        ForeignKey(
+            entity = NotePageEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["pageId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("pageId")],
+)
+data class AiNoteEntity(
+    @PrimaryKey val id: String,
+    val pageId: String,
+    val text: String,
+    val x: Float,
+    val y: Float,
+    val widthPx: Float,
+    /** Null = wrap content height; set once the user resizes vertically. */
+    val heightPx: Float? = null,
+    val createdAt: Long,
+)
+
 @Entity(
     tableName = "todo_items",
     foreignKeys = [
@@ -82,8 +110,12 @@ data class TodoItemEntity(
     val dueAt: Long? = null,
     /** 0 = none, 1 = low, 2 = medium, 3 = high. */
     val priority: Int = 0,
-    /** Note page the item was extracted from, if AI-extracted. */
+    /** Note page this item links back to; null once that page is deleted (SET_NULL). */
     val sourcePageId: String? = null,
+    /** Snapshot of the source page title, kept so the link label survives page deletion. */
+    val sourcePageTitle: String? = null,
+    /** True when the AI extracted this from note content; false for manual entries. */
+    val isAiExtracted: Boolean = false,
     val createdAt: Long,
     val completedAt: Long? = null,
 )

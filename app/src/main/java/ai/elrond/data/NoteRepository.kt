@@ -1,5 +1,6 @@
 package ai.elrond.data
 
+import ai.elrond.ai.AiInkNote
 import ai.elrond.notes.Notebook
 import ai.elrond.notes.NotePage
 import androidx.ink.strokes.Stroke
@@ -8,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 /**
- * Repository for notebooks, note pages, and ink strokes.
+ * Repository for notebooks, note pages, ink strokes, and AI response notes.
  *
  * The clock and id generator are injectable for deterministic unit tests.
  */
@@ -16,6 +17,7 @@ class NoteRepository(
     private val notebookDao: NotebookDao,
     private val pageDao: NotePageDao,
     private val strokeDao: StrokeDao,
+    private val aiNoteDao: AiNoteDao,
     private val clock: () -> Long = System::currentTimeMillis,
     private val newId: () -> String = { UUID.randomUUID().toString() },
 ) {
@@ -123,6 +125,17 @@ class NoteRepository(
     suspend fun clearStrokes(pageId: String) {
         strokeDao.deleteForPage(pageId)
         pageDao.touch(pageId, clock())
+    }
+
+    // --- AI response notes ---
+
+    suspend fun loadAiNotes(pageId: String): List<AiInkNote> =
+        aiNoteDao.getForPage(pageId).map(AiNoteEntity::toDomain)
+
+    /** Atomically rewrites the page's AI notes (handles add / move / resize / remove). */
+    suspend fun replaceAiNotes(pageId: String, notes: List<AiInkNote>) {
+        val now = clock()
+        aiNoteDao.replaceForPage(pageId, notes.map { it.toEntity(pageId, now) })
     }
 
     companion object {

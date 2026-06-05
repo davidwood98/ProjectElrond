@@ -1,0 +1,86 @@
+package ai.elrond.aibackend
+
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class AiTaskExtractorTest {
+
+    private fun providerReturning(text: String) = object : AIProvider {
+        var lastRequest: AIRequest? = null
+        override suspend fun generate(request: AIRequest): Result<AIResponse> {
+            lastRequest = request
+            return Result.success(AIResponse(text, inputTokens = 1, outputTokens = 1, stopReason = "end_turn"))
+        }
+    }
+
+    @Test
+    fun `parses a clean json array of tasks`() = runTest {
+        val provider = providerReturning(
+            """[{"content":"Email Sarah the report","priority":3,"dueDate":"2026-06-10"},
+                {"content":"Book meeting room","priority":1,"dueDate":null}]""",
+        )
+        val tasks = AiTaskExtractor(provider).extract("notes").getOrThrow()
+
+        assertEquals(2, tasks.size)
+        assertEquals("Email Sarah the report", tasks[0].content)
+        assertEquals(3, tasks[0].priority)
+        assertEquals("2026-06-10", tasks[0].dueDateIso)
+        assertEquals(null, tasks[1].dueDateIso)
+    }
+
+    @Test
+    fun `tolerates code fences and surrounding prose`() = runTest {
+        val provider = providerReturning(
+            "Here are the tasks:\n```json\n[{\"content\":\"Call the bank\",\"priority\":2}]\n```",
+        )
+        val tasks = AiTaskExtractor(provider).extract("notes").getOrThrow()
+
+        assertEquals(listOf("Call the bank"), tasks.map { it.content })
+        assertEquals(2, tasks.single().priority)
+    }
+
+    @Test
+    fun `empty array yields no tasks`() = runTest {
+        val tasks = AiTaskExtractor(providerReturning("[]")).extract("just facts").getOrThrow()
+        assertTrue(tasks.isEmpty())
+    }
+
+    @Test
+    fun `blank note content short-circuits without calling the provider`() = runTest {
+        val provider = providerReturning("[]")
+        val tasks = AiTaskExtractor(provider).extract("   ").getOrThrow()
+
+        assertTrue(tasks.isEmpty())
+        assertEquals(null, provider.lastRequest) // never called
+    }
+
+    @Test
+    fun `priority is clamped and blank content dropped`() = runTest {
+        val provider = providerReturning(
+            """[{"content":"  ","priority":1},{"content":"Do thing","priority":9}]""",
+        )
+        val tasks = AiTaskExtractor(provider).extract("notes").getOrThrow()
+
+        assertEquals(listOf("Do thing"), tasks.map { it.content })
+        assertEquals(3, tasks.single().priority) // 9 clamped to max 3
+    }
+
+    @Test
+    fun `non-json response yields empty list`() = runTest {
+        val tasks = AiTaskExtractor(providerReturning("I could not find any tasks."))
+            .extract("notes").getOrThrow()
+        assertTrue(tasks.isEmpty())
+    }
+
+    @Test
+    fun `provider failure propagates as failure`() = runTest {
+        val failing = object : AIProvider {
+            override suspend fun generate(request: AIRequest): Result<AIResponse> =
+                Result.failure(AIException.Network(RuntimeException("offline")))
+        }
+        val result = AiTaskExtractor(failing).extract("notes")
+        assertTrue(result.isFailure)
+    }
+}

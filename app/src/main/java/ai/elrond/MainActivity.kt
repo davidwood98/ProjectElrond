@@ -54,6 +54,7 @@ private fun ElrondNavHost() {
             NoteCanvasScreen(
                 pageId = pageId,
                 onBack = { navController.popBackStack() },
+                onOpenNote = { id -> navController.navigate("note/$id") },
             )
         }
     }

@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -18,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntOffset
@@ -33,20 +35,28 @@ val AiInkColor = Color(0xFF6A1B9A)
 
 /**
  * An AI response rendered as handwriting-style ink on the canvas.
- * Drag the text to move it; drag the corner handle to resize; tap ✕ to remove.
+ * Drag the text to move it; drag the corner handle to resize (width and height
+ * are independent — aspect ratio is not locked); tap ✕ to remove.
  */
 @Composable
 fun AiInkNoteView(
     note: AiInkNote,
     onMove: (dx: Float, dy: Float) -> Unit,
-    onResize: (scaleDelta: Float) -> Unit,
+    onResize: (dWidth: Float, dHeight: Float) -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val density = LocalDensity.current
+    val widthDp = with(density) { note.widthPx.toDp() }
+    val heightModifier = note.heightPx?.let { h ->
+        Modifier.height(with(density) { h.toDp() })
+    } ?: Modifier
+
     Box(
         modifier = modifier
             .offset { IntOffset(note.x.roundToInt(), note.y.roundToInt()) }
-            .width((BASE_WIDTH_DP * note.scale).dp)
+            .width(widthDp)
+            .then(heightModifier)
             .pointerInput(note.id) {
                 detectDragGestures { change, drag ->
                     change.consume()
@@ -57,10 +67,10 @@ fun AiInkNoteView(
         Text(
             text = note.text,
             fontFamily = HandwritingFontFamily,
-            fontSize = (BASE_FONT_SP * note.scale).sp,
-            lineHeight = (BASE_FONT_SP * 1.3f * note.scale).sp,
+            fontSize = BASE_FONT_SP.sp,
+            lineHeight = (BASE_FONT_SP * 1.25f).sp,
             color = AiInkColor,
-            modifier = Modifier.padding(end = 28.dp, bottom = 16.dp),
+            modifier = Modifier.padding(end = 28.dp, bottom = 18.dp),
         )
         Text(
             text = "✕",
@@ -80,13 +90,11 @@ fun AiInkNoteView(
                 .pointerInput(note.id) {
                     detectDragGestures { change, drag ->
                         change.consume()
-                        onResize((drag.x + drag.y) / RESIZE_SENSITIVITY_PX)
+                        onResize(drag.x, drag.y) // dx → width, dy → height
                     }
                 },
         )
     }
 }
 
-private const val BASE_WIDTH_DP = 340
-private const val BASE_FONT_SP = 26
-private const val RESIZE_SENSITIVITY_PX = 600f
+private const val BASE_FONT_SP = 22

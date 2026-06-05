@@ -115,11 +115,15 @@ class CanvasViewModelAiTest {
         assertEquals(15f, viewModel.aiNotes.value.single().x)
         assertEquals(17f, viewModel.aiNotes.value.single().y)
 
-        viewModel.resizeAiNote(id, scaleDelta = 0.5f)
-        assertEquals(1.5f, viewModel.aiNotes.value.single().scale)
+        // Free resize: width and height move independently (aspect unlocked).
+        val widthBefore = viewModel.aiNotes.value.single().widthPx
+        viewModel.resizeAiNote(id, dWidth = 40f, dHeight = 25f)
+        assertEquals(widthBefore + 40f, viewModel.aiNotes.value.single().widthPx)
+        assertEquals(ai.elrond.ai.AiInkNote.MIN_HEIGHT_PX + 25f, viewModel.aiNotes.value.single().heightPx)
 
-        viewModel.resizeAiNote(id, scaleDelta = 99f) // clamped
-        assertEquals(3f, viewModel.aiNotes.value.single().scale)
+        // Width can't shrink below the minimum.
+        viewModel.resizeAiNote(id, dWidth = -100000f, dHeight = 0f)
+        assertEquals(ai.elrond.ai.AiInkNote.MIN_WIDTH_PX, viewModel.aiNotes.value.single().widthPx)
 
         viewModel.removeAiNote(id)
         assertTrue(viewModel.aiNotes.value.isEmpty())
@@ -182,6 +186,24 @@ class CanvasViewModelAiTest {
         advanceUntilIdle()
 
         assertEquals(1, provider.prompts.size)
+    }
+
+    @Test
+    fun `failed request surfaces the no-conversation error message`() = runTest(dispatcher) {
+        val failing = object : AIProvider {
+            override suspend fun generate(request: AIRequest): Result<AIResponse> =
+                Result.failure(ai.elrond.aibackend.AIException.Network(RuntimeException("offline")))
+        }
+        val viewModel = viewModel(FakeRecognizer("hello /Q"), failing)
+
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+
+        val state = viewModel.aiState.value
+        assertTrue(state is AiUiState.Error)
+        assertTrue(
+            (state as AiUiState.Error).message.startsWith("I could not complete that request because of"),
+        )
     }
 
     @Test

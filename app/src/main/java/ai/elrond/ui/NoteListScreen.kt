@@ -1,7 +1,10 @@
 package ai.elrond.ui
 
+import ai.elrond.ElrondApplication
 import ai.elrond.notes.NoteListViewModel
 import ai.elrond.notes.NotePage
+import ai.elrond.todo.TodoViewModel
+import ai.elrond.todo.todoViewModelFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -17,12 +20,16 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -40,9 +47,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -55,12 +64,27 @@ fun NoteListScreen(
     onOpenNote: (pageId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val app = LocalContext.current.applicationContext as ElrondApplication
+    val todoViewModel: TodoViewModel = viewModel(factory = todoViewModelFactory(app.todoRepository))
     val pages by viewModel.pages.collectAsStateWithLifecycle()
+    val todoCount by todoViewModel.activeCount.collectAsStateWithLifecycle()
     var deleteCandidate by remember { mutableStateOf<NotePage?>(null) }
+    var showTodoPanel by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text("Project Elrond") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Project Elrond") },
+                actions = {
+                    IconButton(onClick = { showTodoPanel = true }) {
+                        BadgedBox(badge = { if (todoCount > 0) Badge { Text(todoCount.toString()) } }) {
+                            Icon(Icons.AutoMirrored.Filled.List, contentDescription = "To-do list")
+                        }
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = { viewModel.createNote(onOpenNote) }) {
                 Icon(Icons.Filled.Add, contentDescription = "New note")
@@ -87,6 +111,17 @@ fun NoteListScreen(
                 }
             }
         }
+    }
+
+    if (showTodoPanel) {
+        TodoPanel(
+            viewModel = todoViewModel,
+            onDismiss = { showTodoPanel = false },
+            onOpenSource = { sourceId ->
+                showTodoPanel = false
+                onOpenNote(sourceId)
+            },
+        )
     }
 
     deleteCandidate?.let { page ->
@@ -194,7 +229,7 @@ private fun EmptyState(modifier: Modifier = Modifier) {
             )
             Text(
                 text = "Tap + to create your first note.\nWrite naturally with your S Pen, " +
-                    "and write /Q after a question to ask the AI.",
+                    "and write /Q to ask the AI.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

@@ -87,9 +87,31 @@ interface StrokeDao {
 }
 
 @Dao
+interface AiNoteDao {
+    @Insert
+    suspend fun insertAll(notes: List<AiNoteEntity>)
+
+    @Query("SELECT * FROM ai_notes WHERE pageId = :pageId ORDER BY createdAt")
+    suspend fun getForPage(pageId: String): List<AiNoteEntity>
+
+    @Query("DELETE FROM ai_notes WHERE pageId = :pageId")
+    suspend fun deleteForPage(pageId: String)
+
+    /** Atomic full-page rewrite — mirrors stroke auto-save. */
+    @Transaction
+    suspend fun replaceForPage(pageId: String, notes: List<AiNoteEntity>) {
+        deleteForPage(pageId)
+        insertAll(notes)
+    }
+}
+
+@Dao
 interface TodoDao {
     @Insert
     suspend fun insert(item: TodoItemEntity)
+
+    @Insert
+    suspend fun insertAll(items: List<TodoItemEntity>)
 
     @Update
     suspend fun update(item: TodoItemEntity)
@@ -97,9 +119,31 @@ interface TodoDao {
     @Delete
     suspend fun delete(item: TodoItemEntity)
 
-    @Query("SELECT * FROM todo_items WHERE isCompleted = 0 ORDER BY priority DESC, dueAt IS NULL, dueAt")
+    @Query("DELETE FROM todo_items WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("SELECT * FROM todo_items WHERE id = :id")
+    suspend fun getById(id: String): TodoItemEntity?
+
+    @Query("UPDATE todo_items SET isCompleted = :completed, completedAt = :completedAt WHERE id = :id")
+    suspend fun setCompleted(id: String, completed: Boolean, completedAt: Long?)
+
+    /** Active items first by priority, then soonest due date (nulls last). */
+    @Query(
+        "SELECT * FROM todo_items WHERE isCompleted = 0 " +
+            "ORDER BY priority DESC, dueAt IS NULL, dueAt, createdAt DESC",
+    )
     fun observeActive(): Flow<List<TodoItemEntity>>
 
-    @Query("SELECT * FROM todo_items ORDER BY createdAt DESC")
+    /** All items, completed last; drives the panel list. */
+    @Query("SELECT * FROM todo_items ORDER BY isCompleted, priority DESC, createdAt DESC")
     fun observeAll(): Flow<List<TodoItemEntity>>
+
+    /** Outstanding count for the toolbar badge. */
+    @Query("SELECT COUNT(*) FROM todo_items WHERE isCompleted = 0")
+    fun observeActiveCount(): Flow<Int>
+
+    /** All item contents — for de-duplicating AI extraction against existing tasks. */
+    @Query("SELECT title FROM todo_items")
+    suspend fun allContents(): List<String>
 }

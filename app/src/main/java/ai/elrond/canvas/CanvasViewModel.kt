@@ -12,9 +12,15 @@ import ai.elrond.ai.groupStrokesIntoLines
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
+import ai.elrond.aibackend.AiTaskExtractor
+import ai.elrond.aibackend.AssistantCapabilities
+import ai.elrond.aibackend.TaskExtractor
 import ai.elrond.aibackend.anthropic.AnthropicConfig
 import ai.elrond.aibackend.anthropic.AnthropicProvider
 import ai.elrond.data.NoteRepository
+import ai.elrond.data.TodoRepository
+import ai.elrond.todo.PendingTaskExtraction
+import ai.elrond.todo.TodoPriority
 import androidx.ink.brush.Brush
 import androidx.ink.brush.StockBrushes
 import androidx.ink.geometry.ImmutableBox
@@ -58,6 +64,8 @@ class CanvasViewModel(
     private val lineSplitter: (List<Stroke>) -> List<List<Stroke>> = ::groupStrokesIntoLines,
     private val notePlacer: (List<Stroke>) -> NotePosition = ::defaultAiNotePosition,
     private val repository: NoteRepository? = null,
+    private val taskExtractor: TaskExtractor? = null,
+    private val todoRepository: TodoRepository? = null,
     private val pageId: String? = null,
     private val triggerDebounceMillis: Long = TRIGGER_DEBOUNCE_MILLIS,
     private val autoSaveDebounceMillis: Long = AUTOSAVE_DEBOUNCE_MILLIS,
@@ -79,6 +87,10 @@ class CanvasViewModel(
     /** AI responses rendered on the canvas as handwriting-style notes. */
     private val _aiNotes = MutableStateFlow<List<AiInkNote>>(emptyList())
     val aiNotes: StateFlow<List<AiInkNote>> = _aiNotes.asStateFlow()
+
+    /** Tasks the AI extracted from the page, awaiting the user's confirmation to save. */
+    private val _pendingExtraction = MutableStateFlow<PendingTaskExtraction?>(null)
+    val pendingExtraction: StateFlow<PendingTaskExtraction?> = _pendingExtraction.asStateFlow()
 
     // --- Undo / redo (stroke history) ---
 
@@ -102,6 +114,12 @@ class CanvasViewModel(
     /** Strokes as last persisted — avoids redundant writes and enables the close-flush. */
     private var lastPersisted: List<Stroke> = emptyList()
 
+    /** AI notes as last persisted — same role for the ai_notes table. */
+    private var lastPersistedAiNotes: List<AiInkNote> = emptyList()
+
+    /** Latest canvas width in px, reported by the UI; sizes new full-line AI boxes. */
+    private var canvasWidthPx: Float = 0f
+
     init {
         // Pre-download the handwriting model so the first /Q is fast.
         recognizer?.let { viewModelScope.launch { it.warmUp() } }
@@ -112,10 +130,23 @@ class CanvasViewModel(
                     .onSuccess { loaded ->
                         if (loaded.isNotEmpty()) _finishedStrokes.value = loaded
                     }
+                runCatching { repository.loadAiNotes(pageId) }
+                    .onSuccess { loaded -> _aiNotes.value = loaded }
                 lastPersisted = _finishedStrokes.value
+                lastPersistedAiNotes = _aiNotes.value
                 startAutoSave(repository, pageId)
             }
         }
+    }
+
+    /** Reports the live canvas width so new AI boxes default to a full line. */
+    fun setCanvasSize(widthPx: Float) {
+        canvasWidthPx = widthPx
+    }
+
+    private fun defaultNoteWidth(): Float {
+        val usable = canvasWidthPx - 2 * AI_NOTE_MARGIN_PX
+        return if (usable > AiInkNote.MIN_WIDTH_PX) usable else AiInkNote.FALLBACK_WIDTH_PX
     }
 
     @OptIn(FlowPreview::class)
@@ -128,6 +159,14 @@ class CanvasViewModel(
                 }
             }
         }
+        viewModelScope.launch {
+            _aiNotes.debounce(autoSaveDebounceMillis).collect { notes ->
+                if (notes != lastPersistedAiNotes) {
+                    runCatching { repository.replaceAiNotes(pageId, notes) }
+                        .onSuccess { lastPersistedAiNotes = notes }
+                }
+            }
+        }
     }
 
     override fun onCleared() {
@@ -135,9 +174,13 @@ class CanvasViewModel(
         val repository = repository
         val pageId = pageId
         val strokes = _finishedStrokes.value
-        if (repository != null && pageId != null && strokes != lastPersisted) {
-            flushScope.launch {
-                runCatching { repository.replaceStrokes(pageId, strokes) }
+        val aiNotes = _aiNotes.value
+        if (repository != null && pageId != null) {
+            if (strokes != lastPersisted) {
+                flushScope.launch { runCatching { repository.replaceStrokes(pageId, strokes) } }
+            }
+            if (aiNotes != lastPersistedAiNotes) {
+                flushScope.launch { runCatching { repository.replaceAiNotes(pageId, aiNotes) } }
             }
         }
         super.onCleared()
@@ -230,14 +273,15 @@ class CanvasViewModel(
         }
     }
 
-    fun resizeAiNote(id: String, scaleDelta: Float) {
+    /** Free resize: width and height change independently (aspect ratio unlocked). */
+    fun resizeAiNote(id: String, dWidth: Float, dHeight: Float) {
         _aiNotes.update { notes ->
             notes.map { note ->
                 if (note.id == id) {
-                    note.copy(
-                        scale = (note.scale + scaleDelta)
-                            .coerceIn(AiInkNote.MIN_SCALE, AiInkNote.MAX_SCALE),
-                    )
+                    val newWidth = (note.widthPx + dWidth).coerceAtLeast(AiInkNote.MIN_WIDTH_PX)
+                    val currentHeight = note.heightPx ?: AiInkNote.MIN_HEIGHT_PX
+                    val newHeight = (currentHeight + dHeight).coerceAtLeast(AiInkNote.MIN_HEIGHT_PX)
+                    note.copy(widthPx = newWidth, heightPx = newHeight)
                 } else {
                     note
                 }
@@ -322,6 +366,15 @@ class CanvasViewModel(
         }
 
         _aiState.value = AiUiState.Thinking(effectiveQuestion)
+
+        // Extract-first: if the page holds NEW action items, capture them as a to-do
+        // (confirmation sheet) and DO NOT write a /Q answer onto the canvas. Only a
+        // genuine question (no new tasks) produces a rendered answer.
+        if (offerExtraction(pageText = userPrompt)) {
+            _aiState.value = AiUiState.Idle
+            return
+        }
+
         val result = provider.generate(
             AIRequest(input = AIInput.Text(userPrompt), systemPrompt = SYSTEM_PROMPT),
         )
@@ -334,14 +387,85 @@ class CanvasViewModel(
                         text = response.text.stripMarkdown(),
                         x = position.x,
                         y = position.y,
+                        widthPx = defaultNoteWidth(),
                     )
                 }
                 _aiState.value = AiUiState.Idle
             },
-            onFailure = {
-                _aiState.value = AiUiState.Error(it.message ?: "AI request failed")
+            onFailure = { error ->
+                _aiState.value = AiUiState.Error(errorMessage(error))
             },
         )
+    }
+
+    /**
+     * If the page contains NEW action items (ones not already on the to-do list),
+     * raises the confirmation sheet and returns true so the caller suppresses the
+     * `/Q` answer. Returns false when there is no extractor/repo, no tasks, or all
+     * detected tasks already exist (self-assessed and ignored).
+     *
+     * Independent of `/Q` itself, so a future background save-job can reuse it.
+     */
+    private suspend fun offerExtraction(pageText: String): Boolean {
+        val extractor = taskExtractor ?: return false
+        val todoRepository = todoRepository ?: return false
+        val pageId = pageId ?: return false
+        if (pageText.isBlank()) return false
+
+        val extracted = extractor.extract(pageText).getOrNull().orEmpty()
+        if (extracted.isEmpty()) return false
+
+        val existing = runCatching { todoRepository.existingContents() }.getOrDefault(emptySet())
+        val newTasks = extracted.filter { it.content.trim().lowercase() !in existing }
+        if (newTasks.isEmpty()) return false // all already captured — ignore
+
+        val repoTasks = newTasks.map { task ->
+            TodoRepository.ExtractedTask(
+                content = task.content,
+                priority = TodoPriority.entries.getOrElse(task.priority) { TodoPriority.NONE },
+                dueAt = task.dueDateIso.toEpochMillisOrNull(),
+            )
+        }
+        val title = repository?.getPage(pageId)?.displayTitle() ?: "Note"
+        pendingRepoTasks = repoTasks
+        pendingSourceTitle = title
+        _pendingExtraction.value = PendingTaskExtraction(
+            tasks = repoTasks.map { it.content },
+            sourcePageTitle = title,
+        )
+        return true
+    }
+
+    private var pendingRepoTasks: List<TodoRepository.ExtractedTask> = emptyList()
+    private var pendingSourceTitle: String = "Note"
+
+    /**
+     * Persists the AI-extracted tasks the user kept selected.
+     *
+     * @param selectedIndices indices into the pending task list that are toggled on;
+     *        null means "all".
+     */
+    fun confirmExtraction(selectedIndices: Set<Int>? = null) {
+        val todoRepository = todoRepository ?: return
+        val pageId = pageId ?: return
+        val title = pendingSourceTitle
+        val chosen = pendingRepoTasks.filterIndexed { index, _ ->
+            selectedIndices == null || index in selectedIndices
+        }
+        clearPendingExtraction()
+        if (chosen.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                todoRepository.addExtracted(chosen, sourcePageId = pageId, sourcePageTitle = title)
+            }
+        }
+    }
+
+    fun dismissExtraction() = clearPendingExtraction()
+
+    private fun clearPendingExtraction() {
+        _pendingExtraction.value = null
+        pendingRepoTasks = emptyList()
     }
 
     companion object {
@@ -354,8 +478,22 @@ class CanvasViewModel(
         const val AUTOSAVE_DEBOUNCE_MILLIS: Long = 800L
         const val MAX_HISTORY: Int = 50
 
+        /** Margin from the page edge for a full-line AI response box. */
+        const val AI_NOTE_MARGIN_PX: Float = 32f
+
         /** Outlives the ViewModel for the onCleared() persistence flush. */
         private val flushScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        /** Parses an ISO date ("2026-06-10") to start-of-day epoch millis; null if absent/invalid. */
+        private fun String?.toEpochMillisOrNull(): Long? {
+            if (this.isNullOrBlank()) return null
+            return runCatching {
+                java.time.LocalDate.parse(this)
+                    .atStartOfDay(java.time.ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli()
+            }.getOrNull()
+        }
 
         /** Markdown markers occasionally slip through despite the system prompt. */
         private fun String.stripMarkdown(): String =
@@ -372,22 +510,43 @@ class CanvasViewModel(
             response is written back onto the note page, so prefer short, direct
             answers. Respond in plain text only: no markdown, no asterisks, no
             headings.
+
+            This is a one-shot answer, not a conversation: never ask the user a
+            follow-up question and never offer to continue. If the request is
+            unclear or you need more detail to answer, reply with exactly this
+            sentence and nothing else: "I need more information, request unclear".
+
+            ${AssistantCapabilities.systemPromptSection()}
         """.trimIndent()
 
+        /** User-facing message for a failed /Q request (no conversational retry path). */
+        private fun errorMessage(error: Throwable): String {
+            val reason = when (error) {
+                is ai.elrond.aibackend.AIException.Network -> "a network problem"
+                is ai.elrond.aibackend.AIException.Api -> "the AI service (${error.statusCode})"
+                is ai.elrond.aibackend.AIException.Parse -> "an unexpected response"
+                else -> error.message ?: "an unknown error"
+            }
+            return "I could not complete that request because of $reason"
+        }
     }
 }
 
-/** Production wiring: ML Kit recognition + Anthropic backend + Room persistence. */
+/** Production wiring: ML Kit recognition + Anthropic backend + Room persistence + TODO extraction. */
 fun canvasViewModelFactory(
     repository: NoteRepository,
+    todoRepository: TodoRepository,
     pageId: String,
 ): ViewModelProvider.Factory = viewModelFactory {
     initializer {
         val apiKey = BuildConfig.ANTHROPIC_API_KEY
+        val provider = apiKey.takeIf { it.isNotBlank() }
+            ?.let { AnthropicProvider(AnthropicConfig(apiKey = it)) }
         CanvasViewModel(
             recognizer = MlKitHandwritingRecognizer(),
-            aiProvider = apiKey.takeIf { it.isNotBlank() }
-                ?.let { AnthropicProvider(AnthropicConfig(apiKey = it)) },
+            aiProvider = provider,
+            taskExtractor = provider?.let { AiTaskExtractor(it) },
+            todoRepository = todoRepository,
             repository = repository,
             pageId = pageId,
         )

@@ -14,11 +14,13 @@ class NoteRepositoryTest {
     private val notebookDao = mockk<NotebookDao>(relaxed = true)
     private val pageDao = mockk<NotePageDao>(relaxed = true)
     private val strokeDao = mockk<StrokeDao>(relaxed = true)
+    private val aiNoteDao = mockk<AiNoteDao>(relaxed = true)
 
     private val repository = NoteRepository(
         notebookDao = notebookDao,
         pageDao = pageDao,
         strokeDao = strokeDao,
+        aiNoteDao = aiNoteDao,
         clock = { FIXED_TIME },
         newId = { "fixed-id" },
     )
@@ -72,6 +74,35 @@ class NoteRepositoryTest {
 
         coVerify(exactly = 0) { strokeDao.insertAll(any()) }
         coVerify(exactly = 0) { pageDao.touch(any(), any()) }
+    }
+
+    @Test
+    fun `replaceAiNotes rewrites the page's AI notes atomically`() = runTest {
+        val slot = slot<List<AiNoteEntity>>()
+        coEvery { aiNoteDao.replaceForPage(eq("page-1"), capture(slot)) } returns Unit
+
+        repository.replaceAiNotes(
+            "page-1",
+            listOf(ai.elrond.ai.AiInkNote(id = "n1", text = "hi", x = 1f, y = 2f, widthPx = 300f)),
+        )
+
+        assertEquals(1, slot.captured.size)
+        assertEquals("hi", slot.captured.single().text)
+        assertEquals("page-1", slot.captured.single().pageId)
+        assertEquals(300f, slot.captured.single().widthPx)
+    }
+
+    @Test
+    fun `loadAiNotes maps entities to domain notes`() = runTest {
+        coEvery { aiNoteDao.getForPage("page-1") } returns listOf(
+            AiNoteEntity(id = "n1", pageId = "page-1", text = "answer", x = 5f, y = 6f, widthPx = 400f, heightPx = 80f, createdAt = 1L),
+        )
+
+        val notes = repository.loadAiNotes("page-1")
+
+        assertEquals("answer", notes.single().text)
+        assertEquals(400f, notes.single().widthPx)
+        assertEquals(80f, notes.single().heightPx)
     }
 
     @Test
