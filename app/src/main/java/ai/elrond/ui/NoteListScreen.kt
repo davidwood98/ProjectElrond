@@ -22,25 +22,34 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -62,6 +71,7 @@ import java.time.format.DateTimeFormatter
 fun NoteListScreen(
     viewModel: NoteListViewModel,
     onOpenNote: (pageId: String) -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val app = LocalContext.current.applicationContext as ElrondApplication
@@ -70,12 +80,41 @@ fun NoteListScreen(
     val todoCount by todoViewModel.activeCount.collectAsStateWithLifecycle()
     var deleteCandidate by remember { mutableStateOf<NotePage?>(null) }
     var showTodoPanel by remember { mutableStateOf(false) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
 
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                Text(
+                    "Project Elrond",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(16.dp),
+                )
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                    label = { Text("Settings") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        onOpenSettings()
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+            }
+        },
+    ) {
     Scaffold(
         modifier = modifier,
         topBar = {
             TopAppBar(
                 title = { Text("Project Elrond") },
+                navigationIcon = {
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    }
+                },
                 actions = {
                     IconButton(onClick = { showTodoPanel = true }) {
                         BadgedBox(badge = { if (todoCount > 0) Badge { Text(todoCount.toString()) } }) {
@@ -144,6 +183,7 @@ fun NoteListScreen(
             },
         )
     }
+    } // ModalNavigationDrawer content
 }
 
 @OptIn(ExperimentalFoundationApi::class)

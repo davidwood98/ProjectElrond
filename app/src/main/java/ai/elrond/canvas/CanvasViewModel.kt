@@ -38,12 +38,14 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Holds canvas drawing state: finished (dry) strokes, the active tool, brush settings,
@@ -67,8 +69,10 @@ class CanvasViewModel(
     private val taskExtractor: TaskExtractor? = null,
     private val todoRepository: TodoRepository? = null,
     private val pageId: String? = null,
+    triggerCommandFlow: Flow<String>? = null,
     private val triggerDebounceMillis: Long = TRIGGER_DEBOUNCE_MILLIS,
     private val autoSaveDebounceMillis: Long = AUTOSAVE_DEBOUNCE_MILLIS,
+    private val requestTimeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
 ) : ViewModel() {
 
     private val _finishedStrokes = MutableStateFlow<List<Stroke>>(emptyList())
@@ -120,7 +124,14 @@ class CanvasViewModel(
     /** Latest canvas width in px, reported by the UI; sizes new full-line AI boxes. */
     private var canvasWidthPx: Float = 0f
 
+    /** Current activation command (default `/Q`), kept in sync with settings. */
+    @Volatile
+    private var triggerCommand: String = QueryTriggerDetector.DEFAULT_TRIGGER
+
     init {
+        triggerCommandFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { triggerCommand = it } }
+        }
         // Pre-download the handwriting model so the first /Q is fast.
         recognizer?.let { viewModelScope.launch { it.warmUp() } }
 
@@ -330,11 +341,12 @@ class CanvasViewModel(
         val triggerIndex = lines.indexOfFirst { line -> line.any { it === lastStroke } }
             .takeIf { it >= 0 } ?: lines.lastIndex
         val triggerLine = lines[triggerIndex]
+        val trigger = triggerCommand
         val triggerText = recognizer.recognize(triggerLine).getOrNull() ?: return
-        if (!QueryTriggerDetector.containsTrigger(triggerText)) return
+        if (!QueryTriggerDetector.containsTrigger(triggerText, trigger)) return
 
-        // Question: text before /Q on the trigger line, else the line directly above.
-        val inlinePrompt = QueryTriggerDetector.extractPrompt(triggerText)
+        // Question: text before the trigger on its line, else the line directly above.
+        val inlinePrompt = QueryTriggerDetector.extractPrompt(triggerText, trigger)
         val questionLineIndex = if (inlinePrompt == null && triggerIndex > 0) triggerIndex - 1 else null
         val question = inlinePrompt
             ?: questionLineIndex?.let { recognizer.recognize(lines[it]).getOrNull()?.trim() }
@@ -365,7 +377,8 @@ class CanvasViewModel(
                 "Other notes on the page (context, may be unrelated):\n$context"
         }
 
-        _aiState.value = AiUiState.Thinking(effectiveQuestion)
+        val position = notePlacer(triggerLine)
+        _aiState.value = AiUiState.Thinking(effectiveQuestion, position.x, position.y)
 
         // Extract-first: if the page holds NEW action items, capture them as a to-do
         // (confirmation sheet) and DO NOT write a /Q answer onto the canvas. Only a
@@ -375,27 +388,26 @@ class CanvasViewModel(
             return
         }
 
-        val result = provider.generate(
-            AIRequest(input = AIInput.Text(userPrompt), systemPrompt = SYSTEM_PROMPT),
-        )
-        result.fold(
-            onSuccess = { response ->
-                val position = notePlacer(triggerLine)
+        // 15s timeout: null result is treated like a connection failure.
+        val result = withTimeoutOrNull(requestTimeoutMillis) {
+            provider.generate(AIRequest(input = AIInput.Text(userPrompt), systemPrompt = SYSTEM_PROMPT))
+        }
+        when {
+            result == null -> _aiState.value = AiUiState.Error(CONNECTION_ERROR, position.x, position.y)
+            result.isSuccess -> {
                 _aiNotes.update {
                     it + AiInkNote(
                         id = UUID.randomUUID().toString(),
-                        text = response.text.stripMarkdown(),
+                        text = result.getOrThrow().text.stripMarkdown(),
                         x = position.x,
                         y = position.y,
                         widthPx = defaultNoteWidth(),
                     )
                 }
                 _aiState.value = AiUiState.Idle
-            },
-            onFailure = { error ->
-                _aiState.value = AiUiState.Error(errorMessage(error))
-            },
-        )
+            }
+            else -> _aiState.value = AiUiState.Error(CONNECTION_ERROR, position.x, position.y)
+        }
     }
 
     /**
@@ -476,7 +488,11 @@ class CanvasViewModel(
         const val ERASER_RADIUS: Float = 16f
         const val TRIGGER_DEBOUNCE_MILLIS: Long = 900L
         const val AUTOSAVE_DEBOUNCE_MILLIS: Long = 800L
+        const val REQUEST_TIMEOUT_MILLIS: Long = 15_000L
         const val MAX_HISTORY: Int = 50
+
+        /** Shown as red handwriting on the canvas for failures and timeouts. */
+        const val CONNECTION_ERROR: String = "Could not connect — try again"
 
         /** Margin from the page edge for a full-line AI response box. */
         const val AI_NOTE_MARGIN_PX: Float = 32f
@@ -519,16 +535,6 @@ class CanvasViewModel(
             ${AssistantCapabilities.systemPromptSection()}
         """.trimIndent()
 
-        /** User-facing message for a failed /Q request (no conversational retry path). */
-        private fun errorMessage(error: Throwable): String {
-            val reason = when (error) {
-                is ai.elrond.aibackend.AIException.Network -> "a network problem"
-                is ai.elrond.aibackend.AIException.Api -> "the AI service (${error.statusCode})"
-                is ai.elrond.aibackend.AIException.Parse -> "an unexpected response"
-                else -> error.message ?: "an unknown error"
-            }
-            return "I could not complete that request because of $reason"
-        }
     }
 }
 
@@ -536,6 +542,7 @@ class CanvasViewModel(
 fun canvasViewModelFactory(
     repository: NoteRepository,
     todoRepository: TodoRepository,
+    settingsRepository: ai.elrond.settings.SettingsRepository,
     pageId: String,
 ): ViewModelProvider.Factory = viewModelFactory {
     initializer {
@@ -549,6 +556,7 @@ fun canvasViewModelFactory(
             todoRepository = todoRepository,
             repository = repository,
             pageId = pageId,
+            triggerCommandFlow = settingsRepository.triggerCommand,
         )
     }
 }

@@ -2,8 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Calendar permissions are deliberately NOT declared yet (security audit):
-         add READ_CALENDAR/WRITE_CALENDAR in the same change that ships feature 7. -->
+    <!-- Calendar integration (Phase 5): DeviceCalendarProvider reads/writes the
+         device calendar. Requested at runtime; only used after explicit user action. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
 
     <!-- Stylus is the primary input but the app must still install without one -->
     <uses-feature

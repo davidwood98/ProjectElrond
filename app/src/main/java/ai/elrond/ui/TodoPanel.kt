@@ -128,6 +128,7 @@ fun TodoPanel(
                                 onDelete = { viewModel.delete(item.id) },
                                 onOpenSource = { item.sourcePageId?.let(onOpenSource) },
                                 onEditDue = { editingDueFor = item },
+                                onSetPriority = { p -> viewModel.edit(item.id, item.content, p, item.dueAt) },
                             )
                         }
                         if (done.isNotEmpty()) {

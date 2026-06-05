@@ -15,8 +15,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         StrokeEntity::class,
         TodoItemEntity::class,
         AiNoteEntity::class,
+        CalendarEventEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -26,6 +27,7 @@ abstract class ElrondDatabase : RoomDatabase() {
     abstract fun strokeDao(): StrokeDao
     abstract fun todoDao(): TodoDao
     abstract fun aiNoteDao(): AiNoteDao
+    abstract fun calendarEventDao(): CalendarEventDao
 
     companion object {
         private const val DB_NAME = "elrond.db"
@@ -62,6 +64,34 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /** v4 adds the calendar_events table (AI suggestions + confirmed events). */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS calendar_events (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        description TEXT,
+                        startTime INTEGER NOT NULL,
+                        endTime INTEGER NOT NULL,
+                        location TEXT,
+                        attendees TEXT NOT NULL,
+                        calendarId TEXT,
+                        externalEventId TEXT,
+                        sourcePageId TEXT,
+                        isAiSuggested INTEGER NOT NULL,
+                        isConfirmed INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(sourcePageId) REFERENCES note_pages(id) ON DELETE SET NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_sourcePageId ON calendar_events(sourcePageId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_startTime ON calendar_events(startTime)")
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -71,7 +101,8 @@ abstract class ElrondDatabase : RoomDatabase() {
                     context.applicationContext,
                     ElrondDatabase::class.java,
                     DB_NAME,
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .build().also { instance = it }
             }
     }
 }

@@ -121,30 +121,27 @@ class CanvasViewModelExtractionTest {
     }
 
     @Test
-    fun `confirming discards the Q echo note from the canvas`() = runTest(dispatcher) {
+    fun `no answer is written to the canvas when tasks are detected`() = runTest(dispatcher) {
         val vm = viewModel(listOf(ExtractedTask("Buy milk")))
+
         vm.onStrokesFinished(listOf(mockk<Stroke>()))
         advanceUntilIdle()
-        assertEquals(1, vm.aiNotes.value.size) // the /Q answer echo is on the canvas
 
-        coEvery { todoRepository.addExtracted(any(), any(), any()) } returns emptyList()
-        vm.confirmExtraction()
-        advanceUntilIdle()
-
-        assertTrue(vm.aiNotes.value.isEmpty()) // echo removed once tasks are saved
+        // It's a to-do, not a question — the /Q answer is suppressed.
+        assertTrue(vm.aiNotes.value.isEmpty())
+        assertEquals(listOf("Buy milk"), vm.pendingExtraction.value?.tasks)
     }
 
     @Test
-    fun `dismissing keeps the echo note and persists nothing`() = runTest(dispatcher) {
+    fun `already-existing tasks are ignored and an answer is produced instead`() = runTest(dispatcher) {
+        coEvery { todoRepository.existingContents() } returns setOf("buy milk")
         val vm = viewModel(listOf(ExtractedTask("Buy milk")))
+
         vm.onStrokesFinished(listOf(mockk<Stroke>()))
         advanceUntilIdle()
 
-        vm.dismissExtraction()
-        advanceUntilIdle()
-
-        assertEquals(1, vm.aiNotes.value.size) // echo stays
-        coVerify(exactly = 0) { todoRepository.addExtracted(any(), any(), any()) }
+        assertNull(vm.pendingExtraction.value) // nothing new to add
+        assertEquals(1, vm.aiNotes.value.size) // falls through to a normal answer
     }
 
     @Test
@@ -161,13 +158,14 @@ class CanvasViewModelExtractionTest {
     }
 
     @Test
-    fun `no tasks means no confirmation`() = runTest(dispatcher) {
+    fun `no tasks means a normal answer and no confirmation`() = runTest(dispatcher) {
         val vm = viewModel(emptyList())
 
         vm.onStrokesFinished(listOf(mockk<Stroke>()))
         advanceUntilIdle()
 
         assertNull(vm.pendingExtraction.value)
+        assertEquals(1, vm.aiNotes.value.size)
     }
 
     @Test

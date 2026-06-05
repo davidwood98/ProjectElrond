@@ -87,6 +87,31 @@ interface StrokeDao {
 }
 
 @Dao
+interface CalendarEventDao {
+    @Insert
+    suspend fun insert(event: CalendarEventEntity)
+
+    @Update
+    suspend fun update(event: CalendarEventEntity)
+
+    @Query("DELETE FROM calendar_events WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("SELECT * FROM calendar_events WHERE id = :id")
+    suspend fun getById(id: String): CalendarEventEntity?
+
+    @Query("SELECT * FROM calendar_events ORDER BY startTime")
+    fun observeAll(): Flow<List<CalendarEventEntity>>
+
+    /** Unconfirmed AI suggestions awaiting the user's confirm-before-write decision. */
+    @Query("SELECT * FROM calendar_events WHERE isAiSuggested = 1 AND isConfirmed = 0 ORDER BY startTime")
+    fun observeSuggested(): Flow<List<CalendarEventEntity>>
+
+    @Query("SELECT * FROM calendar_events WHERE startTime >= :startMillis AND startTime < :endMillis ORDER BY startTime")
+    suspend fun inRange(startMillis: Long, endMillis: Long): List<CalendarEventEntity>
+}
+
+@Dao
 interface AiNoteDao {
     @Insert
     suspend fun insertAll(notes: List<AiNoteEntity>)

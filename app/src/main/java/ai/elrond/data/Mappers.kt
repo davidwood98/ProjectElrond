@@ -1,6 +1,7 @@
 package ai.elrond.data
 
 import ai.elrond.ai.AiInkNote
+import ai.elrond.calendar.CalendarEvent
 import ai.elrond.notes.Notebook
 import ai.elrond.notes.NotePage
 import ai.elrond.todo.TodoItem
@@ -70,3 +71,19 @@ fun AiInkNote.toEntity(pageId: String, createdAt: Long): AiNoteEntity = AiNoteEn
     heightPx = heightPx,
     createdAt = createdAt,
 )
+
+fun CalendarEventEntity.toDomain(): CalendarEvent = CalendarEvent(
+    id = externalEventId,
+    title = title,
+    description = description,
+    startTime = startTime,
+    endTime = endTime,
+    location = location,
+    attendees = attendees,
+    calendarId = calendarId,
+    sourceNoteId = sourcePageId,
+    isAiSuggested = isAiSuggested,
+)
+
+/** Local id is stored separately from the (optional) backing-calendar event id. */
+val CalendarEventEntity.localId: String get() = id

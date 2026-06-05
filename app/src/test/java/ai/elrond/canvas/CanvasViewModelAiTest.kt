@@ -11,8 +11,10 @@ import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -75,6 +77,68 @@ class CanvasViewModelAiTest {
                 AIResponse(text = responseText, inputTokens = 1, outputTokens = 1, stopReason = "end_turn"),
             )
         }
+    }
+
+    /** Provider that never returns within the timeout window. */
+    private class HangingProvider : AIProvider {
+        override suspend fun generate(request: AIRequest): Result<AIResponse> {
+            kotlinx.coroutines.delay(Long.MAX_VALUE)
+            error("unreachable")
+        }
+    }
+
+    @Test
+    fun `request that exceeds the timeout shows the connection error`() = runTest(dispatcher) {
+        val viewModel = CanvasViewModel(
+            recognizer = FakeRecognizer("hello /Q"),
+            aiProvider = HangingProvider(),
+            lineSplitter = singleLine,
+            notePlacer = fixedPlacement,
+            requestTimeoutMillis = 100L,
+        )
+
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle() // virtual time advances past the 100ms timeout
+
+        val state = viewModel.aiState.value
+        assertTrue(state is AiUiState.Error)
+        assertEquals(CanvasViewModel.CONNECTION_ERROR, (state as AiUiState.Error).message)
+    }
+
+    @Test
+    fun `loading state is shown at the trigger position while thinking`() = runTest(dispatcher) {
+        val viewModel = CanvasViewModel(
+            recognizer = FakeRecognizer("hello /Q"),
+            aiProvider = HangingProvider(),
+            lineSplitter = singleLine,
+            notePlacer = fixedPlacement,
+        )
+
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+        runCurrent() // reach provider.generate (suspended), state is Thinking
+
+        val state = viewModel.aiState.value
+        assertTrue(state is AiUiState.Thinking)
+        assertEquals(10f, (state as AiUiState.Thinking).x)
+        assertEquals(20f, state.y)
+    }
+
+    @Test
+    fun `configured trigger is used instead of the default`() = runTest(dispatcher) {
+        val provider = FakeProvider("ok")
+        val viewModel = CanvasViewModel(
+            recognizer = FakeRecognizer("what is 2+2 >Q"),
+            aiProvider = provider,
+            lineSplitter = singleLine,
+            notePlacer = fixedPlacement,
+            triggerCommandFlow = kotlinx.coroutines.flow.flowOf(">Q"),
+        )
+
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+
+        assertEquals(listOf("what is 2+2"), provider.prompts)
     }
 
     @Test
@@ -189,7 +253,7 @@ class CanvasViewModelAiTest {
     }
 
     @Test
-    fun `failed request surfaces the no-conversation error message`() = runTest(dispatcher) {
+    fun `failed request surfaces the connection error on the canvas`() = runTest(dispatcher) {
         val failing = object : AIProvider {
             override suspend fun generate(request: AIRequest): Result<AIResponse> =
                 Result.failure(ai.elrond.aibackend.AIException.Network(RuntimeException("offline")))
@@ -201,9 +265,7 @@ class CanvasViewModelAiTest {
 
         val state = viewModel.aiState.value
         assertTrue(state is AiUiState.Error)
-        assertTrue(
-            (state as AiUiState.Error).message.startsWith("I could not complete that request because of"),
-        )
+        assertEquals(CanvasViewModel.CONNECTION_ERROR, (state as AiUiState.Error).message)
     }
 
     @Test

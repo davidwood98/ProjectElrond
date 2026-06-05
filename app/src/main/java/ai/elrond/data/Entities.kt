@@ -91,6 +91,40 @@ data class AiNoteEntity(
     val createdAt: Long,
 )
 
+/**
+ * A calendar event — either an unconfirmed AI suggestion ([isAiSuggested] = true,
+ * [isConfirmed] = false) or one the user has confirmed. Confirmed events may also
+ * have been written to a backing calendar; [externalEventId] holds that id.
+ */
+@Entity(
+    tableName = "calendar_events",
+    foreignKeys = [
+        ForeignKey(
+            entity = NotePageEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sourcePageId"],
+            onDelete = ForeignKey.SET_NULL,
+        ),
+    ],
+    indices = [Index("sourcePageId"), Index("startTime")],
+)
+data class CalendarEventEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val description: String? = null,
+    val startTime: Long,
+    val endTime: Long,
+    val location: String? = null,
+    val attendees: List<String> = emptyList(),
+    val calendarId: String? = null,
+    /** Id in the backing calendar once written there (else null). */
+    val externalEventId: String? = null,
+    val sourcePageId: String? = null,
+    val isAiSuggested: Boolean = false,
+    val isConfirmed: Boolean = false,
+    val createdAt: Long,
+)
+
 @Entity(
     tableName = "todo_items",
     foreignKeys = [

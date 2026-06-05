@@ -67,4 +67,12 @@ class QueryTriggerDetectorTest {
         assertFalse(QueryTriggerDetector.containsTrigger("meeting with Q"))
         assertFalse(QueryTriggerDetector.containsTrigger("ask /Q something later"))
     }
+
+    @Test
+    fun `custom trigger is matched as a literal at the end`() {
+        assertEquals("hello", QueryTriggerDetector.extractPrompt("hello >Q", trigger = ">Q"))
+        assertTrue(QueryTriggerDetector.containsTrigger("hello @q", trigger = "@Q"))
+        // The default /Q must not fire when a custom trigger is configured.
+        assertFalse(QueryTriggerDetector.containsTrigger("hello /Q", trigger = ">Q"))
+    }
 }

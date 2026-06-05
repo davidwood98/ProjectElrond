@@ -72,18 +72,67 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 7. ~~Room persistence + note browser~~ (done — canvas auto-saves strokes (800ms debounce + onCleared flush) via `NoteRepository.replaceStrokes`; notes load on open; landing page grid with stroke-polyline thumbnails, timestamp titles, long-press delete with confirmation, FAB, empty state; navigation-compose `notes` ↔ `note/{pageId}`; manual DI via `ElrondApplication`)
 8. ~~TODO list + AI task extraction~~ (done — `todo_items` table (DB v2, `MIGRATION_1_2`); `TodoRepository`; floating right-edge TODO panel reachable from the **canvas and the note browser**, toolbar count badge, manual add **pinned at the bottom**, **Done items in a separate section**, per-item **due-date chip** opening a date picker, AI-vs-manual visual distinction; `AiTaskExtractor` in `:aibackend` (provider-agnostic, JSON-array output, decoupled from `/Q` so a future WorkManager save-job can reuse it); on `/Q` success a **bottom sheet with per-item toggles** ("AI found these action items — add to your to-do list?") lets the user pick which to keep — on add, the chosen tasks are saved and the `/Q` echo note is discarded from the canvas; extracted items link back to their source note via `sourcePageId`/`sourcePageTitle` snapshot)
 9. ~~AI response persistence + `/Q` box sizing + error states~~ (done — AI responses persist in the `ai_notes` table (DB v3, `MIGRATION_2_3`), loaded on open and auto-saved (debounce + onCleared flush) via `NoteRepository.replaceAiNotes`; `AiInkNote` now sized by `widthPx`/`heightPx` (unlocked aspect ratio), defaulting to a full line width minus margin from the live canvas size; `/Q` is one-shot — the system prompt forbids follow-ups and returns "I need more information, request unclear" when unclear; failures surface "I could not complete that request because of [reason]")
-10. Calendar integration (NOTE: calendar permissions were removed from the manifest per security audit — re-add READ/WRITE_CALENDAR in the same change that ships this)
+10. ~~AI response polish + Settings~~ (done — AI box selected on create (border+shadow+AI ✨ indicator+✕+resize handle); tap-off deselects into the note flow, long-press re-selects; double-tap expand/collapse for long answers; `MathText` renders fractions/exponents/basic calculus when `MathDetector` flags math; on-canvas animated loading dots while thinking; inline **red handwriting** "Could not connect — try again" on failure or **15s timeout**; home side-drawer → **Settings** with a debug **configurable activation command** (≤2 chars, DataStore) consumed by `QueryTriggerDetector`/`CanvasViewModel`)
+11. ~~Calendar architecture~~ (done — see "Calendar architecture" section below; providers + factory + DataStore preference + `calendar_events` table (DB v4) + AI event extraction)
+12. ~~Calendar view UI (POC final)~~ (done — home **bottom nav** Notes ↔ Calendar (scroll retained); **monthly + weekly** grids with ✨ created / 📝 edited indicators + counts, today highlighted, empty tiles distinct, month/week arrows; tap an active day → bottom sheet of that day's notes → open; **legend**; "slow day" empty state with a create-note shortcut on today's tile; **Events** placeholder tab for the future integrated calendar; reads only existing note timestamps — no new data)
+
+**POC COMPLETE.** All six development phases delivered; 136 JVM unit tests passing.
 
 ### TODO architecture notes (for auto-populate without /Q)
 
 - `TaskExtractor` (`:aibackend`) takes plain note text and returns `List<ExtractedTask>` — no `/Q`, app, or Android coupling. To auto-populate on save, add a WorkManager job that recognizes a saved page's strokes → calls `TaskExtractor.extract` → `TodoRepository.addExtracted`. The confirm step is UI policy in `CanvasViewModel`, not in the extractor, so a background job can choose to skip it.
 - Manual vs AI items differ by `TodoItem.isAiExtracted`; only AI items carry a source link.
 
+## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
+
+Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):
+
+```
+              ┌─────────────────────┐
+              │  CalendarProvider   │  getCalendars / getEvents /
+              │     (interface)     │  createEvent / updateEvent / deleteEvent
+              └─────────┬───────────┘
+        ┌───────────────┼────────────────────┐
+        ▼               ▼                     ▼
+ DeviceCalendar   GoogleCalendar       OutlookCalendar
+ Provider (REAL)  Provider (stub)      Provider (stub)
+ CalendarContract  Google Cal API v3    MS Graph API
+                   + Google Sign-In     + MSAL
+        ▲
+ CalendarProviderFactory.create(type, context)  ← type from SettingsRepository.calendarProvider (DataStore)
+```
+
+- **CalendarEvent** model: id, title, description, startTime, endTime, location, attendees, calendarId, `sourceNoteId` (links to originating note), `isAiSuggested`. Persisted in the `calendar_events` Room table (DB v4, `MIGRATION_3_4`) — AI suggestions (`isAiSuggested=1, isConfirmed=0`) and confirmed events. **No write to any real calendar without explicit user confirmation.**
+- **DeviceCalendarProvider** is fully functional via `CalendarContract` (injected `ContentResolver`); requires READ/WRITE_CALENDAR (re-added to the manifest in this change). Attendee writes are out of POC scope. Its CRUD is verified by **instrumented tests** (CalendarContract isn't available to JVM unit tests); JVM tests cover the factory, stubs, repository, and AI extraction.
+- **AI extraction**: `CalendarEventExtractor`/`AiCalendarEventExtractor` (`:aibackend`, provider-agnostic, JSON-array output) detect dated events → stored as `isAiSuggested` suggestions pending confirmation. Same decoupled seam as `TaskExtractor`.
+
+### Google Calendar OAuth setup (for when GoogleCalendarProvider is wired)
+1. Google Cloud Console → create/select a project → enable the **Google Calendar API**.
+2. Configure the **OAuth consent screen** (External; add the `…/auth/calendar` scope).
+3. Create an **OAuth 2.0 Client ID** of type **Android**: package `ai.elrond`, plus your debug + release **SHA-1** fingerprints.
+4. Put the client id into `CalendarProviderFactory.googleConfig` (or, better, inject from a secured config). Add the Google Sign-In + `com.google.api-client`/`google-api-services-calendar` dependencies.
+5. Auth flow: GoogleSignIn (scope `CalendarScopes.CALENDAR`) → `GoogleAccountCredential` → `Calendar` service. Method-to-API mapping is documented in `GoogleCalendarProvider`.
+
+### Outlook / Microsoft Graph OAuth setup (for when OutlookCalendarProvider is wired)
+1. Azure Portal → **App registrations** → New registration (single or multi-tenant).
+2. Add a **Mobile/desktop** redirect URI `msauth://ai.elrond/<base64 signature hash>`.
+3. API permissions → Microsoft Graph → delegated **Calendars.ReadWrite**.
+4. Put the application (client) id + tenant into `CalendarProviderFactory.outlookConfig`. Add the **MSAL** (`com.microsoft.identity.client`) + Microsoft Graph SDK dependencies.
+5. Auth flow: MSAL `acquireToken` (scope `Calendars.ReadWrite`) → `GraphServiceClient`. Mapping documented in `OutlookCalendarProvider`.
+
+### iOS port reuse
+`CalendarProvider`, `CalendarEvent`, `DateRange`, and the AI extractor are pure/portable. An iOS port implements the same interface with EventKit (device) and the same Google/Graph REST APIs — the factory + DataStore preference pattern carries over unchanged.
+
+### Known accepted risk (OAuth credentials)
+OAuth client ids in `CalendarProviderFactory` are placeholders. For production, client ids/secrets must not ship in the APK — use a server-side token exchange or platform secure storage, mirroring the Anthropic-key risk below.
+
 ## Security posture (audited 2026-06-04)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (POC only):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
 - AI notes (`AiInkNote`) now persist in the `ai_notes` table (DB v3) alongside ink strokes.
+- READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
+- OAuth client ids in `CalendarProviderFactory` are placeholders — for production, do not embed them; use a server-side token exchange (same posture as the Anthropic key).
 
 ## Environment Notes (build)
 

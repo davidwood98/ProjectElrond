@@ -1,8 +1,10 @@
 package ai.elrond
 
+import ai.elrond.notes.calendarViewModelFactory
 import ai.elrond.notes.noteListViewModelFactory
+import ai.elrond.ui.HomeScreen
 import ai.elrond.ui.NoteCanvasScreen
-import ai.elrond.ui.NoteListScreen
+import ai.elrond.ui.SettingsScreen
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -41,9 +43,11 @@ private fun ElrondNavHost() {
 
     NavHost(navController = navController, startDestination = ROUTE_NOTES) {
         composable(ROUTE_NOTES) {
-            NoteListScreen(
-                viewModel = viewModel(factory = noteListViewModelFactory(app.noteRepository)),
+            HomeScreen(
+                noteListViewModel = viewModel(factory = noteListViewModelFactory(app.noteRepository)),
+                calendarViewModel = viewModel(factory = calendarViewModelFactory(app.noteRepository)),
                 onOpenNote = { pageId -> navController.navigate("note/$pageId") },
+                onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
             )
         }
         composable(
@@ -57,8 +61,12 @@ private fun ElrondNavHost() {
                 onOpenNote = { id -> navController.navigate("note/$id") },
             )
         }
+        composable(ROUTE_SETTINGS) {
+            SettingsScreen(onBack = { navController.popBackStack() })
+        }
     }
 }
 
 private const val ROUTE_NOTES = "notes"
 private const val ROUTE_NOTE = "note/{pageId}"
+private const val ROUTE_SETTINGS = "settings"

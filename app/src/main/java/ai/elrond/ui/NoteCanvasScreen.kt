@@ -8,22 +8,29 @@ import ai.elrond.canvas.InkCanvas
 import ai.elrond.canvas.canvasViewModelFactory
 import ai.elrond.todo.TodoViewModel
 import ai.elrond.todo.todoViewModelFactory
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -36,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
@@ -44,9 +52,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
@@ -62,7 +74,12 @@ fun NoteCanvasScreen(
     // Keyed by pageId so each note gets its own ViewModel (and saved state).
     val viewModel: CanvasViewModel = viewModel(
         key = pageId,
-        factory = canvasViewModelFactory(app.noteRepository, app.todoRepository, pageId),
+        factory = canvasViewModelFactory(
+            app.noteRepository,
+            app.todoRepository,
+            app.settingsRepository,
+            pageId,
+        ),
     )
     val todoViewModel: TodoViewModel = viewModel(factory = todoViewModelFactory(app.todoRepository))
     val tool by viewModel.tool.collectAsStateWithLifecycle()
@@ -74,6 +91,18 @@ fun NoteCanvasScreen(
     val pendingExtraction by viewModel.pendingExtraction.collectAsStateWithLifecycle()
     val todoCount by todoViewModel.activeCount.collectAsStateWithLifecycle()
     var showTodoPanel by remember { mutableStateOf(false) }
+
+    // Selection / expand state lives in the UI (not persisted): a freshly created
+    // note starts selected; loaded notes start deselected (part of the note flow).
+    var selectedNoteId by remember { mutableStateOf<String?>(null) }
+    val expandedIds = remember { mutableStateListOf<String>() }
+    var knownIds by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(aiNotes) {
+        val ids = aiNotes.map { it.id }.toSet()
+        val added = ids - knownIds
+        if (knownIds.isNotEmpty() && added.size == 1) selectedNoteId = added.first()
+        knownIds = ids
+    }
 
     Box(
         modifier = modifier
@@ -90,11 +119,30 @@ fun NoteCanvasScreen(
             key(note.id) {
                 AiInkNoteView(
                     note = note,
+                    selected = selectedNoteId == note.id,
+                    expanded = note.id in expandedIds,
+                    onSelect = { selectedNoteId = note.id },
+                    onDeselect = { if (selectedNoteId == note.id) selectedNoteId = null },
+                    onToggleExpand = {
+                        if (note.id in expandedIds) expandedIds.remove(note.id) else expandedIds.add(note.id)
+                    },
                     onMove = { dx, dy -> viewModel.moveAiNote(note.id, dx, dy) },
                     onResize = { dW, dH -> viewModel.resizeAiNote(note.id, dW, dH) },
                     onRemove = { viewModel.removeAiNote(note.id) },
                 )
             }
+        }
+
+        // On-canvas AI activity: loading dots while thinking, red ink on failure.
+        when (val state = aiState) {
+            is AiUiState.Thinking -> AiLoadingIndicator(x = state.x, y = state.y)
+            is AiUiState.Error -> AiErrorInk(
+                message = state.message,
+                x = state.x,
+                y = state.y,
+                onDismiss = viewModel::dismissAiResponse,
+            )
+            AiUiState.Idle -> Unit
         }
 
         Surface(
@@ -169,14 +217,6 @@ fun NoteCanvasScreen(
                 }
             }
         }
-
-        AiAssistantPanel(
-            state = aiState,
-            onDismiss = viewModel::dismissAiResponse,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(24.dp),
-        )
 
         if (showTodoPanel) {
             TodoPanel(
@@ -264,55 +304,56 @@ private fun TaskExtractionSheet(
     }
 }
 
-/** Transient assistant status: in-flight progress and errors. */
+/** Animated "ink dots" loading indicator placed on the canvas where the answer will land. */
 @Composable
-private fun AiAssistantPanel(
-    state: AiUiState,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    if (state is AiUiState.Idle) return
-
-    Surface(
-        modifier = modifier.widthIn(max = 560.dp),
-        shape = MaterialTheme.shapes.large,
-        tonalElevation = 6.dp,
-        shadowElevation = 8.dp,
+private fun AiLoadingIndicator(x: Float, y: Float) {
+    val density = LocalDensity.current
+    val transition = rememberInfiniteTransition(label = "ai-loading")
+    Row(
+        modifier = Modifier
+            .absoluteOffset(
+                x = with(density) { x.toDp() },
+                y = with(density) { y.toDp() },
+            )
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            when (state) {
-                is AiUiState.Thinking -> {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                        Text(
-                            text = "Thinking about: “${state.prompt}”",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
-
-                is AiUiState.Error -> {
-                    Text(
-                        text = state.message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    TextButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.align(Alignment.End),
-                    ) {
-                        Text("Dismiss")
-                    }
-                }
-
-                AiUiState.Idle -> Unit
-            }
+        repeat(3) { i ->
+            val alpha by transition.animateFloat(
+                initialValue = 0.2f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(600, delayMillis = i * 200),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+                label = "dot$i",
+            )
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(AiInkColor.copy(alpha = alpha)),
+            )
         }
     }
+}
+
+/** Inline failure message in red handwriting style, on the canvas; tap to dismiss. */
+@Composable
+private fun AiErrorInk(message: String, x: Float, y: Float, onDismiss: () -> Unit) {
+    val density = LocalDensity.current
+    Text(
+        text = message,
+        fontFamily = HandwritingFontFamily,
+        fontSize = 24.sp,
+        color = Color(0xFFC62828),
+        modifier = Modifier
+            .absoluteOffset(
+                x = with(density) { x.toDp() },
+                y = with(density) { y.toDp() },
+            )
+            .clickable(onClick = onDismiss)
+            .padding(4.dp),
+    )
 }
