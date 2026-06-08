@@ -16,8 +16,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TodoItemEntity::class,
         AiNoteEntity::class,
         CalendarEventEntity::class,
+        PageEditEventEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -28,6 +29,7 @@ abstract class ElrondDatabase : RoomDatabase() {
     abstract fun todoDao(): TodoDao
     abstract fun aiNoteDao(): AiNoteDao
     abstract fun calendarEventDao(): CalendarEventDao
+    abstract fun pageEditEventDao(): PageEditEventDao
 
     companion object {
         private const val DB_NAME = "elrond.db"
@@ -92,6 +94,41 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v5 adds the page_edit_events table so the calendar can mark every day a note was
+         * edited (note_pages only keeps the last modifiedAt). Backfills one edit event per
+         * existing page whose last edit fell on a different day than its creation.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS page_edit_events (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        pageId TEXT NOT NULL,
+                        editDay INTEGER NOT NULL,
+                        editedAt INTEGER NOT NULL,
+                        FOREIGN KEY(pageId) REFERENCES note_pages(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_page_edit_events_pageId_editDay " +
+                        "ON page_edit_events(pageId, editDay)",
+                )
+                // Best-effort backfill of the last-edit day for pages edited after creation.
+                // Uses UTC epoch-day (millis / 86_400_000) for the historical rows.
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO page_edit_events (id, pageId, editDay, editedAt)
+                    SELECT id || '-edit', id, modifiedAt / 86400000, modifiedAt
+                    FROM note_pages
+                    WHERE modifiedAt / 86400000 <> createdAt / 86400000
+                    """.trimIndent(),
+                )
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -101,7 +138,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                     context.applicationContext,
                     ElrondDatabase::class.java,
                     DB_NAME,
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build().also { instance = it }
             }
     }

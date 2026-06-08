@@ -18,6 +18,7 @@ class ElrondApplication : Application() {
             pageDao = database.notePageDao(),
             strokeDao = database.strokeDao(),
             aiNoteDao = database.aiNoteDao(),
+            editEventDao = database.pageEditEventDao(),
         )
     }
 

@@ -17,11 +17,22 @@ class SettingsViewModel(
     val triggerCommand: StateFlow<String> = repository.triggerCommand
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_TRIGGER)
 
+    val aiNoteSelectedOnCreate: StateFlow<Boolean> = repository.aiNoteSelectedOnCreate
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_AI_NOTE_SELECTED_ON_CREATE,
+        )
+
     /** Returns true if accepted, false if the value was invalid (too long/empty). */
     fun setTriggerCommand(value: String): Boolean {
         val ok = value.isNotBlank() && value.trim().length <= SettingsRepository.MAX_TRIGGER_LENGTH
         if (ok) viewModelScope.launch { repository.setTriggerCommand(value) }
         return ok
+    }
+
+    fun setAiNoteSelectedOnCreate(enabled: Boolean) {
+        viewModelScope.launch { repository.setAiNoteSelectedOnCreate(enabled) }
     }
 }
 

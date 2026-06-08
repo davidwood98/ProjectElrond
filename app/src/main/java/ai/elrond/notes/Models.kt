@@ -1,6 +1,7 @@
 package ai.elrond.notes
 
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -9,6 +10,9 @@ data class Notebook(
     val name: String,
     val createdAt: Long,
 )
+
+/** A day on which a note page was edited (one per page per local day). */
+data class NoteEditDay(val pageId: String, val date: LocalDate)
 
 data class NotePage(
     val id: String,

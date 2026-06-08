@@ -274,9 +274,10 @@ private fun TodoRow(
                 },
             )
             if (item.isAiExtracted) {
-                val sourceSuffix = item.sourcePageTitle?.let { " · from $it ↗" } ?: ""
+                // AI-extracted items are identified by the AI colour (no ✨ marker). Keep the
+                // tappable source link when we know which note it came from.
                 Text(
-                    text = "✨ AI$sourceSuffix",
+                    text = item.sourcePageTitle?.let { "from $it ↗" } ?: "AI",
                     style = MaterialTheme.typography.labelSmall,
                     fontStyle = FontStyle.Italic,
                     color = AiInkColor,

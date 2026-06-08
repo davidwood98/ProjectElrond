@@ -3,6 +3,7 @@ package ai.elrond.data
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
@@ -128,6 +129,16 @@ interface AiNoteDao {
         deleteForPage(pageId)
         insertAll(notes)
     }
+}
+
+@Dao
+interface PageEditEventDao {
+    /** Ignored when an edit for this (pageId, editDay) already exists — one row per day. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(event: PageEditEventEntity)
+
+    @Query("SELECT * FROM page_edit_events")
+    fun observeAll(): Flow<List<PageEditEventEntity>>
 }
 
 @Dao

@@ -2,6 +2,7 @@ package ai.elrond.aibackend
 
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -72,6 +73,25 @@ class AiTaskExtractorTest {
         val tasks = AiTaskExtractor(providerReturning("I could not find any tasks."))
             .extract("notes").getOrThrow()
         assertTrue(tasks.isEmpty())
+    }
+
+    @Test
+    fun `reference date is delivered to the model in the prompt`() = runTest {
+        val provider = providerReturning("[]")
+        AiTaskExtractor(provider).extract("Collect package this Monday", referenceDate = "Friday 2026-06-05")
+
+        val prompt = (provider.lastRequest!!.input as AIInput.Text).text
+        assertTrue(prompt.contains("2026-06-05"))
+        assertTrue(prompt.contains("Friday"))
+    }
+
+    @Test
+    fun `no reference date keeps the prompt free of a today anchor`() = runTest {
+        val provider = providerReturning("[]")
+        AiTaskExtractor(provider).extract("notes")
+
+        val prompt = (provider.lastRequest!!.input as AIInput.Text).text
+        assertFalse(prompt.contains("Today is"))
     }
 
     @Test

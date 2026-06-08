@@ -15,12 +15,14 @@ class NoteRepositoryTest {
     private val pageDao = mockk<NotePageDao>(relaxed = true)
     private val strokeDao = mockk<StrokeDao>(relaxed = true)
     private val aiNoteDao = mockk<AiNoteDao>(relaxed = true)
+    private val editEventDao = mockk<PageEditEventDao>(relaxed = true)
 
     private val repository = NoteRepository(
         notebookDao = notebookDao,
         pageDao = pageDao,
         strokeDao = strokeDao,
         aiNoteDao = aiNoteDao,
+        editEventDao = editEventDao,
         clock = { FIXED_TIME },
         newId = { "fixed-id" },
     )
@@ -74,6 +76,19 @@ class NoteRepositoryTest {
 
         coVerify(exactly = 0) { strokeDao.insertAll(any()) }
         coVerify(exactly = 0) { pageDao.touch(any(), any()) }
+        coVerify(exactly = 0) { editEventDao.insert(any()) }
+    }
+
+    @Test
+    fun `replaceStrokes records an edit event for the page`() = runTest {
+        val slot = slot<PageEditEventEntity>()
+        coEvery { editEventDao.insert(capture(slot)) } returns Unit
+
+        repository.replaceStrokes("page-1", emptyList())
+
+        coVerify { editEventDao.insert(any()) }
+        assertEquals("page-1", slot.captured.pageId)
+        assertEquals(FIXED_TIME, slot.captured.editedAt)
     }
 
     @Test

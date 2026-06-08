@@ -39,8 +39,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.update
@@ -91,6 +94,14 @@ class CanvasViewModel(
     /** AI responses rendered on the canvas as handwriting-style notes. */
     private val _aiNotes = MutableStateFlow<List<AiInkNote>>(emptyList())
     val aiNotes: StateFlow<List<AiInkNote>> = _aiNotes.asStateFlow()
+
+    /**
+     * Emits the id of an AI note the instant it's created via `/Q`. The UI uses this to
+     * auto-select freshly created notes (when enabled) WITHOUT also selecting notes that
+     * were merely loaded from storage — those only ever flow through [aiNotes].
+     */
+    private val _createdNoteEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val createdNoteEvents: SharedFlow<String> = _createdNoteEvents.asSharedFlow()
 
     /** Tasks the AI extracted from the page, awaiting the user's confirmation to save. */
     private val _pendingExtraction = MutableStateFlow<PendingTaskExtraction?>(null)
@@ -395,15 +406,17 @@ class CanvasViewModel(
         when {
             result == null -> _aiState.value = AiUiState.Error(CONNECTION_ERROR, position.x, position.y)
             result.isSuccess -> {
+                val noteId = UUID.randomUUID().toString()
                 _aiNotes.update {
                     it + AiInkNote(
-                        id = UUID.randomUUID().toString(),
+                        id = noteId,
                         text = result.getOrThrow().text.stripMarkdown(),
                         x = position.x,
                         y = position.y,
                         widthPx = defaultNoteWidth(),
                     )
                 }
+                _createdNoteEvents.tryEmit(noteId)
                 _aiState.value = AiUiState.Idle
             }
             else -> _aiState.value = AiUiState.Error(CONNECTION_ERROR, position.x, position.y)
@@ -424,7 +437,12 @@ class CanvasViewModel(
         val pageId = pageId ?: return false
         if (pageText.isBlank()) return false
 
-        val extracted = extractor.extract(pageText).getOrNull().orEmpty()
+        // Anchor relative dates ("this Monday", "tomorrow") to the device's current date and
+        // timezone so the model resolves them correctly instead of guessing.
+        val today = java.time.LocalDate.now(java.time.ZoneId.systemDefault())
+        val referenceDate =
+            "${today.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.ENGLISH)} $today"
+        val extracted = extractor.extract(pageText, referenceDate).getOrNull().orEmpty()
         if (extracted.isEmpty()) return false
 
         val existing = runCatching { todoRepository.existingContents() }.getOrDefault(emptySet())
@@ -435,7 +453,7 @@ class CanvasViewModel(
             TodoRepository.ExtractedTask(
                 content = task.content,
                 priority = TodoPriority.entries.getOrElse(task.priority) { TodoPriority.NONE },
-                dueAt = task.dueDateIso.toEpochMillisOrNull(),
+                dueAt = task.dueDateIso.toEpochMillisOrNull(today),
             )
         }
         val title = repository?.getPage(pageId)?.displayTitle() ?: "Note"
@@ -500,15 +518,17 @@ class CanvasViewModel(
         /** Outlives the ViewModel for the onCleared() persistence flush. */
         private val flushScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-        /** Parses an ISO date ("2026-06-10") to start-of-day epoch millis; null if absent/invalid. */
-        private fun String?.toEpochMillisOrNull(): Long? {
+        /**
+         * Parses a due date to start-of-day epoch millis in the device zone. Accepts an
+         * absolute ISO date ("2026-06-10") or a relative phrase ("this Monday", "tomorrow")
+         * resolved against [today]; null if absent/unrecognised.
+         */
+        private fun String?.toEpochMillisOrNull(today: java.time.LocalDate): Long? {
             if (this.isNullOrBlank()) return null
-            return runCatching {
-                java.time.LocalDate.parse(this)
-                    .atStartOfDay(java.time.ZoneId.systemDefault())
-                    .toInstant()
-                    .toEpochMilli()
-            }.getOrNull()
+            val date = ai.elrond.ai.RelativeDateResolver.resolve(this, today)
+                ?: runCatching { java.time.LocalDate.parse(this.trim()) }.getOrNull()
+                ?: return null
+            return date.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         }
 
         /** Markdown markers occasionally slip through despite the system prompt. */

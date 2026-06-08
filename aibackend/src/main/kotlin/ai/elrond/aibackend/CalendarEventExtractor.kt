@@ -23,5 +23,10 @@ data class ExtractedEvent(
  * here — these are suggestions for the user to confirm.
  */
 interface CalendarEventExtractor {
-    suspend fun extract(noteContent: String): Result<List<ExtractedEvent>>
+    /**
+     * @param referenceDate the device's "today" as a human-readable string (e.g.
+     *        "Friday 2026-06-05") used to anchor relative dates/times. Null disables
+     *        relative-date guidance (back-compat).
+     */
+    suspend fun extract(noteContent: String, referenceDate: String? = null): Result<List<ExtractedEvent>>
 }

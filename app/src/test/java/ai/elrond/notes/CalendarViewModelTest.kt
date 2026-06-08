@@ -44,9 +44,13 @@ class CalendarViewModelTest {
     )
 
     @Test
-    fun `activityByDay reflects the note timeline`() = runTest(dispatcher) {
+    fun `activityByDay reflects creations and per-day edit events`() = runTest(dispatcher) {
         every { repository.observeTimeline() } returns flowOf(
-            listOf(page("a", "2026-06-10"), page("b", created = "2026-06-09", modified = "2026-06-10")),
+            listOf(page("a", "2026-06-10"), page("b", created = "2026-06-09")),
+        )
+        // Note b was edited on 2026-06-10 (a day after it was created).
+        every { repository.observeEditEvents() } returns flowOf(
+            listOf(NoteEditDay("b", LocalDate.parse("2026-06-10"))),
         )
         val viewModel = CalendarViewModel(repository, zone)
 
@@ -65,6 +69,20 @@ class CalendarViewModelTest {
         every { repository.observeTimeline() } returns flowOf(
             listOf(page("a", "2026-06-10"), page("b", "2026-06-08")),
         )
+        every { repository.observeEditEvents() } returns flowOf(emptyList())
+        val viewModel = CalendarViewModel(repository, zone)
+        backgroundScope.launch { viewModel.activityByDay.collect { } }
+        advanceUntilIdle()
+
+        assertEquals(listOf("a"), viewModel.notesForDay(LocalDate.parse("2026-06-10")).map { it.id })
+    }
+
+    @Test
+    fun `notesForDay includes notes edited on a later day`() = runTest(dispatcher) {
+        every { repository.observeTimeline() } returns flowOf(listOf(page("a", "2026-06-08")))
+        every { repository.observeEditEvents() } returns flowOf(
+            listOf(NoteEditDay("a", LocalDate.parse("2026-06-10"))),
+        )
         val viewModel = CalendarViewModel(repository, zone)
         backgroundScope.launch { viewModel.activityByDay.collect { } }
         advanceUntilIdle()
@@ -75,6 +93,7 @@ class CalendarViewModelTest {
     @Test
     fun `createNote bootstraps a notebook and reports the new page id`() = runTest(dispatcher) {
         every { repository.observeTimeline() } returns flowOf(emptyList())
+        every { repository.observeEditEvents() } returns flowOf(emptyList())
         coEvery { repository.ensureDefaultNotebook() } returns Notebook("nb", "My Notes", 1L)
         coEvery { repository.createPage("nb") } returns page("new", "2026-06-10")
         val viewModel = CalendarViewModel(repository, zone)

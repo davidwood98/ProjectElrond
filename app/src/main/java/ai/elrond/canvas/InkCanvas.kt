@@ -44,9 +44,15 @@ fun InkCanvas(
 
     Box(modifier = modifier) {
         // Dry layer: finished strokes.
+        // Read the list in composition scope (not only inside the draw lambda) so that a new
+        // finished stroke recomposes this Canvas and repaints immediately. Without a
+        // composition-scope read the StateFlow emission updates the State but does not
+        // invalidate the draw phase on its own, so the very first stroke stayed invisible
+        // until an unrelated recomposition (e.g. a tool toggle) forced a redraw.
+        val strokes = finishedStrokes
         Canvas(modifier = Modifier.fillMaxSize()) {
             val nativeCanvas = drawContext.canvas.nativeCanvas
-            finishedStrokes.forEach { stroke: Stroke ->
+            strokes.forEach { stroke: Stroke ->
                 canvasStrokeRenderer.draw(
                     canvas = nativeCanvas,
                     stroke = stroke,

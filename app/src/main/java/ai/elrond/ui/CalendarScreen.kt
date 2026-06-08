@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -69,7 +70,6 @@ fun CalendarScreen(
     modifier: Modifier = Modifier,
 ) {
     val activity by viewModel.activityByDay.collectAsStateWithLifecycle()
-    val hasNotes by viewModel.hasAnyNotes.collectAsStateWithLifecycle()
     val today = remember { LocalDate.now() }
 
     var mode by rememberSaveable { mutableStateOf(CalendarMode.MONTH) }
@@ -122,44 +122,36 @@ fun CalendarScreen(
 
         when (mode) {
             CalendarMode.MONTH -> {
-                if (!hasNotes) {
-                    SlowDayEmptyState()
-                } else {
-                    val days = CalendarGrid.monthGrid(YearMonth.from(anchorDate))
-                    days.chunked(7).forEach { week ->
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            week.forEach { date ->
-                                DayTile(
-                                    date = date,
-                                    inPeriod = YearMonth.from(date) == YearMonth.from(anchorDate),
-                                    isToday = date == today,
-                                    activity = activity[date],
-                                    onClick = { selectedDay = it },
-                                    onCreateToday = { viewModel.createNote(onOpenNote) },
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
+                val days = CalendarGrid.monthGrid(YearMonth.from(anchorDate))
+                days.chunked(7).forEach { week ->
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        week.forEach { date ->
+                            DayTile(
+                                date = date,
+                                inPeriod = YearMonth.from(date) == YearMonth.from(anchorDate),
+                                isToday = date == today,
+                                activity = activity[date],
+                                onClick = { selectedDay = it },
+                                onCreateToday = { viewModel.createNote(onOpenNote) },
+                                modifier = Modifier.weight(1f),
+                            )
                         }
                     }
                 }
             }
             CalendarMode.WEEK -> {
-                if (!hasNotes) {
-                    SlowDayEmptyState()
-                } else {
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        CalendarGrid.weekDays(anchorDate).forEach { date ->
-                            DayTile(
-                                date = date,
-                                inPeriod = true,
-                                isToday = date == today,
-                                activity = activity[date],
-                                onClick = { selectedDay = it },
-                                onCreateToday = { viewModel.createNote(onOpenNote) },
-                                showWeekday = true,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    CalendarGrid.weekDays(anchorDate).forEach { date ->
+                        DayTile(
+                            date = date,
+                            inPeriod = true,
+                            isToday = date == today,
+                            activity = activity[date],
+                            onClick = { selectedDay = it },
+                            onCreateToday = { viewModel.createNote(onOpenNote) },
+                            showWeekday = true,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                 }
             }
@@ -190,7 +182,7 @@ fun CalendarScreen(
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(notes, key = { it.id }) { note ->
-                            DayNoteCard(note = note, onClick = {
+                            DayNoteCard(note = note, date = date, onClick = {
                                 selectedDay = null
                                 onOpenNote(note.id)
                             })
@@ -267,9 +259,20 @@ private fun DayTile(
                     }
                 }
             }
-            // On today's empty tile, offer a quick "create note" shortcut.
+            // On today's empty tile, show the "slow day" nudge above a quick create shortcut.
             if (isToday && (activity == null || activity.isEmpty)) {
-                IconButton(onClick = onCreateToday, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                Text(
+                    "Slow day?",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
+                IconButton(
+                    onClick = onCreateToday,
+                    modifier = Modifier.align(Alignment.CenterHorizontally).size(32.dp),
+                ) {
                     Icon(Icons.Filled.Add, contentDescription = "New note today")
                 }
             }
@@ -278,7 +281,12 @@ private fun DayTile(
 }
 
 @Composable
-private fun DayNoteCard(note: NotePage, onClick: () -> Unit) {
+private fun DayNoteCard(note: NotePage, date: LocalDate, onClick: () -> Unit) {
+    val zone = java.time.ZoneId.systemDefault()
+    // On its creation day the note reads as "created"; on any later day it reads as "edited".
+    val createdThisDay = java.time.Instant.ofEpochMilli(note.createdAt).atZone(zone).toLocalDate() == date
+    val verb = if (createdThisDay) "created" else "edited"
+    val stampMillis = if (createdThisDay) note.createdAt else note.modifiedAt
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(8.dp),
@@ -287,7 +295,7 @@ private fun DayNoteCard(note: NotePage, onClick: () -> Unit) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(note.displayTitle(), style = MaterialTheme.typography.titleSmall)
             Text(
-                "edited ${DAY_TIME.format(java.time.Instant.ofEpochMilli(note.modifiedAt).atZone(java.time.ZoneId.systemDefault()))}",
+                "$verb ${DAY_TIME.format(java.time.Instant.ofEpochMilli(stampMillis).atZone(zone))}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -304,20 +312,7 @@ private fun Legend(modifier: Modifier = Modifier) {
         ) {
             Text("✨ created", style = MaterialTheme.typography.labelMedium)
             Text("📝 edited", style = MaterialTheme.typography.labelMedium)
-            Text("✨📝 both", style = MaterialTheme.typography.labelMedium)
         }
-    }
-}
-
-@Composable
-private fun SlowDayEmptyState() {
-    Box(modifier = Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
-        Text(
-            "Nothing here yet — must've been a slow day. 😴\nCreate a note and it'll show up on the calendar.",
-            style = MaterialTheme.typography.bodyMedium,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 

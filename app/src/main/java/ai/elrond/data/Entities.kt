@@ -153,3 +153,29 @@ data class TodoItemEntity(
     val createdAt: Long,
     val completedAt: Long? = null,
 )
+
+/**
+ * One row per note page per local day on which the page was edited. note_pages only
+ * keeps a single (overwritten) modifiedAt, so this table is what lets the calendar
+ * mark *every* day a note was touched — not just the latest. Deduped to one row per
+ * day via the unique (pageId, editDay) index (inserts use IGNORE).
+ */
+@Entity(
+    tableName = "page_edit_events",
+    foreignKeys = [
+        ForeignKey(
+            entity = NotePageEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["pageId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["pageId", "editDay"], unique = true)],
+)
+data class PageEditEventEntity(
+    @PrimaryKey val id: String,
+    val pageId: String,
+    /** Local day of the edit as an epoch-day (java.time.LocalDate.toEpochDay()). */
+    val editDay: Long,
+    val editedAt: Long,
+)

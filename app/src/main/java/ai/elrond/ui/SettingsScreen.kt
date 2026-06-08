@@ -6,16 +6,21 @@ import ai.elrond.settings.SettingsViewModel
 import ai.elrond.settings.settingsViewModelFactory
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -23,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -36,6 +42,7 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val app = LocalContext.current.applicationContext as ElrondApplication
     val viewModel: SettingsViewModel = viewModel(factory = settingsViewModelFactory(app.settingsRepository))
     val trigger by viewModel.triggerCommand.collectAsStateWithLifecycle()
+    val aiSelectedOnCreate by viewModel.aiNoteSelectedOnCreate.collectAsStateWithLifecycle()
 
     var draft by remember(trigger) { mutableStateOf(trigger) }
     val tooLong = draft.trim().length > SettingsRepository.MAX_TRIGGER_LENGTH
@@ -85,6 +92,27 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     }
                 },
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text("AI responses", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Edit mode on creation", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "New AI answers start selected so you can move, resize or delete them — " +
+                            "tap anywhere off the box to place it. When off, answers land in the " +
+                            "note flow and a long-press selects them.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Switch(
+                    checked = aiSelectedOnCreate,
+                    onCheckedChange = viewModel::setAiNoteSelectedOnCreate,
+                )
+            }
         }
     }
 }

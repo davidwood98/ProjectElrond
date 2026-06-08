@@ -1,9 +1,13 @@
 package ai.elrond.data
 
 import ai.elrond.ai.AiInkNote
+import ai.elrond.notes.NoteEditDay
 import ai.elrond.notes.Notebook
 import ai.elrond.notes.NotePage
 import androidx.ink.strokes.Stroke
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -18,8 +22,10 @@ class NoteRepository(
     private val pageDao: NotePageDao,
     private val strokeDao: StrokeDao,
     private val aiNoteDao: AiNoteDao,
+    private val editEventDao: PageEditEventDao,
     private val clock: () -> Long = System::currentTimeMillis,
     private val newId: () -> String = { UUID.randomUUID().toString() },
+    private val zone: ZoneId = ZoneId.systemDefault(),
 ) {
 
     // --- Notebooks ---
@@ -61,7 +67,9 @@ class NoteRepository(
     }
 
     suspend fun renamePage(pageId: String, title: String?) {
-        pageDao.rename(pageId, title, clock())
+        val now = clock()
+        pageDao.rename(pageId, title, now)
+        recordEdit(pageId, now)
     }
 
     suspend fun getPage(pageId: String): NotePage? = pageDao.getById(pageId)?.toDomain()
@@ -88,6 +96,7 @@ class NoteRepository(
             },
         )
         pageDao.touch(pageId, now)
+        recordEdit(pageId, now)
     }
 
     suspend fun loadStrokes(pageId: String): List<Stroke> =
@@ -109,6 +118,7 @@ class NoteRepository(
             },
         )
         pageDao.touch(pageId, now)
+        recordEdit(pageId, now)
     }
 
     /**
@@ -123,9 +133,27 @@ class NoteRepository(
     }
 
     suspend fun clearStrokes(pageId: String) {
+        val now = clock()
         strokeDao.deleteForPage(pageId)
-        pageDao.touch(pageId, clock())
+        pageDao.touch(pageId, now)
+        recordEdit(pageId, now)
     }
+
+    // --- Per-day edit events (calendar created-vs-edited tracking) ---
+
+    /** Records that [pageId] was edited on the local day of [now]; deduped per day by the DAO. */
+    private suspend fun recordEdit(pageId: String, now: Long) {
+        val editDay = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().toEpochDay()
+        editEventDao.insert(
+            PageEditEventEntity(id = newId(), pageId = pageId, editDay = editDay, editedAt = now),
+        )
+    }
+
+    /** Every recorded edit day across all pages — backs the calendar's edited indicators. */
+    fun observeEditEvents(): Flow<List<NoteEditDay>> =
+        editEventDao.observeAll().map { rows ->
+            rows.map { NoteEditDay(pageId = it.pageId, date = LocalDate.ofEpochDay(it.editDay)) }
+        }
 
     // --- AI response notes ---
 

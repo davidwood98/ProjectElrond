@@ -13,10 +13,10 @@ class AiTaskExtractor(
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
 ) : TaskExtractor {
 
-    override suspend fun extract(noteContent: String): Result<List<ExtractedTask>> {
+    override suspend fun extract(noteContent: String, referenceDate: String?): Result<List<ExtractedTask>> {
         if (noteContent.isBlank()) return Result.success(emptyList())
         val request = AIRequest(
-            input = AIInput.Text(buildUserPrompt(noteContent)),
+            input = AIInput.Text(buildUserPrompt(noteContent, referenceDate)),
             systemPrompt = SYSTEM_PROMPT,
             maxTokens = MAX_TOKENS,
         )
@@ -58,8 +58,17 @@ class AiTaskExtractor(
         val dueDate: String? = null,
     )
 
-    private fun buildUserPrompt(noteContent: String): String =
-        "Extract any action items from these handwritten notes.\n\nNOTES:\n$noteContent"
+    private fun buildUserPrompt(noteContent: String, referenceDate: String?): String {
+        // The current date is put in the USER prompt (not the cached system prompt) so the
+        // daily-changing value never invalidates the system-prompt cache prefix.
+        val dateGuidance = referenceDate?.takeIf { it.isNotBlank() }?.let {
+            "Today is $it. Resolve relative dates (\"today\", \"tomorrow\", \"this Monday\", " +
+                "\"next Friday\") against this date and the user's timezone, and output dueDate as " +
+                "an absolute \"YYYY-MM-DD\". Convention: \"this <weekday>\" is the soonest upcoming " +
+                "<weekday>; \"next <weekday>\" is the one after.\n\n"
+        }.orEmpty()
+        return "${dateGuidance}Extract any action items from these handwritten notes.\n\nNOTES:\n$noteContent"
+    }
 
     companion object {
         private const val MAX_TOKENS = 1024

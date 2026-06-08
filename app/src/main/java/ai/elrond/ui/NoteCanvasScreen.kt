@@ -6,6 +6,7 @@ import ai.elrond.canvas.CanvasTool
 import ai.elrond.canvas.CanvasViewModel
 import ai.elrond.canvas.InkCanvas
 import ai.elrond.canvas.canvasViewModelFactory
+import ai.elrond.settings.SettingsRepository
 import ai.elrond.todo.TodoViewModel
 import ai.elrond.todo.todoViewModelFactory
 import androidx.compose.animation.core.RepeatMode
@@ -15,6 +16,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -92,16 +95,18 @@ fun NoteCanvasScreen(
     val todoCount by todoViewModel.activeCount.collectAsStateWithLifecycle()
     var showTodoPanel by remember { mutableStateOf(false) }
 
-    // Selection / expand state lives in the UI (not persisted): a freshly created
-    // note starts selected; loaded notes start deselected (part of the note flow).
+    // AI-box selection lives in the UI (not persisted). When the "edit mode on creation"
+    // setting is on (default) a freshly created note starts selected; loaded notes always
+    // start deselected (part of the note flow). Deselect by tapping anywhere off the box.
+    val selectOnCreate by app.settingsRepository.aiNoteSelectedOnCreate
+        .collectAsStateWithLifecycle(initialValue = SettingsRepository.DEFAULT_AI_NOTE_SELECTED_ON_CREATE)
     var selectedNoteId by remember { mutableStateOf<String?>(null) }
-    val expandedIds = remember { mutableStateListOf<String>() }
-    var knownIds by remember { mutableStateOf(emptySet<String>()) }
-    LaunchedEffect(aiNotes) {
-        val ids = aiNotes.map { it.id }.toSet()
-        val added = ids - knownIds
-        if (knownIds.isNotEmpty() && added.size == 1) selectedNoteId = added.first()
-        knownIds = ids
+    // Auto-select only notes the user just created via /Q (a ViewModel event), never notes
+    // loaded from storage — so a saved page opens with its AI notes deselected.
+    LaunchedEffect(viewModel) {
+        viewModel.createdNoteEvents.collect { id ->
+            if (selectOnCreate) selectedNoteId = id
+        }
     }
 
     Box(
@@ -114,18 +119,25 @@ fun NoteCanvasScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
+        // Tap anywhere off a selected AI box to deselect it (place it into the note flow).
+        // Present only while something is selected, so it never intercepts drawing otherwise.
+        if (selectedNoteId != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures { selectedNoteId = null }
+                    },
+            )
+        }
+
         // AI responses as handwriting-style ink, above the canvas layers.
         aiNotes.forEach { note ->
             key(note.id) {
                 AiInkNoteView(
                     note = note,
                     selected = selectedNoteId == note.id,
-                    expanded = note.id in expandedIds,
                     onSelect = { selectedNoteId = note.id },
-                    onDeselect = { if (selectedNoteId == note.id) selectedNoteId = null },
-                    onToggleExpand = {
-                        if (note.id in expandedIds) expandedIds.remove(note.id) else expandedIds.add(note.id)
-                    },
                     onMove = { dx, dy -> viewModel.moveAiNote(note.id, dx, dy) },
                     onResize = { dW, dH -> viewModel.resizeAiNote(note.id, dW, dH) },
                     onRemove = { viewModel.removeAiNote(note.id) },

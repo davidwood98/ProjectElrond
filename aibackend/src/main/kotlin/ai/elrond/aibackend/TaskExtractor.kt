@@ -24,6 +24,11 @@ data class ExtractedTask(
  * no changes here.
  */
 interface TaskExtractor {
-    /** @return tasks found in [noteContent]; empty list when there are none. */
-    suspend fun extract(noteContent: String): Result<List<ExtractedTask>>
+    /**
+     * @param referenceDate the device's "today" as a human-readable string (e.g.
+     *        "Friday 2026-06-05") used to anchor relative dates ("this Monday",
+     *        "tomorrow"). Null disables relative-date guidance (back-compat).
+     * @return tasks found in [noteContent]; empty list when there are none.
+     */
+    suspend fun extract(noteContent: String, referenceDate: String? = null): Result<List<ExtractedTask>>
 }

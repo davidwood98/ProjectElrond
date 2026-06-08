@@ -78,6 +78,43 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **POC COMPLETE.** All six development phases delivered; 136 JVM unit tests passing.
 
+## Full app development — bug-fix batch (2026-06-08)
+
+Post-POC fixes. **148 JVM unit tests passing** (was 136). DB is now **v5** (`MIGRATION_4_5`).
+All changes are JVM-tested; the new migration and the Compose gesture/redraw changes still
+need instrumented coverage (FA-1). The generated `app/schemas/…/5.json` confirms `MIGRATION_4_5`
+matches Room's expected schema.
+
+- **Canvas first-stroke render fix** — `InkCanvas` read `finishedStrokes` only inside the draw
+  lambda, so a StateFlow emission updated composition state but never invalidated the draw phase;
+  the first stroke stayed invisible until an unrelated recompose (the pen/eraser toggle). The list
+  is now read in composition scope, so each finished stroke repaints immediately.
+- **AI-output interaction** — new `SettingsRepository.aiNoteSelectedOnCreate` pref (default on):
+  freshly created `/Q` answers start in the selected/edit state. Auto-select is driven by a
+  `CanvasViewModel.createdNoteEvents` SharedFlow (fires only for user-created notes, never loaded
+  ones). Deselect by tapping **off** the box (a full-screen catcher present only while something is
+  selected); tap-inside-to-deselect was removed. The ✨ AI indicator was removed from both the AI
+  ink boxes and TODO items (colour alone identifies AI; the TODO source link is kept). The
+  double-tap expand/collapse was removed — AI answers always render full content. (Supersedes the
+  Phase 10 notes about the ✨ badge and double-tap.)
+- **Relative-date resolution** — `TaskExtractor`/`CalendarEventExtractor` gained an optional
+  `referenceDate: String?` (defaulted, so existing callers/tests compile). `CanvasViewModel`
+  injects the device's current weekday + ISO date (system zone) into the **user** prompt (kept out
+  of the cached system prompt to preserve prompt-caching). `ai.elrond.ai.RelativeDateResolver`
+  deterministically resolves "today / tomorrow / this <weekday> / next <weekday>" against the device
+  date — convention: "this Monday" = soonest upcoming Monday, "next Monday" = the following week;
+  `toEpochMillisOrNull` tries it first, then falls back to ISO parsing. Unit-tested: ref 2026-06-05
+  → "this Monday" = 2026-06-08, "next Monday" = 2026-06-15.
+- **Calendar created-vs-edited** — new `page_edit_events` table (DB v5) records one row per page per
+  local day on save, deduped via a unique `(pageId, editDay)` index + insert-IGNORE. `NoteRepository`
+  writes an edit event from `saveStrokes`/`replaceStrokes`/`clearStrokes`/`renamePage` (not
+  `createPage`). `NoteActivityMapper` now counts *created* on the creation day and *edited* on every
+  other distinct edit day; `CalendarViewModel` combines `observeTimeline` + `observeEditEvents`. The
+  "both" legend entry was removed; the "slow day" nudge moved into today's empty tile above the
+  create-note shortcut (the grid now always renders); the day-sheet card labels "created" vs
+  "edited" per the selected day. `MIGRATION_4_5` backfills one last-edit day per pre-existing page
+  (best-effort, UTC epoch-day).
+
 ### TODO architecture notes (for auto-populate without /Q)
 
 - `TaskExtractor` (`:aibackend`) takes plain note text and returns `List<ExtractedTask>` — no `/Q`, app, or Android coupling. To auto-populate on save, add a WorkManager job that recognizes a saved page's strokes → calls `TaskExtractor.extract` → `TodoRepository.addExtracted`. The confirm step is UI policy in `CanvasViewModel`, not in the extractor, so a background job can choose to skip it.
@@ -129,8 +166,8 @@ OAuth client ids in `CalendarProviderFactory` are placeholders. For production, 
 ## Security posture (audited 2026-06-04)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
-- **Known accepted risk (POC only):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) now persist in the `ai_notes` table (DB v3) alongside ink strokes.
+- **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v5** — `page_edit_events` was added in `MIGRATION_4_5` for per-day calendar created-vs-edited tracking.
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth client ids in `CalendarProviderFactory` are placeholders — for production, do not embed them; use a server-side token exchange (same posture as the Anthropic key).
 

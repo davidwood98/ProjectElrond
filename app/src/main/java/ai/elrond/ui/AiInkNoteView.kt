@@ -39,24 +39,19 @@ val HandwritingFontFamily = FontFamily(Font(R.font.caveat))
 /** AI ink colour — a distinct but aesthetically consistent violet. */
 val AiInkColor = Color(0xFF6A1B9A)
 
-private const val COLLAPSED_MAX_LINES = 4
-
 /**
  * An AI response rendered as handwriting-style ink on the canvas.
  *
- * When [selected] it shows a border, an AI badge, a remove ✕ and a resize handle,
- * and can be dragged/resized. When deselected it's just ink in the flow of the
- * notes — a long-press re-selects it. Double-tap toggles expand/collapse for long
- * answers. Mathematical answers render via [MathText].
+ * When [selected] it shows a border, a remove ✕ and a resize handle, and can be
+ * dragged/resized. When deselected it's just ink in the flow of the notes — a
+ * long-press re-selects it, and tapping anywhere off the box deselects it. The AI
+ * colour alone distinguishes it from user ink. Mathematical answers render via [MathText].
  */
 @Composable
 fun AiInkNoteView(
     note: AiInkNote,
     selected: Boolean,
-    expanded: Boolean,
     onSelect: () -> Unit,
-    onDeselect: () -> Unit,
-    onToggleExpand: () -> Unit,
     onMove: (dx: Float, dy: Float) -> Unit,
     onResize: (dWidth: Float, dHeight: Float) -> Unit,
     onRemove: () -> Unit,
@@ -65,7 +60,6 @@ fun AiInkNoteView(
     val density = LocalDensity.current
     val widthDp = with(density) { note.widthPx.toDp() }
     val heightModifier = note.heightPx
-        ?.takeIf { !expanded } // expanded shows full content regardless of stored height
         ?.let { h -> Modifier.height(with(density) { h.toDp() }) }
         ?: Modifier
 
@@ -87,10 +81,10 @@ fun AiInkNoteView(
                 },
             )
             .pointerInput(note.id, selected) {
+                // Long-press re-selects a placed note; deselecting happens by tapping
+                // off the box (handled by the canvas), not by tapping inside it.
                 detectTapGestures(
-                    onDoubleTap = { onToggleExpand() },
                     onLongPress = { if (!selected) onSelect() },
-                    onTap = { if (selected) onDeselect() },
                 )
             }
             .then(
@@ -127,18 +121,11 @@ fun AiInkNoteView(
                 fontSize = BASE_FONT_SP.sp,
                 lineHeight = (BASE_FONT_SP * 1.25f).sp,
                 color = AiInkColor,
-                maxLines = if (expanded) Int.MAX_VALUE else COLLAPSED_MAX_LINES,
+                maxLines = Int.MAX_VALUE,
                 overflow = TextOverflow.Ellipsis,
                 modifier = contentPadding,
             )
         }
-
-        // Always-on AI indicator so AI ink is never mistaken for user ink.
-        Text(
-            text = "✨",
-            fontSize = 11.sp,
-            modifier = Modifier.align(Alignment.TopStart).padding(start = 4.dp, top = 2.dp),
-        )
 
         if (selected) {
             Text(

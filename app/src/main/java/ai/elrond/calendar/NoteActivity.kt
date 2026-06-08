@@ -1,5 +1,6 @@
 package ai.elrond.calendar
 
+import ai.elrond.notes.NoteEditDay
 import ai.elrond.notes.NotePage
 import java.time.DayOfWeek
 import java.time.Instant
@@ -15,31 +16,49 @@ data class DayActivity(val created: Int = 0, val edited: Int = 0) {
 }
 
 /**
- * Pure mapping from note pages to per-day activity for the calendar view.
+ * Pure mapping from note pages (plus per-day [NoteEditDay] events) to per-day
+ * activity for the calendar view.
  *
- * A note counts as **created** on its creation day and, only if its last edit
- * fell on a different day, as **edited** on that later day. (We store just the
- * last-modified time, so multi-day edit history isn't reconstructable — noted.)
+ * A note counts as **created** on its creation day, and as **edited** on every
+ * other distinct day it was edited. The creation day itself is never counted as an
+ * edit, so a note always reads as "created" (not "edited") on the day it was made.
  */
 object NoteActivityMapper {
 
-    fun activityByDay(pages: List<NotePage>, zone: ZoneId = ZoneId.systemDefault()): Map<LocalDate, DayActivity> {
+    fun activityByDay(
+        pages: List<NotePage>,
+        editDays: List<NoteEditDay> = emptyList(),
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): Map<LocalDate, DayActivity> {
         data class Counts(var created: Int = 0, var edited: Int = 0)
         val acc = HashMap<LocalDate, Counts>()
+        val createdDayByPage = HashMap<String, LocalDate>()
         pages.forEach { page ->
             val createdDay = page.createdAt.toLocalDate(zone)
+            createdDayByPage[page.id] = createdDay
             acc.getOrPut(createdDay) { Counts() }.created++
-            val modifiedDay = page.modifiedAt.toLocalDate(zone)
-            if (modifiedDay != createdDay) acc.getOrPut(modifiedDay) { Counts() }.edited++
+        }
+        editDays.groupBy { it.pageId }.forEach { (pageId, days) ->
+            val createdDay = createdDayByPage[pageId]
+            days.map { it.date }.distinct().forEach { day ->
+                if (day != createdDay) acc.getOrPut(day) { Counts() }.edited++
+            }
         }
         return acc.mapValues { (_, c) -> DayActivity(c.created, c.edited) }
     }
 
-    /** Notes created OR last-edited on [date]. */
-    fun notesForDay(pages: List<NotePage>, date: LocalDate, zone: ZoneId = ZoneId.systemDefault()): List<NotePage> =
-        pages.filter { page ->
-            page.createdAt.toLocalDate(zone) == date || page.modifiedAt.toLocalDate(zone) == date
+    /** Notes created on [date], or edited on [date] per [editDays]. */
+    fun notesForDay(
+        pages: List<NotePage>,
+        date: LocalDate,
+        editDays: List<NoteEditDay> = emptyList(),
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): List<NotePage> {
+        val editedPageIds = editDays.filter { it.date == date }.mapTo(HashSet()) { it.pageId }
+        return pages.filter { page ->
+            page.createdAt.toLocalDate(zone) == date || page.id in editedPageIds
         }
+    }
 
     private fun Long.toLocalDate(zone: ZoneId): LocalDate =
         Instant.ofEpochMilli(this).atZone(zone).toLocalDate()

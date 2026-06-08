@@ -12,10 +12,15 @@ class AiCalendarEventExtractor(
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
 ) : CalendarEventExtractor {
 
-    override suspend fun extract(noteContent: String): Result<List<ExtractedEvent>> {
+    override suspend fun extract(noteContent: String, referenceDate: String?): Result<List<ExtractedEvent>> {
         if (noteContent.isBlank()) return Result.success(emptyList())
+        val dateGuidance = referenceDate?.takeIf { it.isNotBlank() }?.let {
+            "Today is $it. Resolve relative dates/times against this date and the user's timezone, " +
+                "outputting absolute \"YYYY-MM-DDTHH:MM\". \"this <weekday>\" is the soonest upcoming " +
+                "<weekday>; \"next <weekday>\" is the one after.\n\n"
+        }.orEmpty()
         val request = AIRequest(
-            input = AIInput.Text("Extract any calendar events from these notes.\n\nNOTES:\n$noteContent"),
+            input = AIInput.Text("${dateGuidance}Extract any calendar events from these notes.\n\nNOTES:\n$noteContent"),
             systemPrompt = SYSTEM_PROMPT,
             maxTokens = MAX_TOKENS,
         )
