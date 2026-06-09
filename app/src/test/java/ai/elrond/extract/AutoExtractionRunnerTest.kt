@@ -1,0 +1,144 @@
+package ai.elrond.extract
+
+import ai.elrond.aibackend.CalendarEventExtractor
+import ai.elrond.aibackend.ExtractedEvent
+import ai.elrond.aibackend.ExtractedTask
+import ai.elrond.aibackend.TaskExtractor
+import ai.elrond.data.CalendarRepository
+import ai.elrond.data.ElrondDatabase
+import ai.elrond.data.NotePageEntity
+import ai.elrond.data.NotebookEntity
+import ai.elrond.data.SuggestionRepository
+import ai.elrond.data.TodoRepository
+import android.content.Context
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import java.time.ZoneId
+
+/**
+ * Routing + de-dup behaviour of [AutoExtractionRunner] against real Room repositories
+ * (Robolectric in-memory), with the ink/ML-Kit recognition and AI extractors faked.
+ */
+@RunWith(RobolectricTestRunner::class)
+class AutoExtractionRunnerTest {
+
+    private lateinit var db: ElrondDatabase
+    private lateinit var todoRepository: TodoRepository
+    private lateinit var calendarRepository: CalendarRepository
+    private lateinit var suggestionRepository: SuggestionRepository
+    private var badgeFlagged = false
+
+    @Before
+    fun setUp() = runTest {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        db = Room.inMemoryDatabaseBuilder(ctx, ElrondDatabase::class.java).allowMainThreadQueries().build()
+        db.notebookDao().insert(NotebookEntity(id = "nb1", name = "N", createdAt = 0))
+        db.notePageDao().insert(
+            NotePageEntity(id = "p1", notebookId = "nb1", customTitle = "Note", createdAt = 0, modifiedAt = 0),
+        )
+        todoRepository = TodoRepository(db.todoDao())
+        calendarRepository = CalendarRepository(db.calendarEventDao())
+        suggestionRepository = SuggestionRepository(db.pendingSuggestionDao())
+        badgeFlagged = false
+    }
+
+    @After
+    fun tearDown() = db.close()
+
+    private fun runner(
+        tasks: List<ExtractedTask> = emptyList(),
+        events: List<ExtractedEvent> = emptyList(),
+        lines: List<RecognizedLine> = listOf(RecognizedLine("note text", 0f, 0f, 100f, 20f)),
+    ) = AutoExtractionRunner(
+        recognizeLines = { lines },
+        taskExtractor = fakeTasks(tasks),
+        eventExtractor = fakeEvents(events),
+        todoRepository = todoRepository,
+        calendarRepository = calendarRepository,
+        suggestionRepository = suggestionRepository,
+        resolvePageTitle = { "Note" },
+        markNewTodoItems = { badgeFlagged = true },
+        clock = { 0L },
+        zone = ZoneId.of("UTC"),
+    )
+
+    @Test
+    fun `confirmation on creates a pending TODO suggestion and adds nothing directly`() = runTest {
+        runner(tasks = listOf(ExtractedTask("Buy milk", priority = 2)))
+            .run("p1", confirmTodo = true, confirmCalendar = true)
+
+        val pending = suggestionRepository.observePending("p1").first()
+        assertEquals(1, pending.size)
+        assertEquals(SuggestionType.TODO, pending.single().type)
+        assertEquals("Buy milk", pending.single().content)
+        assertTrue(todoRepository.observeAll().first().isEmpty())
+        assertFalse(badgeFlagged)
+    }
+
+    @Test
+    fun `confirmation off adds the task directly and flags the to-do tab`() = runTest {
+        runner(tasks = listOf(ExtractedTask("Buy milk")))
+            .run("p1", confirmTodo = false, confirmCalendar = false)
+
+        assertEquals(listOf("Buy milk"), todoRepository.observeAll().first().map { it.content })
+        assertTrue(badgeFlagged)
+        assertTrue(suggestionRepository.observePending("p1").first().isEmpty())
+    }
+
+    @Test
+    fun `a task already on the to-do list is not re-suggested`() = runTest {
+        todoRepository.addManual("Buy milk")
+        runner(tasks = listOf(ExtractedTask("buy milk")))
+            .run("p1", confirmTodo = true, confirmCalendar = true)
+
+        assertTrue(suggestionRepository.observePending("p1").first().isEmpty())
+    }
+
+    @Test
+    fun `confirmation off creates a calendar suggestion for a dated event`() = runTest {
+        runner(events = listOf(ExtractedEvent("Standup", startIso = "2026-06-10T15:00")))
+            .run("p1", confirmTodo = false, confirmCalendar = false)
+
+        val events = calendarRepository.observeAll().first()
+        assertEquals(listOf("Standup"), events.map { it.title })
+        assertTrue(events.single().isAiSuggested)
+    }
+
+    @Test
+    fun `an event whose title matches a task content is not dropped by de-dup`() = runTest {
+        runner(
+            tasks = listOf(ExtractedTask("Standup")),
+            events = listOf(ExtractedEvent("Standup", startIso = "2026-06-10T15:00")),
+        ).run("p1", confirmTodo = false, confirmCalendar = false)
+
+        assertEquals(listOf("Standup"), todoRepository.observeAll().first().map { it.content })
+        assertEquals(listOf("Standup"), calendarRepository.observeAll().first().map { it.title })
+    }
+
+    @Test
+    fun `an event without a time is skipped`() = runTest {
+        runner(events = listOf(ExtractedEvent("Someday maybe", startIso = null)))
+            .run("p1", confirmTodo = true, confirmCalendar = true)
+
+        assertTrue(suggestionRepository.observePending("p1").first().none { it.type == SuggestionType.EVENT })
+        assertTrue(calendarRepository.observeAll().first().isEmpty())
+    }
+
+    private fun fakeTasks(tasks: List<ExtractedTask>) = object : TaskExtractor {
+        override suspend fun extract(noteContent: String, referenceDate: String?) = Result.success(tasks)
+    }
+
+    private fun fakeEvents(events: List<ExtractedEvent>) = object : CalendarEventExtractor {
+        override suspend fun extract(noteContent: String, referenceDate: String?) = Result.success(events)
+    }
+}

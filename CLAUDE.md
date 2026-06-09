@@ -120,6 +120,165 @@ matches Room's expected schema.
 - `TaskExtractor` (`:aibackend`) takes plain note text and returns `List<ExtractedTask>` — no `/Q`, app, or Android coupling. To auto-populate on save, add a WorkManager job that recognizes a saved page's strokes → calls `TaskExtractor.extract` → `TodoRepository.addExtracted`. The confirm step is UI policy in `CanvasViewModel`, not in the extractor, so a background job can choose to skip it.
 - Manual vs AI items differ by `TodoItem.isAiExtracted`; only AI items carry a source link.
 
+## FA-1 — instrumented + Robolectric test suite (2026-06-08)
+
+Fills the POC testing gap. Test deps added: **Robolectric** + `androidx.room:room-testing` +
+`androidx.test:core` (testImplementation), `androidx.test:rules`/`runner` (androidTest);
+`testOptions.unitTests.isIncludeAndroidResources = true`. The exported Room schemas are exposed to
+`MigrationTestHelper` via the **debug** sourceSet assets (Robolectric reads the debug variant's
+merged assets — debug-only, never shipped) and the **androidTest** sourceSet assets (on-device).
+`app/src/test/resources/robolectric.properties` pins `sdk=34`.
+
+Counts: **155 JVM-runnable tests** (`./gradlew test` / `:app:testDebugUnitTest` / `:aibackend:test`)
+— app 131 (incl. the new Robolectric tests), aibackend 24, 0 failures — plus **6 instrumented tests**
+(`./gradlew connectedDebugAndroidTest`, requires a device/emulator; not runnable from WSL).
+
+JVM/Robolectric (run + verified locally):
+- `RoomDaoTest` — real in-memory Room SQL the mock-DAO repository tests can't reach: FK cascade on
+  page delete (strokes / ai_notes / page_edit_events), the `page_edit_events` one-row-per-day dedup
+  (unique index + INSERT-IGNORE), `observeSuggested` filtering, atomic stroke replace, todo dedup.
+- `ElrondMigrationTest` — `MigrationTestHelper` validates the full **v1→v5** chain against the
+  exported schemas, and asserts the **v4→v5 backfill** seeds `page_edit_events` for pages edited
+  after creation (but not for same-day-only pages).
+
+Instrumented (`androidTest`, compile-verified here; **run on a device/emulator**):
+- `DeviceCalendarProviderTest` — real `CalendarContract` CRUD via a throwaway local calendar
+  (created/removed per test): create / read / update / delete + `getCalendars`.
+- `TodoPanelTest` — add → complete (moves to the Done section) → delete, against a real in-memory DB.
+- `CalendarScreenTest` — Month / Week / Events mode switching + the Events placeholder + legend.
+- `NoteListScreenTest` — empty state, FAB-create reports the new page id, long-press → confirm delete.
+
+Not yet covered (follow-up): the `NoteCanvasScreen` ink/`/Q` UI (trigger logic is unit-tested in
+`QueryTriggerDetectorTest` / `StrokeLineGrouperTest` / `CanvasViewModelAiTest`; on-canvas rendering
+needs manual/device verification) and `TaskExtractionSheet` (private to `NoteCanvasScreen`; covered
+at the VM level by `CanvasViewModelExtractionTest`). The instrumented suite is what gives
+`MIGRATION_4_5` and the FA-bug-fix Compose changes their first **on-device** validation.
+
+## FA-2 — background auto-extraction (2026-06-09)
+
+Removes the need to manually `/Q` for TODO/calendar extraction: after a note's debounced save a
+WorkManager job recognizes the page and extracts items in the background. `/Q` still works for
+instant questions — the two modes coexist.
+
+Flow: `CanvasViewModel` autosave → `ExtractionScheduler.enqueue` (unique work per page, REPLACE,
+5s delay, `NETWORK_TYPE_NOT_REQUIRED` + `requiresBatteryNotLow`) → `ExtractionWorker` (pulls deps
+from `ElrondApplication`; gates in order: auto-extraction setting → no-API-key → battery saver;
+closes the ML Kit recognizer in a `finally`; retries on offline/transient failure) →
+`AutoExtractionRunner` (the JVM-testable core, decoupled from Android/ink/WorkManager: recognize
+lines → run `TaskExtractor` + `CalendarEventExtractor` with the device reference date → de-dup →
+route). The one ink/ML-Kit step (`buildRecognizedLines`) is an injected seam.
+
+Routing per the confirmation setting:
+- **Confirmation on** → a `pending_suggestions` row (DB **v6**, `MIGRATION_5_6`); the canvas observes
+  it and shows an on-canvas **Yes/No popup** ("Add to To-Do" / "Create event") anchored near the
+  detected text (fuzzy line-match) and **clamped to stay fully on-screen** (shifts inward at edges,
+  floored below the toolbar). Yes → commits to `todo_items` / `calendar_events`(`isAiSuggested`);
+  No → marks the row `dismissed` (kept so the same item isn't re-suggested on the next save).
+- **Confirmation off** → committed directly; auto-added TODOs set a flag that flairs the to-do tab
+  with a "+" badge (on the canvas and note browser; cleared when the TODO panel opens).
+
+De-dup is **type-namespaced** ("TODO:"/"EVENT:") across existing todos, calendar suggestions, and the
+page's pending rows (incl. dismissed) — so a task and an event with the same text never collide.
+Settings (DataStore, all default on, nested in the UI): `autoExtractionEnabled` →
+`extractionConfirmationEnabled` (global) → `confirmTodoExtraction` / `confirmCalendarExtraction`
+(the worker computes per-type = global && per-type).
+
+Tests — suite now **171 JVM/Robolectric** (0 failures): `AutoExtractionRunnerTest` (routing,
+type-namespaced de-dup, calendar creation, event-needs-a-time), `ExtractionSchedulerTest` (unique
+work + NOT_REQUIRED network + battery-not-low via `WorkManagerTestInitHelper`),
+`SuggestionRepositoryTest`, `SettingsRepositoryTest` (preference round-trips),
+`CanvasViewModelSuggestionTest` (accept/reject + enqueue-after-save), migration test extended to
+v1→v6. The on-canvas popup UI itself is device/manual-verified (like the other Compose flows).
+
+DI note: `ExtractionWorker` reads its dependencies from `ElrondApplication` (manual DI) — FA-3 (Hilt)
+will inject them via a `HiltWorker` + `WorkerFactory`.
+
+## FA-3 — Hilt dependency injection (2026-06-09)
+
+Replaces the manual `ElrondApplication` lazy container with Hilt — a pure refactor (no behaviour
+change); all 171 JVM/Robolectric tests pass unchanged.
+
+- **`@HiltAndroidApp ElrondApplication`** now also implements `Configuration.Provider`, supplying the
+  WorkManager config with the Hilt `HiltWorkerFactory`. The manifest removes WorkManager's default
+  `InitializationProvider` (`tools:node="remove"`) so the Hilt factory is used (on-demand init).
+- **Modules** (`ai.elrond.di`): `AppModule` (Room db + repositories as `@Singleton`, the
+  trigger-command `Flow`, and the WorkManager extraction enqueuer) and `AiModule`
+  (`AIProvider?`/`TaskExtractor?`/`CalendarEventExtractor?`/`HandwritingRecognizer`) — AI bindings are
+  separate so tests can replace them. The recognizer is intentionally **unscoped** (one per consumer,
+  each owns its `close()`). The `(String) -> Unit` enqueuer binding uses `@JvmSuppressWildcards` to
+  avoid the Kotlin function-type variance mismatch.
+- **All ViewModels are `@HiltViewModel`.** The ones with test-only knobs (`CanvasViewModel`,
+  `CalendarViewModel`) keep their full primary constructor and add a thin secondary `@Inject`
+  constructor that delegates to it (production deps only), so the existing tests still construct them
+  directly with fakes. `CanvasViewModel`'s `pageId` comes from the nav `SavedStateHandle`.
+- **`ExtractionWorker` is a `@HiltWorker`** (`@AssistedInject`) — dependencies injected, not pulled
+  from the app.
+- **Composables** get ViewModels via `hiltViewModel()` (screen VM params default to it, overridable in
+  tests); `MainActivity` is `@AndroidEntryPoint`. The manual `*ViewModelFactory` helpers were removed.
+  hiltViewModel() scopes each VM to its nav back-stack entry — Notes/Calendar share the `notes` entry
+  (survive tab switches); each `note/{pageId}` gets its own `CanvasViewModel`.
+- **Test infra** (FA-3 deliverable "test modules for replacing real implementations"): `HiltTestRunner`
+  (swaps in `HiltTestApplication`), `HiltGraphTest` (`@HiltAndroidTest` — asserts the graph constructs
+  and provides the repositories), and `FakeAiModule` (`@TestInstallIn(replaces = [AiModule::class])`)
+  so instrumented tests run without ML Kit / Anthropic.
+
+The Hilt graph is validated at compile time by KSP (main + androidTest); the instrumented test APK
+builds. Runtime graph construction + the HiltWorker are exercised on-device by the instrumented suite
+(`HiltGraphTest` + the FA-1 Compose/CalendarProvider tests) — not runnable from WSL.
+
+## FA-4 — trigger & recognition hardening (2026-06-09)
+
+Hardens how the `/Q` assistant is triggered and how handwriting is recognized. **192 JVM/Robolectric
+tests pass** (was 171 — app 168 + aibackend 24, 0 failures); `assembleDebug` + `assembleDebugAndroidTest`
+both build (Hilt graph KSP-validated in both variants). All recognition/gesture/segmentation logic is
+pure-JVM tested; the on-canvas gesture flow and palm tuning are device/manual-verified like the other
+Compose flows.
+
+- **Top-N candidate recognition** — `HandwritingRecognizer` gained `recognizeCandidates()` returning
+  ranked `RecognitionCandidate(text, score?)` (best-first; ML Kit `score` may be null, so callers rely
+  on **rank**, not score). `recognize()` is now the single-result convenience (MlKit delegates it to
+  `recognizeCandidates`; the interface default wraps `recognize` so fakes that override only one method
+  still work). `QueryTriggerDetector.firstTriggerCandidate(candidates, trigger, maxCandidates)` returns
+  the best candidate that ends with the trigger — so a `/Q` the top guess garbled still fires.
+- **Confidence floor (rank-based)** — `MAX_TRIGGER_CANDIDATES = 5` caps how deep a candidate may be and
+  still trigger, so a low-confidence deep guess can't spuriously fire the assistant. (Score-based
+  thresholds were avoided: ML Kit's score semantics are ambiguous/optional; rank ordering is guaranteed.)
+- **Multi-line `/Q` segmentation** — `StrokeLineGrouper.blockAbove(spans, triggerIndex, gapFactor=1.2)`
+  gathers the contiguous block of lines directly above a **bare** trigger (stopping at a "paragraph" gap
+  — a vertical gap > gapFactor × the line's own height) as one multi-line question; lines above the gap
+  stay as page context. `CanvasViewModel` uses an injected `questionLineSelector` seam (default
+  `selectQuestionLines`, span-based via `lineSpan`) so the VM stays unit-testable with fakes. Inline `/Q`
+  is unchanged (question = text before the trigger).
+- **Gesture (lasso) trigger** — `GestureTriggerDetector` (pure geometry): `isLasso` (≥8 points, closed
+  loop via start/end gap < `CLOSURE_RATIO`×diagonal, real enclosed area via shoelace ≥ `MIN_AREA_RATIO`×
+  diagonal², min size `MIN_DIAGONAL_PX`), `contains` (even-odd ray cast), `enclosedIndices`. New
+  `TriggerMode { COMMAND, GESTURE }` enum. In GESTURE mode `CanvasViewModel.handleGestureTrigger` treats
+  the last stroke as a lasso (injected `lassoOf`/`centroidOf` seams → `strokeLoopOrNull`/`strokeCentroid`
+  in StrokeLines.kt), recognizes the enclosed strokes as the question, **removes the lasso stroke** (it's
+  a gesture, not ink), and answers. `detectAndHandleTrigger` now dispatches COMMAND vs GESTURE; both share
+  `submitQuery` (de-dupe → provider guard → Thinking → extract-first → answer/error).
+- **Trigger setting promoted** — `SettingsScreen` restructured: an **AI activation** section with a
+  mode selector (Written command / Circle gesture), the validated trigger-char field (≤2 chars, retained),
+  and a **live preview** box of what to write/draw; sections are now scrollable. The "Debugging" framing
+  was dropped.
+- **Palm-rejection tuning** — the decision is extracted to pure, tested `PalmRejection.shouldReject(
+  isFinger, stylusOnly)` (used by `InkCanvas`), and **stylus-only is now a persisted setting**
+  (`SettingsRepository.stylusOnly`, default true) surfaced under a **Canvas input** settings section.
+  `CanvasViewModel` collects `stylusOnlyFlow` and `setStylusOnly` write-throughs via an injected
+  `persistStylusOnly` seam, so the canvas toolbar's "Finger draw" chip now persists too.
+- **DI** — `CanvasViewModel`'s `@Inject` (secondary) constructor now takes `SettingsRepository` directly
+  and derives the trigger-command / trigger-mode / stylus-only flows + the stylus write-through from it;
+  `AppModule.provideTriggerCommandFlow` (the standalone `Flow<String>` binding) was removed. The full
+  primary constructor keeps all test seams (recognizer, splitter, placer, `questionLineSelector`,
+  `lassoOf`, `centroidOf`, the flows, debounce/timeout) defaulted, so existing JVM tests construct it
+  directly with fakes unchanged.
+
+New/updated tests: `GestureTriggerDetectorTest` (lasso/contains/enclosure), `PalmRejectionTest`,
+`HandwritingRecognizerTest` (candidate-bridge default), `firstTriggerCandidate` cases in
+`QueryTriggerDetectorTest`, `blockAbove` cases in `StrokeLineGrouperTest`, multi-line + lasso +
+candidate-recovery cases in `CanvasViewModelAiTest`, and trigger-command/mode + stylus round-trips in
+`SettingsRepositoryTest`.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):

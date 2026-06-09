@@ -2,17 +2,17 @@ package ai.elrond.notes
 
 import ai.elrond.data.NoteRepository
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** Landing page: timeline of saved note pages. */
-class NoteListViewModel(
+@HiltViewModel
+class NoteListViewModel @Inject constructor(
     private val repository: NoteRepository,
 ) : ViewModel() {
 
@@ -37,8 +37,3 @@ class NoteListViewModel(
     suspend fun preview(pageId: String): List<List<Pair<Float, Float>>> =
         runCatching { repository.loadStrokePreview(pageId) }.getOrDefault(emptyList())
 }
-
-fun noteListViewModelFactory(repository: NoteRepository): ViewModelProvider.Factory =
-    viewModelFactory {
-        initializer { NoteListViewModel(repository) }
-    }

@@ -106,7 +106,8 @@ private fun createTouchListener(
         try {
             val toolType = event.getToolType(event.actionIndex)
             // Palm rejection: ignore finger input entirely while stylus-only mode is on.
-            if (toolType == MotionEvent.TOOL_TYPE_FINGER && viewModel.stylusOnly.value) {
+            val isFinger = toolType == MotionEvent.TOOL_TYPE_FINGER
+            if (PalmRejection.shouldReject(isFinger, viewModel.stylusOnly.value)) {
                 return@OnTouchListener false
             }
             // Hardware stylus eraser always erases, regardless of the selected tool.

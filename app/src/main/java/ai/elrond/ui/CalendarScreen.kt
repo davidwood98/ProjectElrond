@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.LocalDate
 import java.time.YearMonth
@@ -65,9 +66,9 @@ private val DAY_TIME = DateTimeFormatter.ofPattern("HH:mm")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalendarScreen(
-    viewModel: CalendarViewModel,
     onOpenNote: (pageId: String) -> Unit,
     modifier: Modifier = Modifier,
+    viewModel: CalendarViewModel = hiltViewModel(),
 ) {
     val activity by viewModel.activityByDay.collectAsStateWithLifecycle()
     val today = remember { LocalDate.now() }

@@ -75,4 +75,40 @@ class QueryTriggerDetectorTest {
         // The default /Q must not fire when a custom trigger is configured.
         assertFalse(QueryTriggerDetector.containsTrigger("hello /Q", trigger = ">Q"))
     }
+
+    @Test
+    fun `firstTriggerCandidate prefers the best candidate carrying the trigger`() {
+        // Top guess already has the trigger.
+        assertEquals(
+            "what is 2+2 /Q",
+            QueryTriggerDetector.firstTriggerCandidate(listOf("what is 2+2 /Q", "what is 242")),
+        )
+    }
+
+    @Test
+    fun `firstTriggerCandidate recovers a trigger the top guess missed`() {
+        // Best guess garbled the slash; a lower-ranked candidate kept it.
+        assertEquals(
+            "ask the moon /Q",
+            QueryTriggerDetector.firstTriggerCandidate(listOf("ask the moon 10", "ask the moon /Q")),
+        )
+    }
+
+    @Test
+    fun `firstTriggerCandidate returns null when no candidate has the trigger`() {
+        assertNull(QueryTriggerDetector.firstTriggerCandidate(listOf("just notes", "more notes")))
+        assertNull(QueryTriggerDetector.firstTriggerCandidate(emptyList()))
+    }
+
+    @Test
+    fun `firstTriggerCandidate ignores low-confidence candidates past the rank cap`() {
+        // The trigger only appears in a deep, low-confidence candidate — must not fire.
+        val candidates = listOf("aaa", "bbb", "ccc", "ddd", "eee", "real question /Q")
+        assertNull(QueryTriggerDetector.firstTriggerCandidate(candidates, maxCandidates = 5))
+        // Raising the cap to include it recovers the trigger.
+        assertEquals(
+            "real question /Q",
+            QueryTriggerDetector.firstTriggerCandidate(candidates, maxCandidates = 6),
+        )
+    }
 }

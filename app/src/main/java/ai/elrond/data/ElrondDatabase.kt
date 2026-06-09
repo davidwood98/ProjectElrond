@@ -17,8 +17,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AiNoteEntity::class,
         CalendarEventEntity::class,
         PageEditEventEntity::class,
+        PendingSuggestionEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -30,6 +31,7 @@ abstract class ElrondDatabase : RoomDatabase() {
     abstract fun aiNoteDao(): AiNoteDao
     abstract fun calendarEventDao(): CalendarEventDao
     abstract fun pageEditEventDao(): PageEditEventDao
+    abstract fun pendingSuggestionDao(): PendingSuggestionDao
 
     companion object {
         private const val DB_NAME = "elrond.db"
@@ -129,6 +131,35 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /** v6 adds the pending_suggestions table for FA-2 background-extraction confirmation popups. */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS pending_suggestions (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        pageId TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        dueAtMillis INTEGER,
+                        priority INTEGER NOT NULL,
+                        startMillis INTEGER,
+                        endMillis INTEGER,
+                        location TEXT,
+                        x REAL NOT NULL,
+                        y REAL NOT NULL,
+                        dismissed INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(pageId) REFERENCES note_pages(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_pending_suggestions_pageId ON pending_suggestions(pageId)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -138,8 +169,9 @@ abstract class ElrondDatabase : RoomDatabase() {
                     context.applicationContext,
                     ElrondDatabase::class.java,
                     DB_NAME,
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
-                    .build().also { instance = it }
+                ).addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+                ).build().also { instance = it }
             }
     }
 }

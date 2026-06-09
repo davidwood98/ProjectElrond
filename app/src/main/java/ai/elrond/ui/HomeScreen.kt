@@ -1,7 +1,5 @@
 package ai.elrond.ui
 
-import ai.elrond.notes.CalendarViewModel
-import ai.elrond.notes.NoteListViewModel
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -29,8 +27,6 @@ private enum class HomeTab { NOTES, CALENDAR }
  */
 @Composable
 fun HomeScreen(
-    noteListViewModel: NoteListViewModel,
-    calendarViewModel: CalendarViewModel,
     onOpenNote: (pageId: String) -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
@@ -59,12 +55,10 @@ fun HomeScreen(
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
                 HomeTab.NOTES -> NoteListScreen(
-                    viewModel = noteListViewModel,
                     onOpenNote = onOpenNote,
                     onOpenSettings = onOpenSettings,
                 )
                 HomeTab.CALENDAR -> CalendarScreen(
-                    viewModel = calendarViewModel,
                     onOpenNote = onOpenNote,
                 )
             }

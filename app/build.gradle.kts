@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
 }
 
 // API keys live in local.properties (gitignored) — never in source or VCS.
@@ -25,7 +26,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "ai.elrond.HiltTestRunner"
 
         buildConfigField(
             "String",
@@ -53,6 +54,24 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    testOptions {
+        unitTests {
+            // Robolectric needs Android resources/assets; default-value stubs keep the
+            // existing pure-JVM tests unaffected.
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
+    }
+
+    sourceSets {
+        // Expose the exported Room schemas as assets so MigrationTestHelper can load them.
+        // Robolectric reads the (debug) app variant's merged assets for JVM migration tests;
+        // on-device instrumented tests read them from the androidTest APK assets. Debug-only,
+        // so the schema JSONs never ship in a release build.
+        getByName("debug").assets.srcDir("$projectDir/schemas")
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
     }
 }
 
@@ -94,20 +113,38 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.work.runtime.ktx)
 
+    // Dependency injection (Hilt)
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
+    implementation(libs.androidx.hilt.navigation.compose)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
+
     // Handwriting recognition
     implementation(libs.mlkit.digital.ink.recognition)
     implementation(libs.kotlinx.coroutines.play.services)
 
-    // Unit tests
+    // Unit tests (JVM + Robolectric for real Room DAO/migration coverage)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.mockk)
     testImplementation(libs.turbine)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.test.core.ktx)
+    testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.androidx.work.testing)
 
     // Instrumented tests
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.room.testing)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.hilt.android.testing)
+    kspAndroidTest(libs.hilt.compiler)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

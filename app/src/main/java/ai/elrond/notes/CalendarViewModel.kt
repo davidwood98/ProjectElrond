@@ -4,12 +4,11 @@ import ai.elrond.calendar.DayActivity
 import ai.elrond.calendar.NoteActivityMapper
 import ai.elrond.data.NoteRepository
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
+import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import java.time.ZoneId
+import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -18,10 +17,15 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** Backs the calendar view: per-day note activity derived from the note timeline. */
+@HiltViewModel
 class CalendarViewModel(
     private val repository: NoteRepository,
     private val zone: ZoneId = ZoneId.systemDefault(),
 ) : ViewModel() {
+
+    /** Hilt entry point; the [zone]-injecting primary constructor stays for tests. */
+    @Inject
+    constructor(repository: NoteRepository) : this(repository, ZoneId.systemDefault())
 
     /** Latest pages + edit days, kept current regardless of which UI flows are being collected. */
     private var latestPages: List<NotePage> = emptyList()
@@ -58,7 +62,3 @@ class CalendarViewModel(
     }
 }
 
-fun calendarViewModelFactory(repository: NoteRepository): ViewModelProvider.Factory =
-    viewModelFactory {
-        initializer { CalendarViewModel(repository) }
-    }

@@ -179,3 +179,38 @@ data class PageEditEventEntity(
     val editDay: Long,
     val editedAt: Long,
 )
+
+/**
+ * A background-extracted TODO/calendar item awaiting the user's on-canvas Yes/No
+ * decision (FA-2 confirmation flow). On "Yes" it graduates to `todo_items` /
+ * `calendar_events`; on "No" it's marked [dismissed] (kept so the same item isn't
+ * re-suggested on the next save). [x]/[y] anchor the popup near the detected text.
+ */
+@Entity(
+    tableName = "pending_suggestions",
+    foreignKeys = [
+        ForeignKey(
+            entity = NotePageEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["pageId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("pageId")],
+)
+data class PendingSuggestionEntity(
+    @PrimaryKey val id: String,
+    val pageId: String,
+    /** "TODO" or "EVENT" (see ai.elrond.extract.SuggestionType). */
+    val type: String,
+    val content: String,
+    val dueAtMillis: Long? = null,
+    val priority: Int = 0,
+    val startMillis: Long? = null,
+    val endMillis: Long? = null,
+    val location: String? = null,
+    val x: Float,
+    val y: Float,
+    val dismissed: Boolean = false,
+    val createdAt: Long,
+)

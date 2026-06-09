@@ -3,12 +3,17 @@ package ai.elrond.canvas
 import ai.elrond.BuildConfig
 import ai.elrond.ai.AiInkNote
 import ai.elrond.ai.AiUiState
+import ai.elrond.ai.GestureTriggerDetector
 import ai.elrond.ai.HandwritingRecognizer
 import ai.elrond.ai.MlKitHandwritingRecognizer
 import ai.elrond.ai.NotePosition
 import ai.elrond.ai.QueryTriggerDetector
+import ai.elrond.ai.TriggerMode
 import ai.elrond.ai.defaultAiNotePosition
 import ai.elrond.ai.groupStrokesIntoLines
+import ai.elrond.ai.selectQuestionLines
+import ai.elrond.ai.strokeCentroid
+import ai.elrond.ai.strokeLoopOrNull
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
@@ -17,21 +22,32 @@ import ai.elrond.aibackend.AssistantCapabilities
 import ai.elrond.aibackend.TaskExtractor
 import ai.elrond.aibackend.anthropic.AnthropicConfig
 import ai.elrond.aibackend.anthropic.AnthropicProvider
+import ai.elrond.calendar.CalendarEvent
+import ai.elrond.data.CalendarRepository
 import ai.elrond.data.NoteRepository
+import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
+import ai.elrond.extract.ExtractionScheduler
+import ai.elrond.extract.PendingSuggestion
+import ai.elrond.extract.SuggestionType
+import ai.elrond.settings.SettingsRepository
 import ai.elrond.todo.PendingTaskExtraction
 import ai.elrond.todo.TodoPriority
+import android.content.Context
 import androidx.ink.brush.Brush
 import androidx.ink.brush.StockBrushes
 import androidx.ink.geometry.ImmutableBox
 import androidx.ink.geometry.ImmutableVec
 import androidx.ink.strokes.Stroke
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
+import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -43,9 +59,11 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -63,6 +81,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * above when `/Q` stands alone — and the remaining lines are sent along as page
  * context. The response is placed on the canvas as a handwriting-style [AiInkNote].
  */
+@HiltViewModel
 class CanvasViewModel(
     private val recognizer: HandwritingRecognizer? = null,
     private val aiProvider: AIProvider? = null,
@@ -71,12 +90,60 @@ class CanvasViewModel(
     private val repository: NoteRepository? = null,
     private val taskExtractor: TaskExtractor? = null,
     private val todoRepository: TodoRepository? = null,
+    private val calendarRepository: CalendarRepository? = null,
+    private val suggestionRepository: SuggestionRepository? = null,
     private val pageId: String? = null,
+    /** Enqueues background auto-extraction for [pageId] after a save (null in tests / when off). */
+    private val enqueueExtraction: ((pageId: String) -> Unit)? = null,
     triggerCommandFlow: Flow<String>? = null,
+    /** Picks which lines above a bare trigger form a multi-line question (default: span-based). */
+    private val questionLineSelector: (List<List<Stroke>>, Int) -> List<Int> = ::selectQuestionLines,
+    /** Returns a stroke's lasso polygon (gesture mode) or null when it isn't a loop. */
+    private val lassoOf: (Stroke) -> List<GestureTriggerDetector.Point>? = ::strokeLoopOrNull,
+    /** Centroid of a stroke, used to test lasso enclosure (gesture mode). */
+    private val centroidOf: (Stroke) -> GestureTriggerDetector.Point = ::strokeCentroid,
+    triggerModeFlow: Flow<TriggerMode>? = null,
+    stylusOnlyFlow: Flow<Boolean>? = null,
+    /** Write-through for the palm-rejection preference (null in tests). */
+    private val persistStylusOnly: (suspend (Boolean) -> Unit)? = null,
     private val triggerDebounceMillis: Long = TRIGGER_DEBOUNCE_MILLIS,
     private val autoSaveDebounceMillis: Long = AUTOSAVE_DEBOUNCE_MILLIS,
     private val requestTimeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
 ) : ViewModel() {
+
+    /**
+     * Hilt entry point — production dependencies only. The full constructor above keeps its
+     * test-only knobs (line splitter, note placer, debounce/timeout) at their defaults, so the
+     * unit tests construct it directly without going through Hilt. [pageId] comes from the nav
+     * back-stack [SavedStateHandle].
+     */
+    @Inject
+    constructor(
+        savedStateHandle: SavedStateHandle,
+        recognizer: HandwritingRecognizer,
+        aiProvider: AIProvider?,
+        repository: NoteRepository,
+        taskExtractor: TaskExtractor?,
+        todoRepository: TodoRepository,
+        calendarRepository: CalendarRepository,
+        suggestionRepository: SuggestionRepository,
+        enqueueExtraction: @JvmSuppressWildcards (String) -> Unit,
+        settings: SettingsRepository,
+    ) : this(
+        recognizer = recognizer,
+        aiProvider = aiProvider,
+        repository = repository,
+        taskExtractor = taskExtractor,
+        todoRepository = todoRepository,
+        calendarRepository = calendarRepository,
+        suggestionRepository = suggestionRepository,
+        pageId = savedStateHandle.get<String>("pageId"),
+        enqueueExtraction = enqueueExtraction,
+        triggerCommandFlow = settings.triggerCommand,
+        triggerModeFlow = settings.triggerMode,
+        stylusOnlyFlow = settings.stylusOnly,
+        persistStylusOnly = { settings.setStylusOnly(it) },
+    )
 
     private val _finishedStrokes = MutableStateFlow<List<Stroke>>(emptyList())
     val finishedStrokes: StateFlow<List<Stroke>> = _finishedStrokes.asStateFlow()
@@ -106,6 +173,15 @@ class CanvasViewModel(
     /** Tasks the AI extracted from the page, awaiting the user's confirmation to save. */
     private val _pendingExtraction = MutableStateFlow<PendingTaskExtraction?>(null)
     val pendingExtraction: StateFlow<PendingTaskExtraction?> = _pendingExtraction.asStateFlow()
+
+    /** Background-extracted (FA-2) suggestions for this page awaiting a Yes/No popup decision. */
+    val pendingSuggestions: StateFlow<List<PendingSuggestion>> =
+        if (suggestionRepository != null && pageId != null) {
+            suggestionRepository.observePending(pageId)
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        } else {
+            MutableStateFlow<List<PendingSuggestion>>(emptyList()).asStateFlow()
+        }
 
     // --- Undo / redo (stroke history) ---
 
@@ -139,9 +215,19 @@ class CanvasViewModel(
     @Volatile
     private var triggerCommand: String = QueryTriggerDetector.DEFAULT_TRIGGER
 
+    /** Current activation method (written command vs lasso gesture), kept in sync with settings. */
+    @Volatile
+    private var triggerMode: TriggerMode = TriggerMode.COMMAND
+
     init {
         triggerCommandFlow?.let { flow ->
             viewModelScope.launch { flow.collect { triggerCommand = it } }
+        }
+        triggerModeFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { triggerMode = it } }
+        }
+        stylusOnlyFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _stylusOnly.value = it } }
         }
         // Pre-download the handwriting model so the first /Q is fast.
         recognizer?.let { viewModelScope.launch { it.warmUp() } }
@@ -177,7 +263,11 @@ class CanvasViewModel(
             _finishedStrokes.debounce(autoSaveDebounceMillis).collect { strokes ->
                 if (strokes != lastPersisted) {
                     runCatching { repository.replaceStrokes(pageId, strokes) }
-                        .onSuccess { lastPersisted = strokes }
+                        .onSuccess {
+                            lastPersisted = strokes
+                            // Kick off background TODO/calendar extraction for the saved page.
+                            if (strokes.isNotEmpty()) enqueueExtraction?.invoke(pageId)
+                        }
                 }
             }
         }
@@ -205,6 +295,8 @@ class CanvasViewModel(
                 flushScope.launch { runCatching { repository.replaceAiNotes(pageId, aiNotes) } }
             }
         }
+        // Release the native handwriting recognizer held for this screen.
+        runCatching { recognizer?.close() }
         super.onCleared()
     }
 
@@ -224,6 +316,7 @@ class CanvasViewModel(
 
     fun setStylusOnly(enabled: Boolean) {
         _stylusOnly.value = enabled
+        persistStylusOnly?.let { writer -> viewModelScope.launch { writer(enabled) } }
     }
 
     /** Called by the canvas when wet strokes complete and become dry strokes. */
@@ -343,32 +436,93 @@ class CanvasViewModel(
     private suspend fun detectAndHandleTrigger(recognizer: HandwritingRecognizer) {
         val strokes = _finishedStrokes.value
         if (strokes.isEmpty()) return
-
         val lines = lineSplitter(strokes)
         if (lines.isEmpty()) return
 
+        when (triggerMode) {
+            TriggerMode.COMMAND -> handleCommandTrigger(recognizer, strokes, lines)
+            TriggerMode.GESTURE -> handleGestureTrigger(recognizer, strokes)
+        }
+    }
+
+    /**
+     * Written-command activation (`/Q`). Evaluates the top recognition candidates of the
+     * last-drawn line so a `/Q` the best guess garbled still fires, then assembles the
+     * question (inline, or the multi-line block above a bare trigger) and page context.
+     */
+    private suspend fun handleCommandTrigger(
+        recognizer: HandwritingRecognizer,
+        strokes: List<Stroke>,
+        lines: List<List<Stroke>>,
+    ) {
         // Cheap per-debounce check: only the line containing the last-drawn stroke.
         val lastStroke = strokes.last()
         val triggerIndex = lines.indexOfFirst { line -> line.any { it === lastStroke } }
             .takeIf { it >= 0 } ?: lines.lastIndex
         val triggerLine = lines[triggerIndex]
         val trigger = triggerCommand
-        val triggerText = recognizer.recognize(triggerLine).getOrNull() ?: return
-        if (!QueryTriggerDetector.containsTrigger(triggerText, trigger)) return
 
-        // Question: text before the trigger on its line, else the line directly above.
+        // Top-N candidates: a low-confidence candidate (beyond the rank cap) can't trigger.
+        val candidates = recognizer.recognizeCandidates(triggerLine).getOrNull().orEmpty().map { it.text }
+        val triggerText = QueryTriggerDetector.firstTriggerCandidate(candidates, trigger) ?: return
+
+        // Question: text before an inline trigger, else the contiguous block of lines above it.
         val inlinePrompt = QueryTriggerDetector.extractPrompt(triggerText, trigger)
-        val questionLineIndex = if (inlinePrompt == null && triggerIndex > 0) triggerIndex - 1 else null
+        val questionIndices = if (inlinePrompt == null) questionLineSelector(lines, triggerIndex) else emptyList()
         val question = inlinePrompt
-            ?: questionLineIndex?.let { recognizer.recognize(lines[it]).getOrNull()?.trim() }
+            ?: questionIndices
+                .mapNotNull { recognizer.recognize(lines[it]).getOrNull()?.trim()?.ifEmpty { null } }
+                .joinToString(" ")
+                .ifBlank { null }
 
         // Everything else on the page goes along as context.
+        val excluded = questionIndices.toMutableSet().apply { add(triggerIndex) }
         val context = lines.indices
-            .filter { it != triggerIndex && it != questionLineIndex }
+            .filter { it !in excluded }
             .mapNotNull { recognizer.recognize(lines[it]).getOrNull()?.trim()?.ifEmpty { null } }
             .joinToString("\n")
 
         val effectiveQuestion = question?.ifBlank { null } ?: context.ifBlank { null } ?: return
+        val userPrompt = if (question == null || context.isBlank()) {
+            effectiveQuestion
+        } else {
+            "Handwritten question: $effectiveQuestion\n\n" +
+                "Other notes on the page (context, may be unrelated):\n$context"
+        }
+        submitQuery(effectiveQuestion, userPrompt, notePlacer(triggerLine))
+    }
+
+    /**
+     * Lasso activation: when the last stroke is a closed loop, the strokes it encloses are
+     * recognized as the question. The lasso itself is a gesture, not ink, so it's removed
+     * from the canvas before the answer is placed.
+     */
+    private suspend fun handleGestureTrigger(recognizer: HandwritingRecognizer, strokes: List<Stroke>) {
+        if (strokes.size < 2) return // need the lasso plus at least one enclosed stroke
+        val lassoStroke = strokes.last()
+        val polygon = lassoOf(lassoStroke) ?: return // last stroke isn't a deliberate loop
+        val content = strokes.dropLast(1)
+        val enclosed = GestureTriggerDetector.enclosedIndices(polygon, content.map(centroidOf))
+            .map(content::get)
+        if (enclosed.isEmpty()) return
+
+        val question = lineSplitter(enclosed)
+            .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
+            .joinToString(" ")
+            .ifBlank { null } ?: return
+
+        // The lasso is a gesture, not content — take it back off the canvas.
+        _finishedStrokes.update { current -> current.filterNot { it === lassoStroke } }
+
+        submitQuery(question, question, notePlacer(enclosed))
+    }
+
+    /**
+     * Shared tail of both activation paths: de-dupes against the last prompt, guards on the
+     * provider, extracts tasks first (suppressing a `/Q` answer when the page holds new
+     * action items), then renders the answer or a connection error onto the canvas.
+     */
+    private suspend fun submitQuery(effectiveQuestion: String, userPrompt: String, position: NotePosition) {
         if (effectiveQuestion == lastHandledPrompt) return
         lastHandledPrompt = effectiveQuestion
 
@@ -381,14 +535,6 @@ class CanvasViewModel(
             return
         }
 
-        val userPrompt = if (question == null || context.isBlank()) {
-            effectiveQuestion
-        } else {
-            "Handwritten question: $effectiveQuestion\n\n" +
-                "Other notes on the page (context, may be unrelated):\n$context"
-        }
-
-        val position = notePlacer(triggerLine)
         _aiState.value = AiUiState.Thinking(effectiveQuestion, position.x, position.y)
 
         // Extract-first: if the page holds NEW action items, capture them as a to-do
@@ -498,6 +644,49 @@ class CanvasViewModel(
         pendingRepoTasks = emptyList()
     }
 
+    // --- Background auto-extraction suggestions (FA-2) ---
+
+    /** "Yes" on a background suggestion: commit it (TODO item / calendar suggestion) and remove the popup. */
+    fun acceptSuggestion(id: String) {
+        val suggestionRepo = suggestionRepository ?: return
+        val pageId = pageId ?: return
+        viewModelScope.launch {
+            val suggestion = suggestionRepo.get(id) ?: return@launch
+            val title = repository?.getPage(pageId)?.displayTitle() ?: "Note"
+            when (suggestion.type) {
+                SuggestionType.TODO -> todoRepository?.addExtracted(
+                    listOf(
+                        TodoRepository.ExtractedTask(
+                            content = suggestion.content,
+                            priority = TodoPriority.entries.getOrElse(suggestion.priority) { TodoPriority.NONE },
+                            dueAt = suggestion.dueAtMillis,
+                        ),
+                    ),
+                    sourcePageId = pageId,
+                    sourcePageTitle = title,
+                )
+                SuggestionType.EVENT -> calendarRepository?.addSuggestion(
+                    CalendarEvent(
+                        title = suggestion.content,
+                        startTime = suggestion.startMillis ?: 0L,
+                        endTime = suggestion.endMillis ?: ((suggestion.startMillis ?: 0L) + 3_600_000L),
+                        location = suggestion.location,
+                        sourceNoteId = pageId,
+                        isAiSuggested = true,
+                    ),
+                    sourcePageId = pageId,
+                )
+            }
+            suggestionRepo.remove(id)
+        }
+    }
+
+    /** "No": keep the row dismissed so the same item isn't re-suggested on the next save. */
+    fun rejectSuggestion(id: String) {
+        val suggestionRepo = suggestionRepository ?: return
+        viewModelScope.launch { suggestionRepo.dismiss(id) }
+    }
+
     companion object {
         /** Dark ink for user strokes; AI note ink uses a distinct colour (see ui). */
         const val USER_INK_COLOR: Int = 0xFF1A237E.toInt()
@@ -558,25 +747,3 @@ class CanvasViewModel(
     }
 }
 
-/** Production wiring: ML Kit recognition + Anthropic backend + Room persistence + TODO extraction. */
-fun canvasViewModelFactory(
-    repository: NoteRepository,
-    todoRepository: TodoRepository,
-    settingsRepository: ai.elrond.settings.SettingsRepository,
-    pageId: String,
-): ViewModelProvider.Factory = viewModelFactory {
-    initializer {
-        val apiKey = BuildConfig.ANTHROPIC_API_KEY
-        val provider = apiKey.takeIf { it.isNotBlank() }
-            ?.let { AnthropicProvider(AnthropicConfig(apiKey = it)) }
-        CanvasViewModel(
-            recognizer = MlKitHandwritingRecognizer(),
-            aiProvider = provider,
-            taskExtractor = provider?.let { AiTaskExtractor(it) },
-            todoRepository = todoRepository,
-            repository = repository,
-            pageId = pageId,
-            triggerCommandFlow = settingsRepository.triggerCommand,
-        )
-    }
-}

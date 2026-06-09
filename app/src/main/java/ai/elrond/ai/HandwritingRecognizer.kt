@@ -12,15 +12,35 @@ import com.google.mlkit.vision.digitalink.Ink
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.tasks.await
 
+/**
+ * A single ranked recognition result. Recognizers return these best-first; [score] is the
+ * engine's optional confidence (ML Kit may leave it null), so callers should rely on rank.
+ */
+data class RecognitionCandidate(val text: String, val score: Float? = null)
+
 /** Converts canvas ink strokes to text. Interface so JVM tests can use a fake. */
 interface HandwritingRecognizer {
+    /** The single best recognition result, or "" when there is no ink. */
     suspend fun recognize(strokes: List<Stroke>): Result<String>
+
+    /**
+     * Ranked recognition candidates (best first). Lets callers consider alternatives the
+     * top guess missed (e.g. a `/Q` trigger). Default wraps the single [recognize] result,
+     * so a fake/implementation that only overrides [recognize] still works.
+     */
+    suspend fun recognizeCandidates(strokes: List<Stroke>): Result<List<RecognitionCandidate>> =
+        recognize(strokes).map { text ->
+            if (text.isEmpty()) emptyList() else listOf(RecognitionCandidate(text))
+        }
 
     /**
      * Prepares the recognizer ahead of first use (e.g. downloads the model).
      * Call at app/screen startup so the first /Q doesn't pay the cost.
      */
     suspend fun warmUp() {}
+
+    /** Releases any native recognizer resources. No-op for implementations that hold none. */
+    fun close() {}
 }
 
 /**
@@ -37,21 +57,27 @@ class MlKitHandwritingRecognizer(
         },
     ).build()
 
-    private val recognizer by lazy {
+    private val recognizerLazy = lazy {
         DigitalInkRecognition.getClient(DigitalInkRecognizerOptions.builder(model).build())
     }
+    private val recognizer get() = recognizerLazy.value
 
     private val modelManager = RemoteModelManager.getInstance()
 
     @Volatile
     private var modelReady = false
 
-    override suspend fun recognize(strokes: List<Stroke>): Result<String> {
-        if (strokes.isEmpty()) return Result.success("")
+    override suspend fun recognize(strokes: List<Stroke>): Result<String> =
+        recognizeCandidates(strokes).map { it.firstOrNull()?.text.orEmpty() }
+
+    override suspend fun recognizeCandidates(
+        strokes: List<Stroke>,
+    ): Result<List<RecognitionCandidate>> {
+        if (strokes.isEmpty()) return Result.success(emptyList())
         return try {
             ensureModelDownloaded()
             val result = recognizer.recognize(strokes.toMlKitInk()).await()
-            Result.success(result.candidates.firstOrNull()?.text.orEmpty())
+            Result.success(result.candidates.map { RecognitionCandidate(it.text, it.score) })
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -76,6 +102,11 @@ class MlKitHandwritingRecognizer(
             modelManager.download(model, DownloadConditions.Builder().build()).await()
         }
         modelReady = true
+    }
+
+    /** Releases the native recognizer client, but only if it was ever created. */
+    override fun close() {
+        if (recognizerLazy.isInitialized()) recognizer.close()
     }
 }
 

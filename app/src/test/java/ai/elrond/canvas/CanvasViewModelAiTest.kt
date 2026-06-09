@@ -1,7 +1,10 @@
 package ai.elrond.canvas
 
 import ai.elrond.ai.AiUiState
+import ai.elrond.ai.GestureTriggerDetector
 import ai.elrond.ai.HandwritingRecognizer
+import ai.elrond.ai.RecognitionCandidate
+import ai.elrond.ai.TriggerMode
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
@@ -59,9 +62,26 @@ class CanvasViewModelAiTest {
         var callCount = 0
         var warmUpCount = 0
 
+        /** When set, drives [recognizeCandidates] directly (else it mirrors the interface default). */
+        var candidatesFor: ((List<Stroke>) -> List<String>)? = null
+
         override suspend fun recognize(strokes: List<Stroke>): Result<String> {
             callCount++
             return Result.success(textFor(strokes))
+        }
+
+        override suspend fun recognizeCandidates(
+            strokes: List<Stroke>,
+        ): Result<List<RecognitionCandidate>> {
+            val provider = candidatesFor
+            if (provider == null) {
+                // Mirror the interface default: a single candidate from recognize().
+                return recognize(strokes).map {
+                    if (it.isEmpty()) emptyList() else listOf(RecognitionCandidate(it))
+                }
+            }
+            callCount++
+            return Result.success(provider(strokes).map { RecognitionCandidate(it) })
         }
 
         override suspend fun warmUp() {
@@ -208,7 +228,14 @@ class CanvasViewModelAiTest {
             }
         }
         val provider = FakeProvider("4.5 billion years")
-        val viewModel = viewModel(recognizer, provider, splitter)
+        // Inject a single-line-above selector (the production span selector needs real ink).
+        val viewModel = CanvasViewModel(
+            recognizer = recognizer,
+            aiProvider = provider,
+            lineSplitter = splitter,
+            notePlacer = fixedPlacement,
+            questionLineSelector = { _, triggerIndex -> listOf(triggerIndex - 1) },
+        )
 
         viewModel.onStrokesFinished(listOf(notesStroke, questionStroke, triggerStroke))
         advanceUntilIdle()
@@ -218,6 +245,86 @@ class CanvasViewModelAiTest {
         assertTrue(sent.contains("meeting notes about budget"))
         assertEquals("4.5 billion years", viewModel.aiNotes.value.single().text)
         assertEquals(AiUiState.Idle, viewModel.aiState.value)
+    }
+
+    @Test
+    fun `bare trigger gathers a multi-line block above as one question`() = runTest(dispatcher) {
+        val ctxStroke = mockk<Stroke>()
+        val q1Stroke = mockk<Stroke>()
+        val q2Stroke = mockk<Stroke>()
+        val triggerStroke = mockk<Stroke>()
+        val splitter: (List<Stroke>) -> List<List<Stroke>> = {
+            listOf(listOf(ctxStroke), listOf(q1Stroke), listOf(q2Stroke), listOf(triggerStroke))
+        }
+        val recognizer = FakeRecognizer { strokes ->
+            when (strokes.single()) {
+                triggerStroke -> "/Q"
+                q1Stroke -> "how do I"
+                q2Stroke -> "make sourdough bread"
+                else -> "shopping list"
+            }
+        }
+        val provider = FakeProvider("Mix flour, water and starter…")
+        val viewModel = CanvasViewModel(
+            recognizer = recognizer,
+            aiProvider = provider,
+            lineSplitter = splitter,
+            notePlacer = fixedPlacement,
+            // Lines 1 and 2 are the contiguous question block above the trigger (line 3).
+            questionLineSelector = { _, _ -> listOf(1, 2) },
+        )
+
+        viewModel.onStrokesFinished(listOf(ctxStroke, q1Stroke, q2Stroke, triggerStroke))
+        advanceUntilIdle()
+
+        val sent = provider.prompts.single()
+        assertTrue(sent.contains("Handwritten question: how do I make sourdough bread"))
+        assertTrue(sent.contains("shopping list"))
+    }
+
+    @Test
+    fun `lasso gesture asks about enclosed strokes and removes the lasso`() = runTest(dispatcher) {
+        val contentStroke = mockk<Stroke>()
+        val lassoStroke = mockk<Stroke>()
+        val polygon = listOf(
+            GestureTriggerDetector.Point(0f, 0f),
+            GestureTriggerDetector.Point(100f, 0f),
+            GestureTriggerDetector.Point(100f, 100f),
+            GestureTriggerDetector.Point(0f, 100f),
+        )
+        val provider = FakeProvider("Paris")
+        val viewModel = CanvasViewModel(
+            recognizer = FakeRecognizer { "what is the capital of France" },
+            aiProvider = provider,
+            lineSplitter = singleLine,
+            notePlacer = fixedPlacement,
+            lassoOf = { stroke -> polygon.takeIf { stroke === lassoStroke } },
+            centroidOf = { GestureTriggerDetector.Point(50f, 50f) }, // inside the polygon
+            triggerModeFlow = kotlinx.coroutines.flow.flowOf(TriggerMode.GESTURE),
+        )
+
+        viewModel.onStrokesFinished(listOf(contentStroke, lassoStroke))
+        advanceUntilIdle()
+
+        assertEquals(listOf("what is the capital of France"), provider.prompts)
+        assertEquals("Paris", viewModel.aiNotes.value.single().text)
+        // The lasso was a gesture, not ink — only the content stroke remains.
+        assertEquals(listOf(contentStroke), viewModel.finishedStrokes.value)
+    }
+
+    @Test
+    fun `trigger is recovered from a lower-ranked recognition candidate`() = runTest(dispatcher) {
+        val provider = FakeProvider("4")
+        val recognizer = FakeRecognizer { "what is 2+2 10" }.apply {
+            // Best guess garbled the slash; a lower-ranked candidate kept it.
+            candidatesFor = { listOf("what is 2+2 10", "what is 2+2 /Q") }
+        }
+        val viewModel = viewModel(recognizer, provider)
+
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+
+        assertEquals(listOf("what is 2+2"), provider.prompts)
     }
 
     @Test

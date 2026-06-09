@@ -1,10 +1,9 @@
 package ai.elrond.ui
 
-import ai.elrond.ElrondApplication
 import ai.elrond.notes.NoteListViewModel
 import ai.elrond.notes.NotePage
+import ai.elrond.settings.SettingsViewModel
 import ai.elrond.todo.TodoViewModel
-import ai.elrond.todo.todoViewModelFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -59,6 +58,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.time.Instant
@@ -69,15 +69,16 @@ import java.time.format.DateTimeFormatter
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NoteListScreen(
-    viewModel: NoteListViewModel,
     onOpenNote: (pageId: String) -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
+    viewModel: NoteListViewModel = hiltViewModel(),
+    todoViewModel: TodoViewModel = hiltViewModel(),
+    settingsViewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    val app = LocalContext.current.applicationContext as ElrondApplication
-    val todoViewModel: TodoViewModel = viewModel(factory = todoViewModelFactory(app.todoRepository))
     val pages by viewModel.pages.collectAsStateWithLifecycle()
     val todoCount by todoViewModel.activeCount.collectAsStateWithLifecycle()
+    val hasNewExtractedItems by settingsViewModel.hasNewExtractedItems.collectAsStateWithLifecycle()
     var deleteCandidate by remember { mutableStateOf<NotePage?>(null) }
     var showTodoPanel by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -116,8 +117,16 @@ fun NoteListScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showTodoPanel = true }) {
-                        BadgedBox(badge = { if (todoCount > 0) Badge { Text(todoCount.toString()) } }) {
+                    IconButton(onClick = {
+                        showTodoPanel = true
+                        settingsViewModel.markExtractedItemsSeen()
+                    }) {
+                        BadgedBox(badge = {
+                            when {
+                                hasNewExtractedItems -> Badge { Text("+") }
+                                todoCount > 0 -> Badge { Text(todoCount.toString()) }
+                            }
+                        }) {
                             Icon(Icons.AutoMirrored.Filled.List, contentDescription = "To-do list")
                         }
                     }

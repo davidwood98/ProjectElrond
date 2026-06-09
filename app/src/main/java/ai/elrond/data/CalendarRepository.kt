@@ -27,6 +27,10 @@ class CalendarRepository(
     suspend fun eventsInRange(startMillis: Long, endMillis: Long): List<CalendarEvent> =
         dao.inRange(startMillis, endMillis).map(CalendarEventEntity::toDomain)
 
+    /** Normalized titles of existing AI suggestions — to skip re-suggesting the same event. */
+    suspend fun suggestedTitles(): Set<String> =
+        dao.suggestedTitles().map { it.trim().lowercase() }.toSet()
+
     /** Persists an AI suggestion (never written to a real calendar until confirmed). */
     suspend fun addSuggestion(event: CalendarEvent, sourcePageId: String?): String {
         val id = newId()

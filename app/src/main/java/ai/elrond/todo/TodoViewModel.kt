@@ -2,17 +2,17 @@ package ai.elrond.todo
 
 import ai.elrond.data.TodoRepository
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** Drives the TODO panel and the toolbar count badge. */
-class TodoViewModel(
+@HiltViewModel
+class TodoViewModel @Inject constructor(
     private val repository: TodoRepository,
 ) : ViewModel() {
 
@@ -41,8 +41,3 @@ class TodoViewModel(
         viewModelScope.launch { repository.delete(id) }
     }
 }
-
-fun todoViewModelFactory(repository: TodoRepository): ViewModelProvider.Factory =
-    viewModelFactory {
-        initializer { TodoViewModel(repository) }
-    }

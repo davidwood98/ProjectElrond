@@ -110,6 +110,10 @@ interface CalendarEventDao {
 
     @Query("SELECT * FROM calendar_events WHERE startTime >= :startMillis AND startTime < :endMillis ORDER BY startTime")
     suspend fun inRange(startMillis: Long, endMillis: Long): List<CalendarEventEntity>
+
+    /** Titles of AI-suggested events — for de-duplicating background extraction. */
+    @Query("SELECT title FROM calendar_events WHERE isAiSuggested = 1")
+    suspend fun suggestedTitles(): List<String>
 }
 
 @Dao
@@ -139,6 +143,36 @@ interface PageEditEventDao {
 
     @Query("SELECT * FROM page_edit_events")
     fun observeAll(): Flow<List<PageEditEventEntity>>
+}
+
+/** Projection of a pending suggestion's type + content for type-namespaced de-dup. */
+data class PendingTypeContent(val type: String, val content: String)
+
+@Dao
+interface PendingSuggestionDao {
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAll(items: List<PendingSuggestionEntity>)
+
+    /** Active (not-dismissed) suggestions for a page — drives the on-canvas popups. */
+    @Query("SELECT * FROM pending_suggestions WHERE pageId = :pageId AND dismissed = 0 ORDER BY createdAt")
+    fun observeForPage(pageId: String): Flow<List<PendingSuggestionEntity>>
+
+    /** All suggestion contents for a page (incl. dismissed) — for de-dup against re-suggestion. */
+    @Query("SELECT content FROM pending_suggestions WHERE pageId = :pageId")
+    suspend fun contentsForPage(pageId: String): List<String>
+
+    /** Type + content for every suggestion on a page (incl. dismissed) — type-namespaced de-dup. */
+    @Query("SELECT type, content FROM pending_suggestions WHERE pageId = :pageId")
+    suspend fun typedContentsForPage(pageId: String): List<PendingTypeContent>
+
+    @Query("SELECT * FROM pending_suggestions WHERE id = :id")
+    suspend fun getById(id: String): PendingSuggestionEntity?
+
+    @Query("DELETE FROM pending_suggestions WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("UPDATE pending_suggestions SET dismissed = 1 WHERE id = :id")
+    suspend fun markDismissed(id: String)
 }
 
 @Dao

@@ -56,4 +56,38 @@ class StrokeLineGrouperTest {
         assertEquals(1, lines.size)
         assertEquals(listOf(0, 1, 2), lines.single())
     }
+
+    // --- blockAbove (multi-line question segmentation) ---
+
+    /** Three evenly-spaced lines of height ~20, small ~10px gaps. */
+    private val evenlySpaced = listOf(
+        Span(0f, 20f),    // line 0
+        Span(30f, 50f),   // line 1 (gap 10 below line 0)
+        Span(60f, 80f),   // line 2 (gap 10 below line 1)
+        Span(90f, 110f),  // line 3 = trigger
+    )
+
+    @Test
+    fun `blockAbove returns empty for the first line or out of range`() {
+        assertTrue(StrokeLineGrouper.blockAbove(evenlySpaced, triggerIndex = 0).isEmpty())
+        assertTrue(StrokeLineGrouper.blockAbove(evenlySpaced, triggerIndex = 99).isEmpty())
+    }
+
+    @Test
+    fun `blockAbove gathers the contiguous block above the trigger`() {
+        // Tight, even spacing → all three lines above form one multi-line question, top-to-bottom.
+        assertEquals(listOf(0, 1, 2), StrokeLineGrouper.blockAbove(evenlySpaced, triggerIndex = 3))
+    }
+
+    @Test
+    fun `blockAbove stops at a paragraph gap`() {
+        val withGap = listOf(
+            Span(0f, 20f),    // line 0 — separated by a big gap below
+            Span(200f, 220f), // line 1 (gap 180 ≫ line height → paragraph break)
+            Span(230f, 250f), // line 2
+            Span(260f, 280f), // line 3 = trigger
+        )
+        // Only the tight block (lines 1,2) is the question; line 0 stays as context.
+        assertEquals(listOf(1, 2), StrokeLineGrouper.blockAbove(withGap, triggerIndex = 3))
+    }
 }
