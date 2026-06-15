@@ -3,6 +3,8 @@ package ai.elrond.data
 import androidx.room.testing.MigrationTestHelper
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
+import org.junit.Assume
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,6 +31,26 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_4_5,
         ElrondDatabase.MIGRATION_5_6,
     )
+
+    /**
+     * The exported Room schema JSONs are exposed to the **debug** variant's assets only (and to
+     * androidTest for on-device runs) so they never ship in a release build. `./gradlew test`
+     * also runs the *release* unit-test variant, where those assets are absent and
+     * MigrationTestHelper can't read them — so skip there rather than fail. Full validation still
+     * runs in the debug variant (`:app:testDebugUnitTest`) and on-device.
+     */
+    @Before
+    fun requireExportedSchemas() {
+        val schemasOnAssets = runCatching {
+            InstrumentationRegistry.getInstrumentation().context.assets
+                .list(ElrondDatabase::class.java.canonicalName!!)
+                .orEmpty().isNotEmpty()
+        }.getOrDefault(false)
+        Assume.assumeTrue(
+            "Room schemas are bundled into the debug variant assets only; skipping in release.",
+            schemasOnAssets,
+        )
+    }
 
     @Test
     fun migrates_v1_to_v6_and_validates_final_schema() {

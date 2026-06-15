@@ -9,7 +9,10 @@ import ai.elrond.aibackend.ExtractedTask
 import ai.elrond.aibackend.TaskExtractor
 import ai.elrond.ai.HandwritingRecognizer
 import ai.elrond.data.NoteRepository
+import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
+import ai.elrond.extract.PendingSuggestion
+import ai.elrond.extract.SuggestionType
 import ai.elrond.notes.NotePage
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
@@ -19,8 +22,10 @@ import io.mockk.slot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -58,7 +63,10 @@ class CanvasViewModelExtractionTest {
             Result.success(tasks)
     }
 
-    private fun viewModel(tasks: List<ExtractedTask>) = CanvasViewModel(
+    private fun viewModel(
+        tasks: List<ExtractedTask>,
+        suggestionRepository: SuggestionRepository? = null,
+    ) = CanvasViewModel(
         recognizer = object : HandwritingRecognizer {
             override suspend fun recognize(strokes: List<Stroke>) = Result.success("buy milk /Q")
         },
@@ -72,6 +80,7 @@ class CanvasViewModelExtractionTest {
         repository = noteRepository,
         taskExtractor = FakeExtractor(tasks),
         todoRepository = todoRepository,
+        suggestionRepository = suggestionRepository,
         pageId = "page-1",
     )
 
@@ -133,16 +142,52 @@ class CanvasViewModelExtractionTest {
     }
 
     @Test
-    fun `already-existing tasks are ignored and an answer is produced instead`() = runTest(dispatcher) {
+    fun `already-existing tasks raise a self-clearing notification instead of an answer`() = runTest(dispatcher) {
         coEvery { todoRepository.existingContents() } returns setOf("buy milk")
         val vm = viewModel(listOf(ExtractedTask("Buy milk")))
 
         vm.onStrokesFinished(listOf(mockk<Stroke>()))
-        advanceUntilIdle()
+        // Reach the detection + extraction, but stop before the transient message auto-clears.
+        advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+        runCurrent()
 
         assertNull(vm.pendingExtraction.value) // nothing new to add
-        assertEquals(1, vm.aiNotes.value.size) // falls through to a normal answer
+        assertTrue(vm.aiNotes.value.isEmpty()) // no /Q answer for an already-captured item
+        assertEquals(CanvasViewModel.ALREADY_EXISTS_MESSAGE, vm.transientMessage.value)
     }
+
+    @Test
+    fun `manual extraction records handled suggestions so the background runner cannot re-add them`() =
+        runTest(dispatcher) {
+            val suggestionRepository = mockk<SuggestionRepository>(relaxed = true)
+            coEvery { suggestionRepository.existingContents("page-1") } returns emptySet()
+            val vm = viewModel(listOf(ExtractedTask("Buy milk")), suggestionRepository)
+
+            vm.onStrokesFinished(listOf(mockk<Stroke>()))
+            advanceUntilIdle()
+
+            val slot = slot<List<PendingSuggestion>>()
+            coVerify { suggestionRepository.recordHandled(capture(slot)) }
+            assertEquals("Buy milk", slot.captured.single().content)
+            assertEquals(SuggestionType.TODO, slot.captured.single().type)
+        }
+
+    @Test
+    fun `a task already suggested for the page is not re-offered by manual extraction`() =
+        runTest(dispatcher) {
+            val suggestionRepository = mockk<SuggestionRepository>(relaxed = true)
+            // Not on the to-do list yet, but already suggested for this page (e.g. by the background run).
+            coEvery { suggestionRepository.existingContents("page-1") } returns setOf("buy milk")
+            val vm = viewModel(listOf(ExtractedTask("Buy milk")), suggestionRepository)
+
+            vm.onStrokesFinished(listOf(mockk<Stroke>()))
+            advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+            runCurrent()
+
+            assertNull(vm.pendingExtraction.value)
+            assertEquals(CanvasViewModel.ALREADY_EXISTS_MESSAGE, vm.transientMessage.value)
+            coVerify(exactly = 0) { suggestionRepository.recordHandled(any()) }
+        }
 
     @Test
     fun `dismissing does not persist anything`() = runTest(dispatcher) {

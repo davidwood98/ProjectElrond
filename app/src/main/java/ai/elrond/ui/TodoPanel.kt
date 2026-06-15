@@ -274,10 +274,16 @@ private fun TodoRow(
                 },
             )
             if (item.isAiExtracted) {
-                // AI-extracted items are identified by the AI colour (no ✨ marker). Keep the
-                // tappable source link when we know which note it came from.
+                // AI-extracted items are identified by the AI colour (no ✨ marker). The "from
+                // [note]" link is shown and tappable only while the source note still exists
+                // (sourcePageId set). Once the note is deleted the FK nulls sourcePageId, so we
+                // fall back to a plain "AI" label instead of a dead, non-tappable link.
                 Text(
-                    text = item.sourcePageTitle?.let { "from $it ↗" } ?: "AI",
+                    text = if (item.hasSourceLink) {
+                        item.sourcePageTitle?.let { "from $it ↗" } ?: "AI"
+                    } else {
+                        "AI"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     fontStyle = FontStyle.Italic,
                     color = AiInkColor,

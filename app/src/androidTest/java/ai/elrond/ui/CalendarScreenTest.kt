@@ -65,9 +65,9 @@ class CalendarScreenTest {
         composeRule.onNodeWithText("Calendar events will appear here.", substring = true)
             .assertIsDisplayed()
 
-        // Week mode shows the created/edited legend (and no "both" entry any more).
+        // Week mode shows the created/edited legend (dots + labels, no "both" entry any more).
         composeRule.onNodeWithText("Week").performClick()
-        composeRule.onNodeWithText("✨ created").assertIsDisplayed()
-        composeRule.onNodeWithText("📝 edited").assertIsDisplayed()
+        composeRule.onNodeWithText("created").assertIsDisplayed()
+        composeRule.onNodeWithText("edited").assertIsDisplayed()
     }
 }

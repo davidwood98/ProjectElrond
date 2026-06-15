@@ -70,4 +70,17 @@ class SuggestionRepositoryTest {
         assertTrue(repo.observePending("p1").first().isEmpty())
         assertFalse("buy milk" in repo.existingContents("p1"))
     }
+
+    @Test
+    fun `recordHandled de-dups future runs without ever showing in the popup`() = runTest {
+        // The manual /Q path claims the items it proposed so the background runner can't re-add.
+        repo.recordHandled(listOf(todo("Buy milk")))
+
+        assertTrue("never surfaces as a pending popup", repo.observePending("p1").first().isEmpty())
+        assertTrue("but de-dups by content", "buy milk" in repo.existingContents("p1"))
+        assertTrue(
+            "and de-dups type-namespaced",
+            "TODO:buy milk" in repo.existingTypedContents("p1"),
+        )
+    }
 }

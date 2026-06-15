@@ -105,6 +105,43 @@ class AutoExtractionRunnerTest {
     }
 
     @Test
+    fun `an accepted suggestion is not re-suggested when the same note is saved again`() = runTest {
+        // First save (confirmation on) raises a pending TODO suggestion.
+        runner(tasks = listOf(ExtractedTask("Buy milk", priority = 2)))
+            .run("p1", confirmTodo = true, confirmCalendar = true)
+        val accepted = suggestionRepository.observePending("p1").first().single()
+
+        // User accepts: the item becomes a to-do and the suggestion row is marked handled (kept).
+        todoRepository.addExtracted(
+            listOf(TodoRepository.ExtractedTask("Buy milk")),
+            sourcePageId = "p1",
+            sourcePageTitle = "Note",
+        )
+        suggestionRepository.markHandled(accepted.id)
+
+        // Re-enter the note and save again with the same line still present → no new popup.
+        runner(tasks = listOf(ExtractedTask("Buy milk", priority = 2)))
+            .run("p1", confirmTodo = true, confirmCalendar = true)
+
+        assertTrue(suggestionRepository.observePending("p1").first().isEmpty())
+    }
+
+    @Test
+    fun `a handled suggestion de-dups future saves even without a matching to-do`() = runTest {
+        // Handled (kept) suggestion with no matching to-do — e.g. accepted then the to-do deleted.
+        runner(tasks = listOf(ExtractedTask("Buy milk")))
+            .run("p1", confirmTodo = true, confirmCalendar = true)
+        val s = suggestionRepository.observePending("p1").first().single()
+        suggestionRepository.markHandled(s.id)
+
+        // Same line resurfaces on a later save → still not re-suggested (handled rows de-dup).
+        runner(tasks = listOf(ExtractedTask("Buy milk")))
+            .run("p1", confirmTodo = true, confirmCalendar = true)
+
+        assertTrue(suggestionRepository.observePending("p1").first().isEmpty())
+    }
+
+    @Test
     fun `confirmation off creates a calendar suggestion for a dated event`() = runTest {
         runner(events = listOf(ExtractedEvent("Standup", startIso = "2026-06-10T15:00")))
             .run("p1", confirmTodo = false, confirmCalendar = false)

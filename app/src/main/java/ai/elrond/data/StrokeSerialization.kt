@@ -64,15 +64,22 @@ object StrokeSerialization {
         val points = json.decodeFromString<List<SerializedStrokeInput>>(entity.inputsJson)
         val batch = MutableStrokeInputBatch()
         points.forEach { p ->
-            batch.addOrIgnore(
-                type = toolFromKey(p.tool),
-                x = p.x,
-                y = p.y,
-                elapsedTimeMillis = p.t,
-                pressure = p.pressure,
-                tiltRadians = p.tilt,
-                orientationRadians = p.orientation,
-            )
+            // ⚠️ FA-7 REGRESSION (see CLAUDE.md): ink 1.0.0 replaced addOrIgnore (skip-invalid) with
+            // add (throws on invalid input). This per-point runCatching was meant to replicate
+            // skip-invalid but does NOT — on device, reloaded strokes collapse to a single dot at the
+            // first point, so add() is rejecting almost every subsequent point here. Next session:
+            // revert ink to 1.0.0-alpha04 (restoring addOrIgnore) OR fix the reconstruction for 1.0.0.
+            runCatching {
+                batch.add(
+                    toolFromKey(p.tool),
+                    p.x,
+                    p.y,
+                    p.t,
+                    p.pressure,
+                    p.tilt,
+                    p.orientation,
+                )
+            }
         }
         val brush = Brush.createWithColorIntArgb(
             family = familyFromKey(entity.brushFamily),
@@ -88,15 +95,15 @@ object StrokeSerialization {
         json.decodeFromString<List<SerializedStrokeInput>>(inputsJson).map { it.x to it.y }
 
     private fun familyKey(family: BrushFamily): String = when (family) {
-        StockBrushes.markerLatest -> FAMILY_MARKER
-        StockBrushes.highlighterLatest -> FAMILY_HIGHLIGHTER
+        StockBrushes.marker() -> FAMILY_MARKER
+        StockBrushes.highlighter() -> FAMILY_HIGHLIGHTER
         else -> FAMILY_PRESSURE_PEN
     }
 
     private fun familyFromKey(key: String): BrushFamily = when (key) {
-        FAMILY_MARKER -> StockBrushes.markerLatest
-        FAMILY_HIGHLIGHTER -> StockBrushes.highlighterLatest
-        else -> StockBrushes.pressurePenLatest
+        FAMILY_MARKER -> StockBrushes.marker()
+        FAMILY_HIGHLIGHTER -> StockBrushes.highlighter()
+        else -> StockBrushes.pressurePen()
     }
 
     private fun toolKey(type: InputToolType): String = when (type) {

@@ -75,7 +75,9 @@ class CanvasViewModelSuggestionTest {
         coVerify { todoRepository.addExtracted(capture(slot), "page-1", "Standup") }
         assertEquals("Buy milk", slot.captured.single().content)
         assertEquals(123L, slot.captured.single().dueAt)
-        coVerify { suggestionRepository.remove("s1") }
+        // Accepted rows are KEPT (marked handled), not deleted, so they de-dup future saves.
+        coVerify { suggestionRepository.markHandled("s1") }
+        coVerify(exactly = 0) { suggestionRepository.remove(any()) }
         coVerify(exactly = 0) { calendarRepository.addSuggestion(any(), any()) }
     }
 
@@ -95,7 +97,7 @@ class CanvasViewModelSuggestionTest {
         coVerify { calendarRepository.addSuggestion(capture(slot), "page-1") }
         assertEquals("Standup", slot.captured.title)
         assertEquals(1000L, slot.captured.startTime)
-        coVerify { suggestionRepository.remove("s2") }
+        coVerify { suggestionRepository.markHandled("s2") }
     }
 
     @Test

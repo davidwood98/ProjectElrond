@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -40,6 +41,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -58,10 +60,14 @@ private enum class CalendarMode { MONTH, WEEK, EVENTS }
 private val MONTH_TITLE = DateTimeFormatter.ofPattern("MMMM yyyy")
 private val DAY_TIME = DateTimeFormatter.ofPattern("HH:mm")
 
+/** Muted-green dot marks days a note was created; dark-grey dot marks days one was edited. */
+private val CreatedDotColor = Color(0xFF66BB6A)
+private val EditedDotColor = Color(0xFF616161)
+
 /**
  * Calendar view over the existing note database (no new data): each day tile shows
- * ✨ when notes were created and 📝 when notes were edited. Month / Week / Events
- * modes; tapping an active day opens that day's notes.
+ * a muted-green dot when notes were created and a dark-grey dot when notes were
+ * edited. Month / Week / Events modes; tapping an active day opens that day's notes.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -251,12 +257,15 @@ private fun DayTile(
                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
             )
             if (activity != null && inPeriod) {
-                Row {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     if (activity.hasCreated) {
-                        Text("✨" + (if (activity.created > 1) activity.created.toString() else ""), fontSize = 11.sp)
+                        ActivityDot(color = CreatedDotColor, count = activity.created)
                     }
                     if (activity.hasEdited) {
-                        Text("📝" + (if (activity.edited > 1) activity.edited.toString() else ""), fontSize = 11.sp)
+                        ActivityDot(color = EditedDotColor, count = activity.edited)
                     }
                 }
             }
@@ -304,15 +313,43 @@ private fun DayNoteCard(note: NotePage, date: LocalDate, onClick: () -> Unit) {
     }
 }
 
+/** A small coloured status dot, optionally trailed by a count when more than one. */
+@Composable
+private fun ActivityDot(color: Color, count: Int) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(color),
+        )
+        if (count > 1) {
+            Text(
+                text = count.toString(),
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 2.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun Legend(modifier: Modifier = Modifier) {
     Surface(modifier = modifier, tonalElevation = 1.dp, shape = RoundedCornerShape(8.dp)) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("✨ created", style = MaterialTheme.typography.labelMedium)
-            Text("📝 edited", style = MaterialTheme.typography.labelMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                ActivityDot(color = CreatedDotColor, count = 1)
+                Text("created", style = MaterialTheme.typography.labelMedium)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                ActivityDot(color = EditedDotColor, count = 1)
+                Text("edited", style = MaterialTheme.typography.labelMedium)
+            }
         }
     }
 }

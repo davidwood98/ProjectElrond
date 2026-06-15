@@ -174,6 +174,15 @@ class CanvasViewModel(
     private val _pendingExtraction = MutableStateFlow<PendingTaskExtraction?>(null)
     val pendingExtraction: StateFlow<PendingTaskExtraction?> = _pendingExtraction.asStateFlow()
 
+    /**
+     * A short, self-clearing notification shown over the canvas (e.g. "Already on your to-do
+     * list" when a re-triggered selection only contains items that already exist). Null when
+     * nothing is showing; set by [showTransientMessage], which auto-clears it after a beat.
+     */
+    private val _transientMessage = MutableStateFlow<String?>(null)
+    val transientMessage: StateFlow<String?> = _transientMessage.asStateFlow()
+    private var transientMessageJob: Job? = null
+
     /** Background-extracted (FA-2) suggestions for this page awaiting a Yes/No popup decision. */
     val pendingSuggestions: StateFlow<List<PendingSuggestion>> =
         if (suggestionRepository != null && pageId != null) {
@@ -241,7 +250,7 @@ class CanvasViewModel(
                 runCatching { repository.loadAiNotes(pageId) }
                     .onSuccess { loaded -> _aiNotes.value = loaded }
                 lastPersisted = _finishedStrokes.value
-                lastPersistedAiNotes = _aiNotes.value
+                lastPersistedAiNotes = _aiNotes.value.filterNot { it.isError }
                 startAutoSave(repository, pageId)
             }
         }
@@ -256,6 +265,18 @@ class CanvasViewModel(
         val usable = canvasWidthPx - 2 * AI_NOTE_MARGIN_PX
         return if (usable > AiInkNote.MIN_WIDTH_PX) usable else AiInkNote.FALLBACK_WIDTH_PX
     }
+
+    /**
+     * Largest width a box whose left edge is at [x] can take while still leaving a margin at the
+     * right page edge. Returns [Float.MAX_VALUE] when the canvas width isn't known yet (e.g. unit
+     * tests), so geometry is only ever clamped once the real page width has been reported.
+     */
+    private fun maxWidthAt(x: Float): Float =
+        if (canvasWidthPx > 0f) {
+            (canvasWidthPx - x - AI_NOTE_MARGIN_PX).coerceAtLeast(AiInkNote.MIN_WIDTH_PX)
+        } else {
+            Float.MAX_VALUE
+        }
 
     @OptIn(FlowPreview::class)
     private fun startAutoSave(repository: NoteRepository, pageId: String) {
@@ -273,9 +294,11 @@ class CanvasViewModel(
         }
         viewModelScope.launch {
             _aiNotes.debounce(autoSaveDebounceMillis).collect { notes ->
-                if (notes != lastPersistedAiNotes) {
-                    runCatching { repository.replaceAiNotes(pageId, notes) }
-                        .onSuccess { lastPersistedAiNotes = notes }
+                // Error notes (e.g. "request unclear") are transient affordances — never persist them.
+                val persistable = notes.filterNot { it.isError }
+                if (persistable != lastPersistedAiNotes) {
+                    runCatching { repository.replaceAiNotes(pageId, persistable) }
+                        .onSuccess { lastPersistedAiNotes = persistable }
                 }
             }
         }
@@ -286,7 +309,7 @@ class CanvasViewModel(
         val repository = repository
         val pageId = pageId
         val strokes = _finishedStrokes.value
-        val aiNotes = _aiNotes.value
+        val aiNotes = _aiNotes.value.filterNot { it.isError }
         if (repository != null && pageId != null) {
             if (strokes != lastPersisted) {
                 flushScope.launch { runCatching { repository.replaceStrokes(pageId, strokes) } }
@@ -303,7 +326,7 @@ class CanvasViewModel(
     /** Pressure-sensitive pen brush for user ink. Lazy so JVM unit tests never touch ink natives. */
     val penBrush: Brush by lazy {
         Brush.createWithColorIntArgb(
-            family = StockBrushes.pressurePenLatest,
+            family = StockBrushes.pressurePen(),
             colorIntArgb = USER_INK_COLOR,
             size = DEFAULT_BRUSH_SIZE,
             epsilon = BRUSH_EPSILON,
@@ -384,7 +407,22 @@ class CanvasViewModel(
 
     fun moveAiNote(id: String, dx: Float, dy: Float) {
         _aiNotes.update { notes ->
-            notes.map { if (it.id == id) it.copy(x = it.x + dx, y = it.y + dy) else it }
+            notes.map { note ->
+                if (note.id == id) {
+                    // Keep the box on the page: never let it slide off the left/right edge or
+                    // above the top. (Clamps only once the canvas width is known — see maxWidthAt.)
+                    val maxX = if (canvasWidthPx > 0f) {
+                        (canvasWidthPx - note.widthPx).coerceAtLeast(0f)
+                    } else {
+                        Float.MAX_VALUE
+                    }
+                    val newX = (note.x + dx).coerceIn(0f, maxX)
+                    val newY = (note.y + dy).coerceAtLeast(0f)
+                    note.copy(x = newX, y = newY)
+                } else {
+                    note
+                }
+            }
         }
     }
 
@@ -393,7 +431,9 @@ class CanvasViewModel(
         _aiNotes.update { notes ->
             notes.map { note ->
                 if (note.id == id) {
-                    val newWidth = (note.widthPx + dWidth).coerceAtLeast(AiInkNote.MIN_WIDTH_PX)
+                    // Cap the width so the box can't grow past the right page edge.
+                    val newWidth = (note.widthPx + dWidth)
+                        .coerceIn(AiInkNote.MIN_WIDTH_PX, maxWidthAt(note.x))
                     val currentHeight = note.heightPx ?: AiInkNote.MIN_HEIGHT_PX
                     val newHeight = (currentHeight + dHeight).coerceAtLeast(AiInkNote.MIN_HEIGHT_PX)
                     note.copy(widthPx = newWidth, heightPx = newHeight)
@@ -514,7 +554,9 @@ class CanvasViewModel(
         // The lasso is a gesture, not content — take it back off the canvas.
         _finishedStrokes.update { current -> current.filterNot { it === lassoStroke } }
 
-        submitQuery(question, question, notePlacer(enclosed))
+        // A lasso is a deliberate, explicit request (like pressing a button): re-circling the
+        // same selection must always re-run, so it bypasses the unchanged-content de-dupe guard.
+        submitQuery(question, question, notePlacer(enclosed), bypassDedup = true)
     }
 
     /**
@@ -522,8 +564,15 @@ class CanvasViewModel(
      * provider, extracts tasks first (suppressing a `/Q` answer when the page holds new
      * action items), then renders the answer or a connection error onto the canvas.
      */
-    private suspend fun submitQuery(effectiveQuestion: String, userPrompt: String, position: NotePosition) {
-        if (effectiveQuestion == lastHandledPrompt) return
+    private suspend fun submitQuery(
+        effectiveQuestion: String,
+        userPrompt: String,
+        position: NotePosition,
+        bypassDedup: Boolean = false,
+    ) {
+        // The de-dupe guard stops the debounced detector re-firing on unchanged content. A
+        // deliberate, explicit trigger (a lasso, or a re-send) opts out so it always runs.
+        if (!bypassDedup && effectiveQuestion == lastHandledPrompt) return
         lastHandledPrompt = effectiveQuestion
 
         val provider = aiProvider
@@ -538,11 +587,20 @@ class CanvasViewModel(
         _aiState.value = AiUiState.Thinking(effectiveQuestion, position.x, position.y)
 
         // Extract-first: if the page holds NEW action items, capture them as a to-do
-        // (confirmation sheet) and DO NOT write a /Q answer onto the canvas. Only a
-        // genuine question (no new tasks) produces a rendered answer.
-        if (offerExtraction(pageText = userPrompt)) {
-            _aiState.value = AiUiState.Idle
-            return
+        // (confirmation sheet) and DO NOT write a /Q answer. If it holds ONLY items that
+        // already exist, tell the user with a self-clearing toast (also no answer). Only a
+        // genuine question (no actionable items) falls through to a rendered answer.
+        when (offerExtraction(pageText = userPrompt)) {
+            ExtractionOffer.NEW_ITEMS -> {
+                _aiState.value = AiUiState.Idle
+                return
+            }
+            ExtractionOffer.ALL_EXISTING -> {
+                showTransientMessage(ALREADY_EXISTS_MESSAGE)
+                _aiState.value = AiUiState.Idle
+                return
+            }
+            ExtractionOffer.NONE -> Unit // fall through to a normal answer
         }
 
         // 15s timeout: null result is treated like a connection failure.
@@ -552,36 +610,120 @@ class CanvasViewModel(
         when {
             result == null -> _aiState.value = AiUiState.Error(CONNECTION_ERROR, position.x, position.y)
             result.isSuccess -> {
+                val answer = result.getOrThrow().text.stripMarkdown()
                 val noteId = UUID.randomUUID().toString()
-                _aiNotes.update {
-                    it + AiInkNote(
-                        id = noteId,
-                        text = result.getOrThrow().text.stripMarkdown(),
-                        x = position.x,
-                        y = position.y,
-                        widthPx = defaultNoteWidth(),
-                    )
+                // Constrain to the page width so a long (e.g. two-part) answer never runs off-screen.
+                val width = defaultNoteWidth().coerceAtMost(maxWidthAt(position.x))
+                if (isUnclearResponse(answer)) {
+                    // Unclear-error response: rendered with a "Did you mean …?" Yes/No clarifier
+                    // (when the model offered a guess) falling back to Edit-prompt / Okay. The
+                    // message line alone goes in the note body; the guess drives the Yes action.
+                    // Transient (not persisted) and never auto-selected — it's an error affordance.
+                    _aiNotes.update {
+                        it + AiInkNote(
+                            id = noteId,
+                            text = unclearMessage(answer),
+                            x = position.x,
+                            y = position.y,
+                            widthPx = width,
+                            isError = true,
+                            sourceQuestion = effectiveQuestion,
+                            suggestedQuestion = suggestedQuestion(answer),
+                        )
+                    }
+                } else {
+                    _aiNotes.update {
+                        it + AiInkNote(
+                            id = noteId,
+                            text = answer,
+                            x = position.x,
+                            y = position.y,
+                            widthPx = width,
+                        )
+                    }
+                    _createdNoteEvents.tryEmit(noteId)
                 }
-                _createdNoteEvents.tryEmit(noteId)
                 _aiState.value = AiUiState.Idle
             }
             else -> _aiState.value = AiUiState.Error(CONNECTION_ERROR, position.x, position.y)
         }
     }
 
+    /** Shows a short notification over the canvas, auto-clearing after [TRANSIENT_MESSAGE_MILLIS]. */
+    private fun showTransientMessage(message: String) {
+        transientMessageJob?.cancel()
+        _transientMessage.value = message
+        transientMessageJob = viewModelScope.launch {
+            delay(TRANSIENT_MESSAGE_MILLIS)
+            _transientMessage.value = null
+        }
+    }
+
     /**
-     * If the page contains NEW action items (ones not already on the to-do list),
-     * raises the confirmation sheet and returns true so the caller suppresses the
-     * `/Q` answer. Returns false when there is no extractor/repo, no tasks, or all
-     * detected tasks already exist (self-assessed and ignored).
-     *
-     * Independent of `/Q` itself, so a future background save-job can reuse it.
+     * Re-submits an edited prompt from an error note's "Edit prompt" box. Drops the error note,
+     * resets the de-dupe guard so the same text can be re-sent, and runs the query again at the
+     * error note's position.
      */
-    private suspend fun offerExtraction(pageText: String): Boolean {
-        val extractor = taskExtractor ?: return false
-        val todoRepository = todoRepository ?: return false
-        val pageId = pageId ?: return false
-        if (pageText.isBlank()) return false
+    fun resendQuery(noteId: String, editedQuestion: String) {
+        val errorNote = _aiNotes.value.firstOrNull { it.id == noteId }
+        val position = errorNote?.let { NotePosition(it.x, it.y) }
+            ?: NotePosition(AI_NOTE_MARGIN_PX, RESEND_FALLBACK_Y)
+        removeAiNote(noteId)
+        val text = editedQuestion.trim()
+        if (text.isBlank()) return
+        lastHandledPrompt = null // an explicit re-send may repeat the previous text
+        viewModelScope.launch { submitQuery(text, text, position) }
+    }
+
+    /** True for the one-shot "I need more information, request unclear" error response. */
+    private fun isUnclearResponse(text: String): Boolean =
+        text.contains("request unclear", ignoreCase = true) ||
+            text.trim().startsWith("I need more information", ignoreCase = true)
+
+    /** The user-facing message of an unclear response, with any "Did you mean …" line stripped out. */
+    private fun unclearMessage(text: String): String =
+        text.lineSequence()
+            .filterNot { DID_YOU_MEAN_REGEX.containsMatchIn(it) }
+            .joinToString("\n")
+            .trim()
+            .ifBlank { DEFAULT_UNCLEAR_MESSAGE }
+
+    /** The AI's single best guess at the intended question ("Did you mean: …?"), or null. */
+    private fun suggestedQuestion(text: String): String? =
+        DID_YOU_MEAN_REGEX.find(text)
+            ?.groupValues?.get(1)
+            ?.trim()?.trimEnd('?')?.trim()
+            ?.ifBlank { null }
+
+    /** Outcome of [offerExtraction], so [submitQuery] can suppress the answer and/or notify. */
+    private enum class ExtractionOffer {
+        /** New action items found — confirmation sheet raised; suppress the answer. */
+        NEW_ITEMS,
+
+        /** Items found, but all already exist — notify the user; suppress the answer. */
+        ALL_EXISTING,
+
+        /** Nothing actionable — fall through to a normal answer. */
+        NONE,
+    }
+
+    /**
+     * Detects action items on the page and routes them:
+     *  - any NEW item → raises the confirmation sheet ([ExtractionOffer.NEW_ITEMS]);
+     *  - items found but all already captured → [ExtractionOffer.ALL_EXISTING] (the caller shows
+     *    a self-clearing "already exists" notification);
+     *  - nothing actionable / no extractor → [ExtractionOffer.NONE].
+     *
+     * De-dupes against both the to-do list AND items already suggested for this page (so the
+     * manual `/Q` path and the background auto-extraction never propose the same item twice —
+     * in either order). New items are also recorded as handled suggestions for this page, so a
+     * later background run de-dupes them. Independent of `/Q`, so a save-job can reuse it.
+     */
+    private suspend fun offerExtraction(pageText: String): ExtractionOffer {
+        val extractor = taskExtractor ?: return ExtractionOffer.NONE
+        val todoRepository = todoRepository ?: return ExtractionOffer.NONE
+        val pageId = pageId ?: return ExtractionOffer.NONE
+        if (pageText.isBlank()) return ExtractionOffer.NONE
 
         // Anchor relative dates ("this Monday", "tomorrow") to the device's current date and
         // timezone so the model resolves them correctly instead of guessing.
@@ -589,11 +731,17 @@ class CanvasViewModel(
         val referenceDate =
             "${today.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.ENGLISH)} $today"
         val extracted = extractor.extract(pageText, referenceDate).getOrNull().orEmpty()
-        if (extracted.isEmpty()) return false
+        if (extracted.isEmpty()) return ExtractionOffer.NONE
 
-        val existing = runCatching { todoRepository.existingContents() }.getOrDefault(emptySet())
+        // Already on the to-do list, or already suggested (incl. background) for this page.
+        val existing = buildSet {
+            addAll(runCatching { todoRepository.existingContents() }.getOrDefault(emptySet()))
+            suggestionRepository?.let {
+                addAll(runCatching { it.existingContents(pageId) }.getOrDefault(emptySet()))
+            }
+        }
         val newTasks = extracted.filter { it.content.trim().lowercase() !in existing }
-        if (newTasks.isEmpty()) return false // all already captured — ignore
+        if (newTasks.isEmpty()) return ExtractionOffer.ALL_EXISTING // found, but all already captured
 
         val repoTasks = newTasks.map { task ->
             TodoRepository.ExtractedTask(
@@ -609,7 +757,20 @@ class CanvasViewModel(
             tasks = repoTasks.map { it.content },
             sourcePageTitle = title,
         )
-        return true
+        // Record the proposed items as handled suggestions so the background auto-extraction
+        // (which de-dupes against this page's suggestions) can't re-propose the same ones.
+        suggestionRepository?.recordHandled(
+            newTasks.map { task ->
+                PendingSuggestion(
+                    pageId = pageId,
+                    type = SuggestionType.TODO,
+                    content = task.content,
+                    x = 0f,
+                    y = 0f,
+                )
+            },
+        )
+        return ExtractionOffer.NEW_ITEMS
     }
 
     private var pendingRepoTasks: List<TodoRepository.ExtractedTask> = emptyList()
@@ -646,45 +807,69 @@ class CanvasViewModel(
 
     // --- Background auto-extraction suggestions (FA-2) ---
 
-    /** "Yes" on a background suggestion: commit it (TODO item / calendar suggestion) and remove the popup. */
-    fun acceptSuggestion(id: String) {
+    /** "Yes" on a single background suggestion. */
+    fun acceptSuggestion(id: String) = acceptSuggestions(listOf(id))
+
+    /** "No" on a single background suggestion. */
+    fun rejectSuggestion(id: String) = dismissSuggestions(listOf(id))
+
+    /**
+     * The collated confirmation sheet's "Add selected" action: commit the chosen suggestions
+     * and dismiss the rest in one go. Both outcomes mark each row *handled* (kept), so the same
+     * item is never re-suggested for this page on a later save.
+     */
+    fun resolveSuggestions(acceptIds: List<String>, dismissIds: List<String>) {
+        acceptSuggestions(acceptIds)
+        dismissSuggestions(dismissIds)
+    }
+
+    /** Commit each suggestion (TODO item / calendar suggestion) and mark its row handled. */
+    fun acceptSuggestions(ids: List<String>) {
+        if (ids.isEmpty()) return
         val suggestionRepo = suggestionRepository ?: return
         val pageId = pageId ?: return
         viewModelScope.launch {
-            val suggestion = suggestionRepo.get(id) ?: return@launch
             val title = repository?.getPage(pageId)?.displayTitle() ?: "Note"
-            when (suggestion.type) {
-                SuggestionType.TODO -> todoRepository?.addExtracted(
-                    listOf(
-                        TodoRepository.ExtractedTask(
-                            content = suggestion.content,
-                            priority = TodoPriority.entries.getOrElse(suggestion.priority) { TodoPriority.NONE },
-                            dueAt = suggestion.dueAtMillis,
-                        ),
-                    ),
-                    sourcePageId = pageId,
-                    sourcePageTitle = title,
-                )
-                SuggestionType.EVENT -> calendarRepository?.addSuggestion(
-                    CalendarEvent(
-                        title = suggestion.content,
-                        startTime = suggestion.startMillis ?: 0L,
-                        endTime = suggestion.endMillis ?: ((suggestion.startMillis ?: 0L) + 3_600_000L),
-                        location = suggestion.location,
-                        sourceNoteId = pageId,
-                        isAiSuggested = true,
-                    ),
-                    sourcePageId = pageId,
-                )
+            ids.forEach { id ->
+                val suggestion = suggestionRepo.get(id) ?: return@forEach
+                commitSuggestion(suggestion, pageId, title)
+                suggestionRepo.markHandled(id)
             }
-            suggestionRepo.remove(id)
         }
     }
 
-    /** "No": keep the row dismissed so the same item isn't re-suggested on the next save. */
-    fun rejectSuggestion(id: String) {
+    /** Dismiss each suggestion: keep the row so the same item isn't re-suggested on the next save. */
+    fun dismissSuggestions(ids: List<String>) {
+        if (ids.isEmpty()) return
         val suggestionRepo = suggestionRepository ?: return
-        viewModelScope.launch { suggestionRepo.dismiss(id) }
+        viewModelScope.launch { ids.forEach { suggestionRepo.dismiss(it) } }
+    }
+
+    private suspend fun commitSuggestion(suggestion: PendingSuggestion, pageId: String, title: String) {
+        when (suggestion.type) {
+            SuggestionType.TODO -> todoRepository?.addExtracted(
+                listOf(
+                    TodoRepository.ExtractedTask(
+                        content = suggestion.content,
+                        priority = TodoPriority.entries.getOrElse(suggestion.priority) { TodoPriority.NONE },
+                        dueAt = suggestion.dueAtMillis,
+                    ),
+                ),
+                sourcePageId = pageId,
+                sourcePageTitle = title,
+            )
+            SuggestionType.EVENT -> calendarRepository?.addSuggestion(
+                CalendarEvent(
+                    title = suggestion.content,
+                    startTime = suggestion.startMillis ?: 0L,
+                    endTime = suggestion.endMillis ?: ((suggestion.startMillis ?: 0L) + 3_600_000L),
+                    location = suggestion.location,
+                    sourceNoteId = pageId,
+                    isAiSuggested = true,
+                ),
+                sourcePageId = pageId,
+            )
+        }
     }
 
     companion object {
@@ -698,11 +883,29 @@ class CanvasViewModel(
         const val REQUEST_TIMEOUT_MILLIS: Long = 15_000L
         const val MAX_HISTORY: Int = 50
 
+        /** How long a self-clearing on-canvas notification stays up (within the 1–2s spec). */
+        const val TRANSIENT_MESSAGE_MILLIS: Long = 1_500L
+
+        /** Shown briefly when a re-triggered selection only holds already-captured items. */
+        const val ALREADY_EXISTS_MESSAGE: String = "Already on your to-do list"
+
         /** Shown as red handwriting on the canvas for failures and timeouts. */
         const val CONNECTION_ERROR: String = "Could not connect — try again"
 
+        /** Fallback body for an unclear response that carried no message line of its own. */
+        private const val DEFAULT_UNCLEAR_MESSAGE: String = "I need more information, request unclear"
+
+        /**
+         * Captures the model's "Did you mean: …" clarification guess (one per unclear reply).
+         * Tolerates a leading bullet/dash that stripMarkdown may have introduced.
+         */
+        private val DID_YOU_MEAN_REGEX = Regex("(?im)^[\\s•*-]*did you mean[:\\-]?\\s*(.+)$")
+
         /** Margin from the page edge for a full-line AI response box. */
         const val AI_NOTE_MARGIN_PX: Float = 32f
+
+        /** Fallback y for a re-sent query when the error note's position is unknown. */
+        private const val RESEND_FALLBACK_Y: Float = 120f
 
         /** Outlives the ViewModel for the onCleared() persistence flush. */
         private val flushScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -736,10 +939,21 @@ class CanvasViewModel(
             answers. Respond in plain text only: no markdown, no asterisks, no
             headings.
 
+            Be strict and honest about clarity. Answer directly ONLY when you are
+            confident you understand the request. Do NOT guess at an answer when the
+            request is ambiguous, garbled, or missing detail, and do NOT hedge by
+            answering one interpretation while noting it might be wrong.
+
             This is a one-shot answer, not a conversation: never ask the user a
-            follow-up question and never offer to continue. If the request is
-            unclear or you need more detail to answer, reply with exactly this
-            sentence and nothing else: "I need more information, request unclear".
+            follow-up question and never offer to continue. When the request is
+            unclear or you need more detail, reply with EXACTLY two lines and nothing
+            else — first the literal sentence:
+            I need more information, request unclear
+            then, on the next line, your single most likely interpretation as a
+            complete, self-contained question:
+            Did you mean: <your best guess at the full question>?
+            If you genuinely cannot even guess what was meant, output only the first
+            line and omit the "Did you mean" line.
 
             ${AssistantCapabilities.systemPromptSection()}
         """.trimIndent()

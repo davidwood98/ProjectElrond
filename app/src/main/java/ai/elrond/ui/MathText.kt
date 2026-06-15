@@ -1,7 +1,8 @@
 package ai.elrond.ui
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.dp
  * scoped to the POC's "basic arithmetic, fractions, simple algebra, simple
  * differentiation & integration" requirement.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MathText(
     text: String,
@@ -35,10 +37,11 @@ fun MathText(
     fontSize: TextUnit,
     modifier: Modifier = Modifier,
 ) {
-    // Render line by line; within a line lay tokens out in a Row so fractions stack.
+    // Render line by line; within a line lay tokens out in a FlowRow so fractions stack AND a
+    // long expression wraps to the next line instead of running off the page edge.
     Column(modifier = modifier) {
         text.split("\n").forEach { line ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            FlowRow(modifier = Modifier.fillMaxWidth()) {
                 line.trim().split(Regex("\\s+")).forEach { token ->
                     if (token.isEmpty()) return@forEach
                     if (isFraction(token)) {

@@ -279,6 +279,190 @@ New/updated tests: `GestureTriggerDetectorTest` (lasso/contains/enclosure), `Pal
 candidate-recovery cases in `CanvasViewModelAiTest`, and trigger-command/mode + stylus round-trips in
 `SettingsRepositoryTest`.
 
+## FA-5 — bug-fix batch 2 (2026-06-13)
+
+Second post-POC bug-fix pass against a user-reported list. **198 JVM/Robolectric tests pass**
+(app 174 + aibackend 24, 0 failures; was 192). **No schema change — DB stays v6.** The logic-heavy
+fixes are JVM/Robolectric-tested; the Compose/gesture pieces (first-stroke palm handling, the error
+note UI, the collated sheet, calendar dots) are device/manual-verified like the other Compose flows.
+
+- **First-stroke loss on finger interrupt** — `InkCanvas`'s palm rejection returned `false` for a
+  finger pointer, which makes the framework withdraw the whole gesture and cancel an in-progress (or
+  about-to-start) stylus stroke. It now **consumes** finger pointers (returns true) and ignores them,
+  keeping the gesture alive so the stylus still draws; `ACTION_MOVE`/`ACTION_UP` only ever act on the
+  tracked stylus pointer. The same fix is expected to cover the "swipe away & return" case (a lingering
+  finger from the foreground gesture) — **still needs on-device confirmation** (not reproducible from WSL).
+- **Auto-extraction re-firing after accept** — accepting a background suggestion used to `remove()` its
+  `pending_suggestions` row, leaving only a fragile to-do-text match to block re-suggestion. Accept now
+  **marks the row handled (kept)** via `SuggestionRepository.markHandled` (reuses the `dismissed`
+  column), so the type-namespaced per-page de-dup (`existingTypedContents`, which spans handled rows)
+  permanently prevents re-suggesting an accepted *or* dismissed item. Workflow now holds: write a
+  to-do, accept, leave, re-enter, write more → the accepted item never re-pops.
+- **"Request unclear" error response** — the one-shot "I need more information, request unclear" reply
+  is detected in `CanvasViewModel.submitQuery` and rendered as a distinct **error note** (`AiInkNote`
+  gains `isError` + `sourceQuestion`, both in-memory only — error notes are **never persisted**, so no
+  migration; autosave/`onCleared` filter them out). New `AiErrorNoteView` shows **Edit prompt** +
+  **Okay** (Okay == the ✕ dismiss on a normal note); Edit prompt reveals an editable, pre-filled copy
+  of the recognized question with a **Re-send** button also bound to the keyboard Send/Enter action
+  (`CanvasViewModel.resendQuery`, which resets the de-dupe guard). Independent of the
+  `aiNoteSelectedOnCreate` setting, since it's an error affordance, not a normal answer.
+- **AI box constrained to page width** — new-note width, drag (`moveAiNote`) and resize
+  (`resizeAiNote`) are clamped so the box can't run off the right/left edge (`CanvasViewModel.maxWidthAt`,
+  gated on a known canvas width so unit tests with no reported size are unaffected); `MathText` now lays
+  tokens out in a `FlowRow`, so a long/two-part expression wraps instead of overflowing horizontally.
+- **Calendar indicators** — the ✨ (created) / 📝 (edited) emoji on day tiles and in the legend are
+  replaced by a muted-green dot (`0xFF66BB6A`) / dark-grey dot (`0xFF616161`) via
+  `CalendarScreen.ActivityDot`; per-day counts are kept.
+- **TODO "from [note]" link permanence** — the entity/mapper already round-trip
+  `sourcePageId`/`sourcePageTitle` correctly across a restart (now proven by the file-backed
+  `TodoSourceLinkTest`, which closes and reopens the DB). The real defect was the **dead link after the
+  source note is deleted**: the FK `SET_NULL` nulls `sourcePageId` while the title snapshot remains, so
+  `TodoPanel` rendered a non-tappable "from […]" label. It now shows the link only while `hasSourceLink`
+  is true and falls back to a plain "AI" label otherwise. Net behaviour: the link is permanent across
+  restarts and disappears only when the note is actually deleted.
+- **Collated extraction confirmation** — the per-item on-canvas `AutoExtractPopup`s are replaced by a
+  single `SuggestionExtractionSheet` (modal bottom sheet, one checkbox per detected item, "Add selected"
+  / "Dismiss"); `CanvasViewModel.resolveSuggestions(acceptIds, dismissIds)` commits the checked items and
+  dismisses the rest in one pass. **Supersedes the FA-2 on-canvas Yes/No popup** (the `x`/`y` anchor
+  fields on `PendingSuggestion`/`pending_suggestions` are now unused by the UI but retained in the data).
+
+New/updated tests: `TodoSourceLinkTest` (restart round-trip + delete-clears-link), `AutoExtractionRunnerTest`
+(+2: full accept→re-save cycle, handled-row de-dup without a matching to-do), `CanvasViewModelAiTest`
+(+2: unclear→error note carrying the recognized question, re-send drops the note and submits the edited
+text), `CanvasViewModelSuggestionTest` (accept now asserts `markHandled`, never `remove`), and
+`CalendarScreenTest` (dot legend instead of emoji).
+
+## FA-6 — bug-fix batch 3 (2026-06-14)
+
+Third post-POC bug-fix pass against a second device-test report. **203 JVM/Robolectric tests pass**
+(app 179 + aibackend 24, 0 failures; was 198). **No schema change — DB stays v6.** Logic is JVM/Robolectric
+-tested; the Compose/canvas pieces (first-stroke rendering, the clarify note, the transient toast) are
+device/manual-verified like the other Compose flows. `assembleDebug` + `assembleDebugAndroidTest` both build.
+
+- **First-stroke render — dry layer moved off Compose recomposition.** The dry-ink layer used to be a
+  Compose `Canvas` reading `finishedStrokes` via `collectAsStateWithLifecycle`; a bare `StateFlow` emission
+  (a finished stroke) didn't reliably wake a recomposition, so the *first* stroke of a freshly opened page
+  stayed invisible until some unrelated recompose (e.g. hovering/pressing a toolbar button) forced a redraw.
+  `InkCanvas` now renders the dry layer in a custom `DryStrokesView` (a plain `View` inside the same
+  `FrameLayout`, below the wet `InProgressStrokesView`) that collects `finishedStrokes` directly — via a
+  `repeatOnLifecycle(STARTED)` job started on attach / cancelled on detach — and calls `View.invalidate()`
+  on each emission, scheduling a draw through the Choreographer regardless of Compose. The Compose `Canvas`
+  dry layer is gone. (Pairs with the FA-5 finger-consume fix; **needs on-device confirmation** — not
+  reproducible from WSL.)
+- **"Request unclear" → confirm-the-guess workflow.** The system prompt is stricter: answer only when
+  confident, never guess or hedge in the answer. When unclear it now returns EXACTLY two lines — the literal
+  `I need more information, request unclear` then `Did you mean: <best-guess full question>?` (or just the
+  first line if it truly can't guess). `CanvasViewModel.submitQuery` parses the guess (`DID_YOU_MEAN_REGEX`),
+  strips it from the body, and stores it as `AiInkNote.suggestedQuestion` (new in-memory-only field).
+  `AiErrorNoteView` shows a **Did you mean: …?** clarifier with **Yes** (re-sends the guess via `resendQuery`
+  → normal answer) / **No** (falls back to the existing **Edit prompt** / **Okay** flow). No initial
+  best-guess answer is ever rendered. Supersedes the FA-5 unclear-note behaviour (which rendered the model's
+  raw reply and only offered Edit/Okay).
+- **Circle (lasso) gesture re-triggers; dup items get a toast.** A lasso is a deliberate, explicit request,
+  so `handleGestureTrigger` now calls `submitQuery(..., bypassDedup = true)` — re-circling the same selection
+  always produces a fresh answer (the `lastHandledPrompt` guard is for the debounced *command* detector, not
+  explicit gestures). When a triggered selection's only actionable content is items that **already exist**,
+  `offerExtraction` returns the new `ExtractionOffer.ALL_EXISTING` and the VM shows a self-clearing
+  notification (`transientMessage` StateFlow, auto-cleared after `TRANSIENT_MESSAGE_MILLIS` = 1.5s; rendered
+  as a bottom-center pill in `NoteCanvasScreen`) instead of answering. (`offerExtraction` now returns a
+  3-state enum instead of a Boolean: `NEW_ITEMS` / `ALL_EXISTING` / `NONE`.)
+- **Manual `/Q` ↔ background auto-extraction de-dup.** Doing a manual `/Q` extraction before the background
+  run fired used to propose the same to-do twice. `offerExtraction` now (a) de-dups proposed tasks against
+  *both* the to-do list AND this page's existing suggestions (`SuggestionRepository.existingContents`), and
+  (b) records the items it proposes as **handled** suggestions via the new
+  `SuggestionRepository.recordHandled` (inserts `pending_suggestions` rows with `dismissed = true` — they
+  de-dup future runs but never surface in the popup). `AutoExtractionRunner` already de-dups against this
+  page's typed suggestion contents, so neither path can re-propose the other's items, in either order.
+- **16 KB page-size warning (`libdigitalink.so`).** _(SUPERSEDED by FA-7 — this "accepted risk" was based
+  on stale data; an aligned ML Kit build (`digital-ink-recognition` 19.0.0, Aug 2025) shipped and is now
+  adopted, so `libdigitalink.so` is 16 KB-aligned. The conclusion below is kept only as the historical record.)_
+  Added `packaging { jniLibs { useLegacyPackaging = false } }`
+  so every native lib ships uncompressed + page-aligned in the APK. Verified in the built APK: `libink.so`,
+  `libgraphics-core.so`, `libandroidx.graphics.path.so`, `libdatastore_shared_counter.so` all have 16 KB
+  (`0x4000`) LOAD-segment alignment. Only **ML Kit's prebuilt `libdigitalink.so` stays at 4 KB (`0x1000`)** —
+  its internal segment alignment is baked in at Google's build time and cannot be realigned app-side; this is
+  an **unresolved upstream issue** (googlesamples/mlkit#938, not fixed even in the latest release, native lib
+  unchanged since 2023). **Accepted release risk** (same posture as the Anthropic key): the Studio warning
+  persists for that one lib until Google rebuilds it, but it is **not** a development blocker — the app
+  installs and runs. Before release, revisit when an aligned ML Kit build ships, or bundle an alternative
+  recognizer.
+
+Test/infra notes:
+- `AiInkNote` gains `suggestedQuestion` (in-memory only, alongside `isError`/`sourceQuestion`; mapper untouched
+  → no migration). `offerExtraction` returns `ExtractionOffer`; `submitQuery` takes `bypassDedup`.
+- **`./gradlew test` is now fully green.** `ElrondMigrationTest` is `@Before`-guarded with `Assume.assumeTrue`
+  to **skip in the release unit-test variant** (the exported Room schemas are bundled into the *debug* variant
+  assets only, so `testReleaseUnitTest` can't read them — it was failing with `FileNotFoundException`). Full
+  migration validation still runs in debug (`:app:testDebugUnitTest`) and on-device; schemas stay debug-only
+  (never shipped). Release variant: 179 tests, 2 skipped.
+- New/updated tests: `CanvasViewModelAiTest` (+2: Did-you-mean clarification carries the guess; re-lassoing
+  the same selection fires twice), `CanvasViewModelExtractionTest` (already-existing → notification not answer;
+  manual extraction records handled suggestions; a task already suggested isn't re-offered),
+  `SuggestionRepositoryTest` (+1: `recordHandled` de-dups without ever showing).
+
+## FA-7 — device-feedback round (2026-06-15)
+
+Second on-device pass over the FA-6 batch. Device results: **issues 1 and 3 fixed; issue 2 NOT
+fixed; the issue-2 attempt (androidx.ink upgrade) introduced a stroke-persistence REGRESSION.**
+203 JVM/Robolectric tests pass + `assembleDebug`/`assembleDebugAndroidTest` build — but those tests
+do **not** cover the regression (see below). No schema change — DB stays v6. **Nothing committed.**
+
+- **16 KB page size — FIXED (device-confirmed; supersedes the FA-6 "accepted risk").** The FA-6
+  conclusion that `libdigitalink.so` was unfixable was based on stale 2023 data. ML Kit shipped
+  **`digital-ink-recognition` 19.0.0 (Aug 2025)** with `libdigitalink.so` rebuilt for 16 KB. Bumped
+  `mlkitDigitalInk` 18.1.0 → 19.0.0; 19.0.0 also **repackaged the API** from
+  `com.google.mlkit.vision.digitalink.*` to `com.google.mlkit.vision.digitalink.recognition.*`
+  (pure repackage, same class names) — `HandwritingRecognizer.kt` imports updated accordingly.
+  Verified in the built APK (`readelf -l`): every native lib, incl. `libdigitalink.so`, has `0x4000`
+  (16 KB) alignment. `useLegacyPackaging = false` retained. **This part is good and should be kept.**
+- **Unclear pop-up always on-screen (issue 3) — FIXED (device-confirmed).** A `/Q` near a page edge
+  placed the clarify/error card (and its Yes/No / Edit / Okay controls) partly off-screen with no way
+  to move it. `AiErrorNoteView` no longer self-positions at the trigger coordinates; `NoteCanvasScreen`
+  renders the most recent error note as a **top-most, centred overlay** (`Alignment.Center`, max 480 dp).
+  The resulting answer (on Yes / Re-send) still lands **inline** at the trigger. **Keep.**
+- **First S Pen interaction lost (issue 2) — STILL NOT FIXED.** The FA-6 dry-layer `invalidate()` fix
+  helped (always-broken → intermittent) but didn't resolve it. As an attempted fix we upgraded
+  **`androidx.ink 1.0.0-alpha04` → `1.0.0` stable** (the residual — the *first* stylus interaction on a
+  freshly shown screen dropped entirely, even on buttons, revealed by a second interaction — points at
+  the front-buffer / first-frame / input init that ink owns). **On device the upgrade did NOT fix it.**
+- **⚠️ REGRESSION introduced by the ink 1.0.0 upgrade — strokes don't survive a note reopen.** After
+  closing and reopening a note, saved strokes render as just **a single dot at the first-contact point**
+  (the rest of each stroke is lost). Root-cause lead (next session, start here):
+  - The only persistence change was in `StrokeSerialization.toStroke`: `MutableStrokeInputBatch.addOrIgnore(...)`
+    → `add(...)` wrapped in per-point `runCatching`. **Parameter order is confirmed identical** between
+    alpha04 `addOrIgnore` and 1.0.0 `add` (both `(InputToolType, x, y, elapsedTimeMillis, pressure,
+    tiltRadians, orientationRadians)`) — so it is NOT a mis-mapping. The difference is behavioural:
+    alpha04 `addOrIgnore` *skips* an invalid point and continues; 1.0.0 `add` *throws*. The
+    per-point `runCatching` was meant to replicate skip-invalid but evidently does not — strokes collapse
+    to one point on reload, so almost every point after the first is being rejected by `add` and swallowed.
+  - **Why tests didn't catch it:** `toStroke`/`toEntity` touch ink natives (`MutableStrokeInputBatch`,
+    `Stroke`), which don't load under JVM/Robolectric (`isReturnDefaultValues = true`), so there is **no
+    JVM test of the real ink round-trip** — it's device-only. `SerializedStrokeInputTest` only covers the
+    pure-data JSON shape, not the ink reconstruction.
+  - **Likely true cause to investigate:** 1.0.0 `add` probably enforces stricter validation than alpha04
+    (e.g. strictly-increasing `elapsedTimeMillis`, or first-input must be t=0, or min point separation),
+    rejecting our stored points after the first. Inspect the 1.0.0 `add` KDoc/validation; consider
+    rebuilding via explicit `StrokeInput` objects + the `add(Collection<StrokeInput>)` overload, or
+    normalising timestamps on load.
+
+**Recommended next-session plan (issue 2 + regression):**
+1. **Most likely best: REVERT the androidx.ink upgrade to `1.0.0-alpha04`** — it did not fix issue 2 and
+   it caused the stroke-loss regression. Reverting restores the known-good `addOrIgnore` persistence.
+   Files to revert: `gradle/libs.versions.toml` (`ink`), `StrokeSerialization.kt` (`add`+runCatching →
+   `addOrIgnore`; `StockBrushes.x()` → `xLatest`), `CanvasViewModel.penBrush` (`pressurePen()` →
+   `pressurePenLatest`). **Issues 1 (ML Kit) and 3 (centred pop-up) are independent of the ink version —
+   the revert does not affect them, and all libs incl. `libink.so` were already 16 KB-aligned on alpha04.**
+2. Then tackle issue 2 fresh via an **in-place mitigation** (the upgrade was the wrong lever): warm the
+   `InProgressStrokesView` front-buffer surface and/or request focus on screen entry so the first stylus
+   event/frame on a freshly-shown screen isn't dropped; investigate whether the nav-transition or surface
+   creation is eating the first input. The "even buttons don't register the first interaction" clue points
+   to a window/surface-level first-event drop, not pure rendering.
+   (Alternative to step 1: keep ink 1.0.0 but FIX the serialization regression first, then add the issue-2
+   mitigation — only if there's a concrete reason to want 1.0.0.)
+
+`androidx.ink` is currently left at **1.0.0** with the regression present (uncommitted); ML Kit
+digital-ink is at **19.0.0** (keep).
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):
@@ -329,6 +513,7 @@ OAuth client ids in `CalendarProviderFactory` are placeholders. For production, 
 - AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v5** — `page_edit_events` was added in `MIGRATION_4_5` for per-day calendar created-vs-edited tracking.
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth client ids in `CalendarProviderFactory` are placeholders — for production, do not embed them; use a server-side token exchange (same posture as the Anthropic key).
+- **16 KB page size — resolved (FA-7).** All native libs, incl. ML Kit's `libdigitalink.so`, are 16 KB (`0x4000`) LOAD-segment aligned (verified in the built APK), via `digital-ink-recognition` 19.0.0 + `useLegacyPackaging = false`. No longer a release blocker. (The earlier FA-6 "accepted risk" framing was based on stale data — an aligned ML Kit build shipped Aug 2025.)
 
 ## Environment Notes (build)
 

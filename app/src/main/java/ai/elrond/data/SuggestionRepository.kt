@@ -37,10 +37,28 @@ class SuggestionRepository(
         dao.insertAll(suggestions.map { it.toEntity(now) })
     }
 
+    /**
+     * Records suggestions as already-handled (dismissed) for their page: they de-dup future
+     * background runs but NEVER appear in the pending queue. The manual `/Q` extraction path
+     * uses this to claim the items it proposed, so the background auto-extraction can't
+     * re-propose the same ones (and vice-versa, since both de-dup against these rows).
+     */
+    suspend fun recordHandled(suggestions: List<PendingSuggestion>) {
+        if (suggestions.isEmpty()) return
+        val now = clock()
+        dao.insertAll(suggestions.map { it.toEntity(now).copy(dismissed = true) })
+    }
+
     suspend fun get(id: String): PendingSuggestion? = dao.getById(id)?.toDomain()
 
-    /** Accepted/committed — remove the suggestion. */
+    /** Hard-delete a suggestion (e.g. page cleanup). Prefer [markHandled] for accept. */
     suspend fun remove(id: String) = dao.deleteById(id)
+
+    /**
+     * Accepted/committed — clear it from the pending queue but KEEP the row so the same item
+     * isn't re-suggested for this page on a later save (the de-dup set includes handled rows).
+     */
+    suspend fun markHandled(id: String) = dao.markDismissed(id)
 
     /** Rejected — keep the row (dismissed) so the same item isn't re-suggested next save. */
     suspend fun dismiss(id: String) = dao.markDismissed(id)

@@ -214,6 +214,82 @@ class CanvasViewModelAiTest {
     }
 
     @Test
+    fun `an unclear response renders as an error note carrying the recognized question`() = runTest(dispatcher) {
+        val viewModel = viewModel(
+            FakeRecognizer("what /Q"),
+            FakeProvider("I need more information, request unclear"),
+        )
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+
+        val note = viewModel.aiNotes.value.single()
+        assertTrue("unclear answers must be flagged as error notes", note.isError)
+        assertEquals("what", note.sourceQuestion)
+    }
+
+    @Test
+    fun `an unclear response with a guess offers a Did-you-mean clarification`() = runTest(dispatcher) {
+        val viewModel = viewModel(
+            FakeRecognizer("how old mn /Q"),
+            FakeProvider("I need more information, request unclear\nDid you mean: how old is the moon?"),
+        )
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+
+        val note = viewModel.aiNotes.value.single()
+        assertTrue("unclear answers are error notes", note.isError)
+        // The "Did you mean" line drives the Yes/No clarifier and is stripped from the body.
+        assertEquals("how old is the moon", note.suggestedQuestion)
+        assertEquals("I need more information, request unclear", note.text)
+    }
+
+    @Test
+    fun `re-lassoing the same selection triggers a fresh answer`() = runTest(dispatcher) {
+        val contentStroke = mockk<Stroke>()
+        val lassoStroke = mockk<Stroke>()
+        val polygon = listOf(
+            GestureTriggerDetector.Point(0f, 0f),
+            GestureTriggerDetector.Point(100f, 0f),
+            GestureTriggerDetector.Point(100f, 100f),
+            GestureTriggerDetector.Point(0f, 100f),
+        )
+        val provider = FakeProvider("Paris")
+        val viewModel = CanvasViewModel(
+            recognizer = FakeRecognizer { "what is the capital of France" },
+            aiProvider = provider,
+            lineSplitter = singleLine,
+            notePlacer = fixedPlacement,
+            lassoOf = { stroke -> polygon.takeIf { stroke === lassoStroke } },
+            centroidOf = { GestureTriggerDetector.Point(50f, 50f) }, // inside the polygon
+            triggerModeFlow = kotlinx.coroutines.flow.flowOf(TriggerMode.GESTURE),
+        )
+
+        viewModel.onStrokesFinished(listOf(contentStroke, lassoStroke))
+        advanceUntilIdle()
+        // The lasso was consumed; re-draw it over the same content to re-select.
+        viewModel.onStrokesFinished(listOf(lassoStroke))
+        advanceUntilIdle()
+
+        // A deliberate gesture bypasses the unchanged-content de-dupe and fires both times.
+        assertEquals(2, provider.prompts.size)
+    }
+
+    @Test
+    fun `resending an edited prompt drops the error note and submits the new text`() = runTest(dispatcher) {
+        val provider = FakeProvider("I need more information, request unclear")
+        val viewModel = viewModel(FakeRecognizer("what /Q"), provider)
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+        val errorId = viewModel.aiNotes.value.single().id
+
+        viewModel.resendQuery(errorId, "what is the capital of France")
+        advanceUntilIdle()
+
+        assertTrue("the original error note is dismissed", viewModel.aiNotes.value.none { it.id == errorId })
+        assertTrue("the edited prompt is sent", provider.prompts.any { it.contains("capital of France") })
+    }
+
+    @Test
     fun `bare trigger uses line above as question and rest as context`() = runTest(dispatcher) {
         val notesStroke = mockk<Stroke>()
         val questionStroke = mockk<Stroke>()

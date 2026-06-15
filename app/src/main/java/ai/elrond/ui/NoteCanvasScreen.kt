@@ -13,7 +13,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -28,7 +27,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
@@ -58,13 +56,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -93,7 +88,7 @@ fun NoteCanvasScreen(
     var showTodoPanel by remember { mutableStateOf(false) }
     val pendingSuggestions by viewModel.pendingSuggestions.collectAsStateWithLifecycle()
     val hasNewExtractedItems by settingsViewModel.hasNewExtractedItems.collectAsStateWithLifecycle()
-    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    val transientMessage by viewModel.transientMessage.collectAsStateWithLifecycle()
 
     // AI-box selection lives in the UI (not persisted). When the "edit mode on creation"
     // setting is on (default) a freshly created note starts selected; loaded notes always
@@ -111,10 +106,7 @@ fun NoteCanvasScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .onSizeChanged {
-                canvasSize = it
-                viewModel.setCanvasSize(it.width.toFloat())
-            },
+            .onSizeChanged { viewModel.setCanvasSize(it.width.toFloat()) },
     ) {
         InkCanvas(
             viewModel = viewModel,
@@ -133,17 +125,20 @@ fun NoteCanvasScreen(
             )
         }
 
-        // AI responses as handwriting-style ink, above the canvas layers.
+        // AI answers as handwriting-style ink, inline at their trigger position. Error/clarify
+        // notes are NOT placed here — they render as a centred pop-up below (always on-screen).
         aiNotes.forEach { note ->
-            key(note.id) {
-                AiInkNoteView(
-                    note = note,
-                    selected = selectedNoteId == note.id,
-                    onSelect = { selectedNoteId = note.id },
-                    onMove = { dx, dy -> viewModel.moveAiNote(note.id, dx, dy) },
-                    onResize = { dW, dH -> viewModel.resizeAiNote(note.id, dW, dH) },
-                    onRemove = { viewModel.removeAiNote(note.id) },
-                )
+            if (!note.isError) {
+                key(note.id) {
+                    AiInkNoteView(
+                        note = note,
+                        selected = selectedNoteId == note.id,
+                        onSelect = { selectedNoteId = note.id },
+                        onMove = { dx, dy -> viewModel.moveAiNote(note.id, dx, dy) },
+                        onResize = { dW, dH -> viewModel.resizeAiNote(note.id, dW, dH) },
+                        onRemove = { viewModel.removeAiNote(note.id) },
+                    )
+                }
             }
         }
 
@@ -159,17 +154,6 @@ fun NoteCanvasScreen(
             AiUiState.Idle -> Unit
         }
 
-        // FA-2: on-canvas Yes/No popups for background-extracted items, near the detected text.
-        pendingSuggestions.forEach { suggestion ->
-            key(suggestion.id) {
-                AutoExtractPopup(
-                    suggestion = suggestion,
-                    canvasSize = canvasSize,
-                    onYes = { viewModel.acceptSuggestion(suggestion.id) },
-                    onNo = { viewModel.rejectSuggestion(suggestion.id) },
-                )
-            }
-        }
 
         Surface(
             modifier = Modifier
@@ -214,7 +198,7 @@ fun NoteCanvasScreen(
         Surface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(12.dp),
+                .padding(48.dp), //Header bar position 
             shape = MaterialTheme.shapes.extraLarge,
             tonalElevation = 3.dp,
             shadowElevation = 4.dp,
@@ -268,6 +252,55 @@ fun NoteCanvasScreen(
                 onConfirm = viewModel::confirmExtraction,
                 onDismiss = viewModel::dismissExtraction,
             )
+        }
+
+        // FA-2 background-extracted items: one collated sheet for all of them (handle each).
+        if (pendingSuggestions.isNotEmpty()) {
+            SuggestionExtractionSheet(
+                suggestions = pendingSuggestions,
+                onResolve = viewModel::resolveSuggestions,
+            )
+        }
+
+        // Short, self-clearing notification (e.g. "Already on your to-do list"). The ViewModel
+        // owns the timeout, so the UI just shows it while present.
+        transientMessage?.let { message ->
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 48.dp),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.inverseSurface,
+                shadowElevation = 6.dp,
+            ) {
+                Text(
+                    text = message,
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                )
+            }
+        }
+
+        // Unclear-request pop-up: rendered last (top-most) and CENTRED on screen, so its
+        // Yes/No / Edit-prompt / Okay controls are always reachable even when the /Q was near a
+        // page edge. The answer it produces (on Yes / Re-send) lands inline at the trigger.
+        aiNotes.lastOrNull { it.isError }?.let { note ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                AiErrorNoteView(
+                    note = note,
+                    onResend = { edited -> viewModel.resendQuery(note.id, edited) },
+                    onOkay = { viewModel.removeAiNote(note.id) },
+                    modifier = Modifier
+                        .widthIn(max = 480.dp)
+                        .fillMaxWidth(),
+                )
+            }
         }
     }
 }
@@ -380,7 +413,7 @@ private fun AiErrorInk(message: String, x: Float, y: Float, onDismiss: () -> Uni
         text = message,
         fontFamily = HandwritingFontFamily,
         fontSize = 24.sp,
-        color = Color(0xFFC62828),
+        color = ErrorInkColor,
         modifier = Modifier
             .absoluteOffset(
                 x = with(density) { x.toDp() },
@@ -392,63 +425,74 @@ private fun AiErrorInk(message: String, x: Float, y: Float, onDismiss: () -> Uni
 }
 
 /**
- * On-canvas confirmation popup for a background-extracted item (FA-2). Anchored near the
- * detected text and clamped so it always stays fully within the visible canvas — if the
- * anchor is near an edge the popup shifts inward rather than clipping off screen.
+ * One collated confirmation sheet for all background-extracted items (FA-2). Each item has a
+ * checkbox (on by default) so the user handles every detected to-do/event in a single place:
+ * "Add selected" commits the checked items and dismisses the unchecked ones; "Dismiss" (or
+ * swiping the sheet away) dismisses them all. Either way every row is marked handled, so the
+ * same items never re-surface on a later save.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AutoExtractPopup(
-    suggestion: PendingSuggestion,
-    canvasSize: IntSize,
-    onYes: () -> Unit,
-    onNo: () -> Unit,
+private fun SuggestionExtractionSheet(
+    suggestions: List<PendingSuggestion>,
+    onResolve: (acceptIds: List<String>, dismissIds: List<String>) -> Unit,
 ) {
-    val density = LocalDensity.current
-    var popupSize by remember { mutableStateOf(IntSize.Zero) }
-    val x = if (canvasSize.width > 0 && popupSize.width > 0) {
-        suggestion.x.coerceIn(0f, (canvasSize.width - popupSize.width).toFloat().coerceAtLeast(0f))
-    } else {
-        suggestion.x
+    val checked = remember(suggestions) {
+        mutableStateListOf<Boolean>().apply { repeat(suggestions.size) { add(true) } }
     }
-    val topInsetPx = with(density) { 72.dp.toPx() }
-    val y = if (canvasSize.height > 0 && popupSize.height > 0) {
-        val maxY = (canvasSize.height - popupSize.height).toFloat().coerceAtLeast(0f)
-        // Keep the popup below the top toolbar row, but never above the bottom bound.
-        suggestion.y.coerceIn(0f, maxY).coerceAtLeast(minOf(topInsetPx, maxY))
-    } else {
-        suggestion.y
-    }
-    val label = if (suggestion.type == SuggestionType.TODO) "Add to To-Do" else "Create event"
+    val sheetState = rememberModalBottomSheetState()
+    val allIds = suggestions.map { it.id }
 
-    Surface(
-        modifier = Modifier
-            .absoluteOffset(
-                x = with(density) { x.toDp() },
-                y = with(density) { y.toDp() },
-            )
-            .onSizeChanged { popupSize = it },
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 4.dp,
-        shadowElevation = 6.dp,
-        border = BorderStroke(1.dp, AiInkColor.copy(alpha = 0.5f)),
+    ModalBottomSheet(
+        onDismissRequest = { onResolve(emptyList(), allIds) },
+        sheetState = sheetState,
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(label, style = MaterialTheme.typography.labelLarge, color = AiInkColor)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             Text(
-                text = suggestion.content,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 220.dp).padding(top = 2.dp),
+                text = "AI found these — add to your lists?",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
             )
+            suggestions.forEachIndexed { index, suggestion ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = checked.getOrElse(index) { true },
+                        onCheckedChange = { if (index < checked.size) checked[index] = it },
+                    )
+                    Column(modifier = Modifier.padding(start = 4.dp)) {
+                        Text(suggestion.content, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            text = if (suggestion.type == SuggestionType.TODO) "To-do" else "Event",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
             ) {
-                TextButton(onClick = onNo) { Text("No") }
-                FilledTonalButton(onClick = onYes) { Text("Yes") }
+                TextButton(onClick = { onResolve(emptyList(), allIds) }) { Text("Dismiss") }
+                FilledTonalButton(
+                    onClick = {
+                        val accept = suggestions.filterIndexed { i, _ -> checked.getOrElse(i) { false } }.map { it.id }
+                        val dismiss = suggestions.filterIndexed { i, _ -> !checked.getOrElse(i) { false } }.map { it.id }
+                        onResolve(accept, dismiss)
+                    },
+                    enabled = checked.any { it },
+                ) { Text("Add selected") }
             }
         }
     }

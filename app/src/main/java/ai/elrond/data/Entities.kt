@@ -181,10 +181,11 @@ data class PageEditEventEntity(
 )
 
 /**
- * A background-extracted TODO/calendar item awaiting the user's on-canvas Yes/No
- * decision (FA-2 confirmation flow). On "Yes" it graduates to `todo_items` /
- * `calendar_events`; on "No" it's marked [dismissed] (kept so the same item isn't
- * re-suggested on the next save). [x]/[y] anchor the popup near the detected text.
+ * A background-extracted TODO/calendar item awaiting the user's confirmation
+ * (FA-2 confirmation flow). On "Yes" it graduates to `todo_items` / `calendar_events`;
+ * either decision marks the row [dismissed] (i.e. handled) and KEEPS it, so the same item
+ * is never re-suggested for this page on a later save (the de-dup set spans handled rows).
+ * [x]/[y] anchor any on-canvas affordance near the detected text.
  */
 @Entity(
     tableName = "pending_suggestions",

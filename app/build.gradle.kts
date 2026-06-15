@@ -56,6 +56,19 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        jniLibs {
+            // Ship native libraries uncompressed and page-aligned in the APK so they meet the
+            // 16 KB page-size requirement (Android 15+ / Play from Nov 2025). NOTE: this aligns
+            // how WE package each .so; it cannot realign LOAD segments baked into a third-party
+            // prebuilt. com.google.mlkit:digital-ink-recognition's libdigitalink.so is built with
+            // 4 KB segment alignment and is still flagged as unaligned — an unresolved upstream
+            // issue (googlesamples/mlkit#938), so the Studio warning persists until Google rebuilds
+            // it. Tracked as an accepted risk for release; not a development blocker. See CLAUDE.md.
+            useLegacyPackaging = false
+        }
+    }
+
     testOptions {
         unitTests {
             // Robolectric needs Android resources/assets; default-value stubs keep the
