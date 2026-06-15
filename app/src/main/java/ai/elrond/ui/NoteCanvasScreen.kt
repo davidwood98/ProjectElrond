@@ -158,7 +158,7 @@ fun NoteCanvasScreen(
         Surface(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(12.dp),
+                .padding(48.dp),
             shape = MaterialTheme.shapes.extraLarge,
             tonalElevation = 3.dp,
             shadowElevation = 4.dp,
@@ -172,7 +172,7 @@ fun NoteCanvasScreen(
         Surface(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(12.dp),
+                .padding(48.dp),
             shape = MaterialTheme.shapes.extraLarge,
             tonalElevation = 3.dp,
             shadowElevation = 4.dp,

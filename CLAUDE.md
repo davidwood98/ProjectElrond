@@ -56,6 +56,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Compose UI tests in `app/src/androidTest` using `createComposeRule`.
 - Custom agents in `.claude/agents/`: `test-writer` (writes tests for new/changed code) and `test-debugger` (runs tests, diagnoses failures). Use them for test creation and fault-finding work.
 
+## Bug Reporting Convention
+Logcat files for runtime bugs are stored in /logcat/
+Named by date and issue: e.g. logcat_2026-06-05_white-screen.txt
+Always provide the logcat path when reporting a runtime 
+issue that cannot be reproduced by unit tests alone.
+
 ## Environment Notes
 
 - Development happens in WSL2; the Android SDK lives on the Windows side (`/mnt/c/Users/david/AppData/Local/Android/Sdk`). Builds/deploys are typically run from Android Studio on Windows. `local.properties` is machine-specific and gitignored.
