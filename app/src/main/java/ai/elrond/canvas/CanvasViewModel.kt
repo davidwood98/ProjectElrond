@@ -326,7 +326,7 @@ class CanvasViewModel(
     /** Pressure-sensitive pen brush for user ink. Lazy so JVM unit tests never touch ink natives. */
     val penBrush: Brush by lazy {
         Brush.createWithColorIntArgb(
-            family = StockBrushes.pressurePen(),
+            family = StockBrushes.pressurePenLatest,
             colorIntArgb = USER_INK_COLOR,
             size = DEFAULT_BRUSH_SIZE,
             epsilon = BRUSH_EPSILON,

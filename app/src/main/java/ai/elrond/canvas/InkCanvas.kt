@@ -28,7 +28,8 @@ import kotlinx.coroutines.launch
 /**
  * Handwriting canvas with two ink layers:
  *  - Wet ink: [InProgressStrokesView] renders in-progress strokes with front-buffered,
- *    low-latency rendering (120Hz-capable) plus motion prediction.
+ *    low-latency rendering (120Hz-capable) plus motion prediction. Its surface is warmed via
+ *    `eagerInit()` on attach so the first stylus touch isn't eaten by lazy surface creation.
  *  - Dry ink: finished strokes from [CanvasViewModel], drawn by [DryStrokesView].
  *
  * Both layers are plain Android Views inside one [FrameLayout]. The dry layer is deliberately
@@ -114,6 +115,13 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
             private var job: Job? = null
 
             override fun onViewAttachedToWindow(v: View) {
+                // Warm the front-buffered rendering surface NOW, on screen entry, instead of
+                // letting it initialise lazily on the first startStroke. Lazy init on first touch
+                // creates the front-buffer surface and relayouts the window, which drops that
+                // first input event across the WHOLE window (FA-8 issue 2: the very first stylus
+                // tap — even on a Compose button — was lost and only the second registered).
+                // eagerInit() is idempotent and UI-thread-only, so calling it here is safe.
+                inProgressStrokesView.eagerInit()
                 val owner = v.findViewTreeLifecycleOwner() ?: return
                 job = owner.lifecycleScope.launch {
                     owner.repeatOnLifecycle(Lifecycle.State.STARTED) {

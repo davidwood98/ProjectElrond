@@ -461,7 +461,99 @@ do **not** cover the regression (see below). No schema change — DB stays v6. *
    mitigation — only if there's a concrete reason to want 1.0.0.)
 
 `androidx.ink` is currently left at **1.0.0** with the regression present (uncommitted); ML Kit
-digital-ink is at **19.0.0** (keep).
+digital-ink is at **19.0.0** (keep). **(SUPERSEDED by FA-8 — the ink revert + issue-2 fix below
+were applied; ink is now back at `1.0.0-alpha04`.)**
+
+## FA-8 — ink revert + first-stroke fix (2026-06-15)
+
+Acts on the FA-7 device feedback: reverts the regression-causing androidx.ink upgrade and fixes
+issue 2 in place. **All four FA-6/FA-7 issues are now resolved and device-confirmed** (16 KB, the
+unclear pop-up, the stroke-reopen regression, and the lost first stylus touch). **203 JVM/Robolectric
+tests pass** (app 179 + aibackend 24, 0 failures — unchanged from FA-7) **plus a new instrumented
+round-trip test**; main + androidTest both compile (verified on the WSL Linux SDK). **No schema change
+— DB stays v6.** Both device-only behaviours were verified on a Galaxy Tab S device on 2026-06-15:
+strokes survive a close/reopen, and the first stylus tap on a freshly opened note registers.
+
+**Process:** the entire (previously uncommitted) FA-5/6/7 working tree was first committed as a
+checkpoint (`0dac198`) on branch **`fa-8-ink-fixes`** (`main` stays at `b2f0141`), as a restore point
+before touching ink. The FA-8 changes below sit on that branch.
+
+- **Stroke-persistence regression — FIXED by reverting androidx.ink `1.0.0` → `1.0.0-alpha04`.**
+  Root cause confirmed: 1.0.0's `MutableStrokeInputBatch.add` *throws* on a point that alpha04's
+  `addOrIgnore` silently *skipped* (e.g. a non-increasing timestamp relative to the batch); the
+  per-point `runCatching` swallowed those throws, so every point after the first was rejected and the
+  reloaded stroke collapsed to a single dot. `StrokeSerialization.toStroke` is back to `addOrIgnore`
+  (skip-invalid) and the `StockBrushes.*Latest` accessors; `CanvasViewModel.penBrush` is back to
+  `pressurePenLatest`; `gradle/libs.versions.toml` pins `ink = "1.0.0-alpha04"`. The upgrade was
+  reverted (not fixed-forward) because it had **also failed to fix issue 2** — carrying its risk
+  bought nothing. **ML Kit `digital-ink-recognition` 19.0.0 (issue 1, 16 KB) and the centred unclear
+  pop-up (issue 3) are independent of the ink version and are retained.**
+- **Regression coverage added (the gap that let FA-7 ship).** New
+  `app/src/androidTest/.../data/StrokeSerializationInstrumentedTest` builds a real multi-point ink
+  `Stroke`, runs it through `toEntity` → `toStroke`, and asserts the input count **and** endpoints
+  survive (plus a brush-param round-trip). `toStroke`/`toEntity` touch ink natives that don't load
+  under JVM/Robolectric, so this is **on-device** coverage (`connectedDebugAndroidTest`) — exactly the
+  collapse-to-a-dot case the pure-data `SerializedStrokeInputTest` could never see.
+- **First S Pen interaction lost (issue 2) — fix via `InProgressStrokesView.eagerInit()`.** `InkCanvas`
+  now calls `eagerInit()` when the canvas attaches to the window, warming the front-buffered rendering
+  surface up front instead of letting it initialise lazily on the first `startStroke`. Lazy init on the
+  first touch creates the surface and relayouts the window, dropping that first input event across the
+  **whole** window — which matches the FA-7 clue that *even Compose buttons* missed the first
+  interaction and only the second registered. `eagerInit()` is a documented, idempotent, UI-thread-only
+  API present in alpha04 (confirmed by inspecting the AAR). **Device-confirmed fixed (2026-06-15):** the
+  first stylus tap on a freshly opened note now registers. (Had it persisted, the next step would have
+  been touch-event instrumentation — action codes only, no coordinates, per the no-content-logging rule —
+  to confirm whether the first `ACTION_DOWN` reached the listener at all.)
+
+Re-verify on the next built APK: with ink back on alpha04, confirm `libink.so` is still 16 KB
+(`0x4000`) LOAD-aligned (`readelf -l`). Per the FA-6 record alpha04's native libs were already
+16 KB-aligned, and `useLegacyPackaging = false` is retained, so this is expected to hold — but it
+swapped a native lib, so it's worth one `readelf` check.
+
+### Future: upgrading androidx.ink to 1.0.0 (stable) safely
+
+We are intentionally pinned to `1.0.0-alpha04`. A later move to stable `1.0.0` is still desirable,
+but it must be done deliberately — the FA-7 regression happened because the upgrade was treated as a
+drop-in. The exact API delta (verified by inspecting both AARs with `javap`) is:
+
+- **`MutableStrokeInputBatch`**: alpha04 has three families — `addOrIgnore(...)` (skip-invalid),
+  `addOrThrow(...)` (throw-on-invalid), and `Collection<StrokeInput>` overloads. **1.0.0 renamed
+  `addOrThrow` → `add` and REMOVED `addOrIgnore` entirely.** So on 1.0.0 there is *no* skip-invalid
+  variant: `add` throws on any point invalid relative to the batch (the prime suspect is a
+  non-strictly-increasing `elapsedTimeMillis`, which our high-rate capture can produce). Wrapping a
+  per-point `add` in `runCatching` is NOT a substitute for `addOrIgnore` — a thrown point is dropped,
+  and because validation is relative to the last *accepted* point, one bad early point cascades and
+  collapses the stroke to a dot (the FA-7 bug).
+- **`StockBrushes`**: alpha04 exposes the `*Latest` properties (`pressurePenLatest`, `markerLatest`,
+  `highlighterLatest`); 1.0.0 exposes them as functions (`pressurePen()`, `marker()`, `highlighter()`).
+
+The upgrade must therefore not rely on skip-invalid behaviour at all. Target architecture:
+
+1. **Sanitise stored points at the (de)serialization boundary, so `add` never throws.** Add a pure,
+   JVM-testable `StrokeInputSanitizer` that takes the decoded `List<SerializedStrokeInput>` and returns
+   a list guaranteed valid for ink reconstruction: force strictly-increasing `elapsedTimeMillis` (bump
+   any `t <= prev` to `prev + 1`), drop non-finite x/y, clamp `pressure` to `[0,1]` (and tilt/orientation
+   to their valid ranges), and drop exact-coincident consecutive points. Because it operates on the
+   pure-data list (no ink natives), it is unit-testable under JVM/Robolectric — closing the original
+   coverage gap on the *logic*, while the instrumented round-trip test covers the actual reconstruction.
+2. **Keep one ink seam.** `StrokeSerialization.toStroke` should call the sanitizer, then build the batch
+   in a single private helper (`fun inkBatchFrom(points): StrokeInputBatch`) that is the ONLY place
+   touching the batch-builder API. Switching `addOrIgnore` ↔ `add(Collection<…>)` then touches exactly
+   that helper plus the version pin and the `StockBrushes.*` call sites — nothing else.
+3. **Belt-and-braces at capture time.** `toEntity` already reads points straight from `Stroke.inputs`,
+   which ink keeps monotonic; the load-time sanitizer is the real guard because it also fixes data
+   already persisted by older builds. Don't skip it on the assumption capture is clean.
+4. **The instrumented round-trip test is the merge gate.** `StrokeSerializationInstrumentedTest` already
+   asserts no point loss on a device; before any 1.0.0 merge, extend it with adversarial fixtures
+   (duplicate timestamps, decreasing timestamps, NaN coords, out-of-range pressure) and require
+   `connectedDebugAndroidTest` green on a real device. After sanitising, prefer `add` over `runCatching`
+   so a *genuinely* invalid point surfaces as a test failure rather than being silently dropped.
+
+**Upgrade checklist:** branch → bump `ink` to `1.0.0` → flip `StockBrushes.*Latest` → `*()` and the
+seam's `addOrIgnore` → sanitised `add` → confirm `InProgressStrokesView.eagerInit()` still exists in
+1.0.0 (the issue-2 fix) → run the (extended) instrumented round-trip + first-touch checks on a device →
+`readelf -l` the APK for 16 KB alignment → only then merge. Do NOT upgrade and revert in the same pass
+again: if 1.0.0 still doesn't fix a separate issue, that's not a reason to carry the migration cost.
 
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
