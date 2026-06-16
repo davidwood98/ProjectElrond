@@ -569,6 +569,60 @@ seam's `addOrIgnore` → sanitised `add` → confirm `InProgressStrokesView.eage
 `readelf -l` the APK for 16 KB alignment → only then merge. Do NOT upgrade and revert in the same pass
 again: if 1.0.0 still doesn't fix a separate issue, that's not a reason to carry the migration cost.
 
+## FA-9 — lasso selection tool (2026-06-16)
+
+First post-POC *feature* (not a bug-fix batch): a real **lasso selection tool**, distinct from the
+optional AI circle-gesture trigger (`TriggerMode.GESTURE`, untouched). **DB is now v7**
+(`MIGRATION_6_7`). **208 app + 24 aibackend JVM/Robolectric tests pass** (0 failures; was 203) plus a
+new instrumented test; `assembleDebug` + `assembleDebugAndroidTest` build. Device-verified on a
+Galaxy Tab S (2026-06-16): select / move / scale / duplicate / delete / AI / copy / cut / tap-to-paste
+/ group / ungroup, and a group survives a close/reopen.
+
+- **Tool + interaction.** New `CanvasTool.LASSO` (toolbar chip). Drag a closed loop to select the
+  enclosed ink (centroid-in-polygon, reusing `GestureTriggerDetector`), **expanded to whole groups**.
+  The selection shows a dashed box: drag the body to **move**, corner handles to **scale** (about the
+  opposite corner; uniform when *lock ratio* is on). Floating toolbar: **Duplicate / Delete / AI**;
+  **⋮ kebab**: **Copy / Cut / Lock ratio / Group | Ungroup**. With the clipboard armed, a bottom
+  **clipboard bar** ("N copied — tap to place" + **Clear clipboard**) shows and **tapping empty canvas
+  pastes** at the tap point (auto-selected, repeatable); Clear clipboard wipes it, deselects, and
+  resets the tool. AI prompt recognizes the selection and routes through the one-shot AI path
+  (`submitQuery(..., bypassDedup = true)`).
+- **In-memory model.** `finishedStrokes` is now `List<CanvasStroke>` where
+  `CanvasStroke(id, stroke, groupId)` — a stable id that survives transforms (selection tracks ids,
+  not stroke refs; a transform rebuilds the underlying immutable `Stroke`) and carries group
+  membership to/from storage. `NoteRepository` round-trips it; `StrokeSerialization` carries `groupId`.
+- **Group persistence (DB v7).** `strokes.groupId` column + `MIGRATION_6_7`
+  (`ALTER TABLE strokes ADD COLUMN groupId TEXT`). Strokes sharing a non-null `groupId` form one group.
+- **Geometry split (test seams).** Pure JVM-testable `canvas/StrokeSelection.kt` (`expandToGroups`,
+  `union`, `enclosedIds`, `scaleTransform`, `LiveTransform`, `SelectionState`, `ClipboardState`,
+  `Corner`); ink-native `canvas/StrokeTransforms.kt` (move/scale/clone/bounds, mirrors
+  `StrokeSerialization.toStroke`) injected into `CanvasViewModel` as `strokeTransformer`/
+  `strokeBoundsOf` seams (defaulted), so VM unit tests run with `mockk<Stroke>` + fakes and the ink
+  reconstruction is covered on-device.
+- **Live render, bake once.** `InkCanvas` adds a `SelectionStrokesView` (sibling of `DryStrokesView`)
+  that draws the selected strokes with a live transform `Matrix` (no per-frame mesh rebuild); the dry
+  layer skips the selected ids. On gesture end the VM bakes the transform into real strokes once.
+- **No extraction re-run for lasso edits.** Pasted/duplicated ink reuses existing content, so it must
+  not re-run the FA-2 background auto-extraction: `enqueueExtraction` is gated on a
+  `contentDirtyForExtraction` flag set **only** by genuine pen strokes (`onStrokesFinished`). It also
+  still passes the same type-namespaced de-dup (the runner de-dups within a run + against handled
+  `pending_suggestions`), so a duplicate can never produce a doubled suggestion in either order.
+- **On-screen menu positioning + project rule.** The selection toolbar is **dynamically positioned**:
+  centred over the selection and clamped to both screen edges (flips above↔below, clamps vertically),
+  using the measured container + toolbar sizes. Codified as an architectural rule (see *Architectural
+  rules*): any on-canvas popup/menu positioned at a note location must clamp/flip to stay fully
+  on-screen.
+
+New/updated tests: `StrokeSelectionTest` (group expansion, bounds union, scale math, `LiveTransform`),
+`CanvasViewModelSelectionTest` (lasso → selection + group expansion, duplicate/delete/copy/cut/paste/
+clear-clipboard, group/ungroup, lock-ratio, move-commit + undo, AI-prompt routing, and the
+pen-enqueues-but-lasso-edit-does-not extraction gate), `AutoExtractionRunnerTest` (+1: duplicated
+identical content yields one suggestion), `RoomDaoTest` (+1: `groupId` round-trip), `ElrondMigrationTest`
+(v1→v7 + the `strokes.groupId` column assertion). New instrumented `StrokeTransformsInstrumentedTest`
+(real ink move/scale/clone/bounds, no point loss). The existing VM tests took mechanical
+`finishedStrokes.value.map { it.stroke }` updates for the `CanvasStroke` element type. The
+`SelectionLayer` gestures are device/manual-verified like the other Compose canvas flows.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):
@@ -616,7 +670,7 @@ OAuth client ids in `CalendarProviderFactory` are placeholders. For production, 
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v5** — `page_edit_events` was added in `MIGRATION_4_5` for per-day calendar created-vs-edited tracking.
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v7** — most recently `strokes.groupId` was added in `MIGRATION_6_7` for FA-9 lasso-selection groups (and `pending_suggestions` in `MIGRATION_5_6` for FA-2 background extraction).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth client ids in `CalendarProviderFactory` are placeholders — for production, do not embed them; use a server-side token exchange (same posture as the Anthropic key).
 - **16 KB page size — resolved (FA-7).** All native libs, incl. ML Kit's `libdigitalink.so`, are 16 KB (`0x4000`) LOAD-segment aligned (verified in the built APK), via `digital-ink-recognition` 19.0.0 + `useLegacyPackaging = false`. No longer a release blocker. (The earlier FA-6 "accepted risk" framing was based on stale data — an aligned ML Kit build shipped Aug 2025.)
