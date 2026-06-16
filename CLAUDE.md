@@ -48,6 +48,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - AI model: Anthropic Claude, default `claude-sonnet-4-6` (the originally specified `claude-sonnet-4-20250514` is deprecated, retiring 2026-06-15). Model ID is configurable via `AnthropicConfig` — never hardcoded at call sites.
 - Handwriting recognition: Google ML Kit Digital Ink Recognition.
 - Calendar writes always require explicit user confirmation.
+- **On-canvas popups/menus must stay fully on-screen.** Any menu, popup, toolbar, card, or
+  indicator positioned relative to a location *in the note* (a stroke, a selection, a `/Q` trigger
+  point, etc.) must be dynamically positioned so no part renders off-screen: measure the content and
+  the container, then clamp the anchor to the visible bounds — shifting it left/right and flipping it
+  above/below the target as needed. Never place such an element at raw note coordinates without an
+  edge-aware clamp. Precedents: the unclear-request card centres on screen (FA-7); the lasso
+  selection toolbar centres over the selection and clamps to both screen edges (FA-9, via the
+  measured container + toolbar sizes).
 
 ## Testing Conventions
 

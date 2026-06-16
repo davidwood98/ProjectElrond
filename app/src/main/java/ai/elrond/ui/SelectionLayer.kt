@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,9 +42,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlin.math.roundToInt
 
 /** Lasso-selection accent — a blue distinct from user navy ink and AI violet. */
 private val SelectionColor = Color(0xFF1565C0)
@@ -69,8 +74,14 @@ fun SelectionLayer(
 ) {
     val selection by viewModel.selection.collectAsStateWithLifecycle()
     val clipboard by viewModel.clipboard.collectAsStateWithLifecycle()
+    // Container size in px (== canvas/stroke coordinate space) — clamps the floating menu on-screen.
+    var layerSize by remember { mutableStateOf(IntSize.Zero) }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { layerSize = it },
+    ) {
         // Background: drag → new lasso; tap → paste (armed) or deselect.
         LassoCatcher(
             clipboardActive = clipboard.active,
@@ -80,7 +91,7 @@ fun SelectionLayer(
             },
         )
 
-        selection?.let { sel -> SelectionBox(sel, viewModel) }
+        selection?.let { sel -> SelectionBox(sel, viewModel, layerSize) }
 
         if (clipboard.active) {
             ClipboardBar(
@@ -157,7 +168,7 @@ private fun LassoCatcher(
 
 /** Dashed bounding box: drag to move, corner handles to scale, with the floating toolbar above. */
 @Composable
-private fun SelectionBox(sel: SelectionState, viewModel: CanvasViewModel) {
+private fun SelectionBox(sel: SelectionState, viewModel: CanvasViewModel, layerSize: IntSize) {
     val density = LocalDensity.current
     val box = sel.displayBounds
 
@@ -194,7 +205,7 @@ private fun SelectionBox(sel: SelectionState, viewModel: CanvasViewModel) {
         }
     }
 
-    SelectionToolbar(sel, viewModel)
+    SelectionToolbar(sel, viewModel, layerSize)
 }
 
 /** A draggable corner handle that scales the selection about the opposite corner. */
@@ -228,23 +239,37 @@ private fun ScaleHandle(
     )
 }
 
-/** Floating action bar above the selection box: Duplicate / Delete / AI + a ⋮ kebab. */
+/**
+ * Floating action bar for the selection: Duplicate / Delete / AI + a ⋮ kebab. Positioned
+ * dynamically so it is always fully on-screen (project rule): centred over the selection and
+ * clamped to the container's edges — it shifts left/right when the selection is near a side edge,
+ * and flips above↔below (then clamps) when near the top/bottom. Uses the measured toolbar +
+ * container sizes ([layerSize]), so the clamp is exact rather than guessed.
+ */
 @Composable
-private fun SelectionToolbar(sel: SelectionState, viewModel: CanvasViewModel) {
-    val density = LocalDensity.current
+private fun SelectionToolbar(sel: SelectionState, viewModel: CanvasViewModel, layerSize: IntSize) {
     val box = sel.displayBounds
     var menuOpen by remember { mutableStateOf(false) }
-
-    // Anchor above the box; drop below when the box is too near the top edge. Clamp to the left.
-    val aboveY = box.top - with(density) { TOOLBAR_HEIGHT_DP.dp.toPx() }
-    val y = if (aboveY < 0f) box.bottom + with(density) { 8.dp.toPx() } else aboveY
-    val x = box.left.coerceAtLeast(with(density) { 8.dp.toPx() })
+    var toolbarSize by remember { mutableStateOf(IntSize.Zero) }
 
     Surface(
-        modifier = Modifier.absoluteOffset(
-            x = with(density) { x.toDp() },
-            y = with(density) { y.toDp() },
-        ),
+        modifier = Modifier
+            .offset {
+                val w = toolbarSize.width
+                val h = toolbarSize.height
+                val margin = 8.dp.toPx()
+                val gap = 8.dp.toPx()
+                // Centre over the selection, then keep both horizontal edges on-screen.
+                val maxX = (layerSize.width - w - margin).coerceAtLeast(margin)
+                val x = (box.centerX - w / 2f).coerceIn(margin, maxX)
+                // Prefer above the box; drop below when there's no room, then clamp vertically.
+                val above = box.top - h - gap
+                val rawY = if (above >= margin) above else box.bottom + gap
+                val maxY = (layerSize.height - h - margin).coerceAtLeast(margin)
+                val y = rawY.coerceIn(margin, maxY)
+                IntOffset(x.roundToInt(), y.roundToInt())
+            }
+            .onSizeChanged { toolbarSize = it },
         shape = RoundedCornerShape(12.dp),
         tonalElevation = 3.dp,
         shadowElevation = 4.dp,
@@ -317,4 +342,3 @@ private fun ClipboardBar(count: Int, onClear: () -> Unit, modifier: Modifier = M
 }
 
 private const val HANDLE_SIZE = 18
-private const val TOOLBAR_HEIGHT_DP = 56
