@@ -41,7 +41,7 @@ class CanvasViewModelTest {
         viewModel.onStrokesFinished(listOf(first))
         viewModel.onStrokesFinished(listOf(second))
 
-        assertEquals(listOf(first, second), viewModel.finishedStrokes.value)
+        assertEquals(listOf(first, second), viewModel.finishedStrokes.value.map { it.stroke })
     }
 
     @Test
@@ -61,10 +61,10 @@ class CanvasViewModelTest {
         viewModel.onStrokesFinished(listOf(second))
 
         viewModel.undo()
-        assertEquals(listOf(first), viewModel.finishedStrokes.value)
+        assertEquals(listOf(first), viewModel.finishedStrokes.value.map { it.stroke })
 
         viewModel.redo()
-        assertEquals(listOf(first, second), viewModel.finishedStrokes.value)
+        assertEquals(listOf(first, second), viewModel.finishedStrokes.value.map { it.stroke })
     }
 
     @Test
@@ -101,7 +101,7 @@ class CanvasViewModelTest {
         assertTrue(viewModel.finishedStrokes.value.isEmpty())
 
         viewModel.undo()
-        assertEquals(listOf(stroke), viewModel.finishedStrokes.value)
+        assertEquals(listOf(stroke), viewModel.finishedStrokes.value.map { it.stroke })
     }
 
     @Test

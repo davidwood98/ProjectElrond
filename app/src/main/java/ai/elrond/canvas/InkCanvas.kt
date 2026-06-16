@@ -23,26 +23,31 @@ import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
- * Handwriting canvas with two ink layers:
+ * Handwriting canvas with three ink layers:
  *  - Wet ink: [InProgressStrokesView] renders in-progress strokes with front-buffered,
  *    low-latency rendering (120Hz-capable) plus motion prediction. Its surface is warmed via
  *    `eagerInit()` on attach so the first stylus touch isn't eaten by lazy surface creation.
- *  - Dry ink: finished strokes from [CanvasViewModel], drawn by [DryStrokesView].
+ *  - Dry ink: finished strokes from [CanvasViewModel] (minus any lasso-selected ones), drawn by
+ *    [DryStrokesView].
+ *  - Selection ink: the lasso-selected strokes, drawn by [SelectionStrokesView] with a live
+ *    transform [Matrix] so a move/scale previews without rebuilding any mesh per frame; the
+ *    ViewModel bakes the transform once on release.
  *
- * Both layers are plain Android Views inside one [FrameLayout]. The dry layer is deliberately
- * NOT a Compose `Canvas`: a Compose Canvas only repaints when composition is invalidated, and a
- * bare `StateFlow` emission (a finished stroke) does not reliably wake a recomposition on its
- * own — which left the very first stroke of a freshly opened page invisible until some unrelated
- * recompose (e.g. hovering a toolbar button) forced a redraw. [DryStrokesView] instead collects
- * the stroke list directly and calls [View.invalidate], which schedules a draw via the
- * Choreographer regardless of Compose, so every finished stroke paints on the next frame.
+ * All layers are plain Android Views inside one [FrameLayout]. The dry layer is deliberately NOT a
+ * Compose `Canvas`: a Compose Canvas only repaints when composition is invalidated, and a bare
+ * `StateFlow` emission (a finished stroke) does not reliably wake a recomposition on its own — which
+ * left the very first stroke of a freshly opened page invisible until some unrelated recompose
+ * forced a redraw. The views below collect the flows directly and call [View.invalidate], which
+ * schedules a draw via the Choreographer regardless of Compose.
  *
- * Input handling supports S Pen pressure/tilt (via the pressure-pen stock brush), palm
- * rejection (finger input ignored while stylus-only mode is on), the hardware stylus
- * eraser ([MotionEvent.TOOL_TYPE_ERASER]), and a drawn eraser tool.
+ * Input handling supports S Pen pressure/tilt (via the pressure-pen stock brush), palm rejection
+ * (finger input ignored while stylus-only mode is on), the hardware stylus eraser
+ * ([MotionEvent.TOOL_TYPE_ERASER]), and a drawn eraser tool. In [CanvasTool.LASSO] mode the Compose
+ * selection overlay owns input, so this listener never draws ink.
  */
 @Composable
 fun InkCanvas(
@@ -83,6 +88,37 @@ private class DryStrokesView(context: Context) : View(context) {
     }
 }
 
+/** Selection layer: the lasso-selected strokes, drawn with a live move/scale [Matrix]. */
+@SuppressLint("ViewConstructor")
+private class SelectionStrokesView(context: Context) : View(context) {
+    private val renderer = CanvasStrokeRenderer.create()
+    private var strokes: List<Stroke> = emptyList()
+    private val transform = Matrix()
+
+    init {
+        setWillNotDraw(false)
+    }
+
+    fun setContent(value: List<Stroke>, matrix: Matrix) {
+        strokes = value
+        transform.set(matrix)
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        strokes.forEach { stroke ->
+            renderer.draw(canvas = canvas, stroke = stroke, strokeToScreenTransform = transform)
+        }
+    }
+}
+
+/** Android `Matrix` for a [LiveTransform]: scale about the pivot, then translate. */
+private fun LiveTransform.toMatrix(): Matrix = Matrix().apply {
+    postScale(scaleX, scaleY, pivotX, pivotY)
+    postTranslate(dx, dy)
+}
+
 @SuppressLint("ClickableViewAccessibility")
 private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
     val rootView = FrameLayout(context)
@@ -91,6 +127,7 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
         FrameLayout.LayoutParams.MATCH_PARENT,
     )
     val dryStrokesView = DryStrokesView(context).apply { layoutParams = matchParent }
+    val selectionStrokesView = SelectionStrokesView(context).apply { layoutParams = matchParent }
     val inProgressStrokesView = InProgressStrokesView(context).apply {
         layoutParams = matchParent
         addFinishedStrokesListener(
@@ -104,28 +141,40 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
     }
     val predictor = MotionEventPredictor.newInstance(rootView)
     rootView.setOnTouchListener(createTouchListener(inProgressStrokesView, viewModel, predictor))
-    // Dry layer first (below), wet ink on top.
+    // Dry layer (bottom), selection layer (above dry), wet ink on top.
     rootView.addView(dryStrokesView)
+    rootView.addView(selectionStrokesView)
     rootView.addView(inProgressStrokesView)
 
-    // Drive the dry layer straight off the StateFlow while the screen is at least STARTED, so a
-    // finished stroke repaints via invalidate() without waiting on a Compose recomposition.
+    // Drive the dry + selection layers straight off the StateFlows while the screen is at least
+    // STARTED, so a finished stroke or a live move/scale repaints via invalidate() without waiting
+    // on a Compose recomposition. Selected strokes are drawn by the selection layer (with the live
+    // transform) and excluded from the dry layer, so a move/scale never shows a doubled image.
     rootView.addOnAttachStateChangeListener(
         object : View.OnAttachStateChangeListener {
             private var job: Job? = null
 
             override fun onViewAttachedToWindow(v: View) {
-                // Warm the front-buffered rendering surface NOW, on screen entry, instead of
-                // letting it initialise lazily on the first startStroke. Lazy init on first touch
-                // creates the front-buffer surface and relayouts the window, which drops that
-                // first input event across the WHOLE window (FA-8 issue 2: the very first stylus
-                // tap — even on a Compose button — was lost and only the second registered).
-                // eagerInit() is idempotent and UI-thread-only, so calling it here is safe.
+                // Warm the front-buffered rendering surface NOW, on screen entry, instead of letting
+                // it initialise lazily on the first startStroke. Lazy init on first touch creates the
+                // surface and relayouts the window, which drops that first input event across the
+                // WHOLE window (FA-8 issue 2). eagerInit() is idempotent and UI-thread-only.
                 inProgressStrokesView.eagerInit()
                 val owner = v.findViewTreeLifecycleOwner() ?: return
                 job = owner.lifecycleScope.launch {
                     owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                        viewModel.finishedStrokes.collect { dryStrokesView.setStrokes(it) }
+                        combine(viewModel.finishedStrokes, viewModel.selection) { strokes, sel ->
+                            strokes to sel
+                        }.collect { (strokes, sel) ->
+                            val selectedIds = sel?.ids ?: emptySet()
+                            dryStrokesView.setStrokes(
+                                strokes.filterNot { it.id in selectedIds }.map { it.stroke },
+                            )
+                            selectionStrokesView.setContent(
+                                strokes.filter { it.id in selectedIds }.map { it.stroke },
+                                sel?.transform?.toMatrix() ?: Matrix(),
+                            )
+                        }
                     }
                 }
             }
@@ -149,6 +198,10 @@ private fun createTouchListener(
     var erasing = false
 
     return View.OnTouchListener { view, event ->
+        // In lasso-select mode the Compose selection overlay owns all input (it sits above this
+        // view and consumes the gesture); never draw ink here. This is a belt-and-braces guard.
+        if (viewModel.tool.value == CanvasTool.LASSO) return@OnTouchListener false
+
         predictor.record(event)
         val predictedEvent = predictor.predict()
         try {

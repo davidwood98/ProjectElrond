@@ -52,7 +52,9 @@ class ExtractionWorker @AssistedInject constructor(
         val confirmCalendar = confirmGlobal && settings.confirmCalendarExtraction.first()
 
         val runner = AutoExtractionRunner(
-            recognizeLines = { id -> buildRecognizedLines(noteRepository.loadStrokes(id), recognizer) },
+            recognizeLines = { id ->
+                buildRecognizedLines(noteRepository.loadStrokes(id).map { it.stroke }, recognizer)
+            },
             taskExtractor = taskExtractor,
             eventExtractor = eventExtractor,
             todoRepository = todoRepository,

@@ -142,6 +142,17 @@ class AutoExtractionRunnerTest {
     }
 
     @Test
+    fun `duplicated identical content yields only one suggestion`() = runTest {
+        // A pasted/duplicated to-do shows up twice in the recognized text and is extracted twice;
+        // the runner's type-namespaced de-dup collapses them to a single suggestion — so a lasso
+        // duplicate/paste can never produce a doubled item even if it did reach the extractor.
+        runner(tasks = listOf(ExtractedTask("Buy milk"), ExtractedTask("buy milk")))
+            .run("p1", confirmTodo = true, confirmCalendar = true)
+
+        assertEquals(1, suggestionRepository.observePending("p1").first().size)
+    }
+
+    @Test
     fun `confirmation off creates a calendar suggestion for a dated event`() = runTest {
         runner(events = listOf(ExtractedEvent("Standup", startIso = "2026-06-10T15:00")))
             .run("p1", confirmTodo = false, confirmCalendar = false)

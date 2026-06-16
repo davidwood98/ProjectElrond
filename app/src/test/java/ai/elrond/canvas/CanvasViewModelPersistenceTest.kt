@@ -1,5 +1,6 @@
 package ai.elrond.canvas
 
+import ai.elrond.canvas.CanvasStroke
 import ai.elrond.data.NoteRepository
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
@@ -41,7 +42,7 @@ class CanvasViewModelPersistenceTest {
 
     @Test
     fun `saved strokes are loaded when the note opens`() = runTest(dispatcher) {
-        val saved = listOf(mockk<Stroke>(), mockk<Stroke>())
+        val saved = listOf(CanvasStroke("a", mockk()), CanvasStroke("b", mockk()))
         coEvery { repository.loadStrokes("page-1") } returns saved
 
         val viewModel = viewModel()
@@ -60,7 +61,9 @@ class CanvasViewModelPersistenceTest {
         viewModel.onStrokesFinished(listOf(stroke))
         advanceUntilIdle()
 
-        coVerify { repository.replaceStrokes("page-1", listOf(stroke)) }
+        val slot = slot<List<CanvasStroke>>()
+        coVerify { repository.replaceStrokes(eq("page-1"), capture(slot)) }
+        assertEquals(listOf(stroke), slot.captured.map { it.stroke })
     }
 
     @Test
@@ -122,7 +125,7 @@ class CanvasViewModelPersistenceTest {
 
     @Test
     fun `unchanged canvas is not re-saved`() = runTest(dispatcher) {
-        val saved = listOf(mockk<Stroke>())
+        val saved = listOf(CanvasStroke("a", mockk()))
         coEvery { repository.loadStrokes("page-1") } returns saved
         coEvery { repository.loadAiNotes("page-1") } returns emptyList()
 

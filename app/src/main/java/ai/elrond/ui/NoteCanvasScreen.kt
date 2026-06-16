@@ -154,6 +154,12 @@ fun NoteCanvasScreen(
             AiUiState.Idle -> Unit
         }
 
+        // Lasso selection tool: a full-screen overlay that owns input while the tool is active
+        // (drawn above ink + AI notes, below the toolbars so they stay tappable).
+        if (tool == CanvasTool.LASSO) {
+            SelectionLayer(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+        }
+
 
         Surface(
             modifier = Modifier
@@ -217,6 +223,11 @@ fun NoteCanvasScreen(
                     selected = tool == CanvasTool.ERASER,
                     onClick = { viewModel.selectTool(CanvasTool.ERASER) },
                     label = { Text("Eraser") },
+                )
+                FilterChip(
+                    selected = tool == CanvasTool.LASSO,
+                    onClick = { viewModel.selectTool(CanvasTool.LASSO) },
+                    label = { Text("Lasso") },
                 )
                 FilterChip(
                     selected = !stylusOnly,

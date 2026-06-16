@@ -3,6 +3,7 @@ package ai.elrond.data
 import androidx.room.testing.MigrationTestHelper
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assume
 import org.junit.Before
 import org.junit.Rule
@@ -30,6 +31,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_3_4,
         ElrondDatabase.MIGRATION_4_5,
         ElrondDatabase.MIGRATION_5_6,
+        ElrondDatabase.MIGRATION_6_7,
     )
 
     /**
@@ -53,10 +55,23 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v6_and_validates_final_schema() {
+    fun migrates_v1_to_v7_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v6 schema (incl. pending_suggestions).
-        helper.runMigrationsAndValidate(TEST_DB, 6, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v7 schema (incl. strokes.groupId).
+        helper.runMigrationsAndValidate(TEST_DB, 7, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_6_to_7_adds_the_strokes_groupId_column() {
+        helper.createDatabase(TEST_DB, 6).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 7, true, *allMigrations)
+        val columns = mutableSetOf<String>()
+        db.query("PRAGMA table_info(strokes)").use { c ->
+            val nameIndex = c.getColumnIndex("name")
+            while (c.moveToNext()) columns.add(c.getString(nameIndex))
+        }
+        db.close()
+        assertTrue("strokes.groupId should exist after v6→v7", "groupId" in columns)
     }
 
     @Test

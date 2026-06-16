@@ -4,4 +4,7 @@ package ai.elrond.canvas
 enum class CanvasTool {
     PEN,
     ERASER,
+
+    /** Lasso selection (FA-9): circle ink to select, then move / scale / duplicate / … it. */
+    LASSO,
 }

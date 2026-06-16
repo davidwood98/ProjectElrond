@@ -385,7 +385,7 @@ class CanvasViewModelAiTest {
         assertEquals(listOf("what is the capital of France"), provider.prompts)
         assertEquals("Paris", viewModel.aiNotes.value.single().text)
         // The lasso was a gesture, not ink — only the content stroke remains.
-        assertEquals(listOf(contentStroke), viewModel.finishedStrokes.value)
+        assertEquals(listOf(contentStroke), viewModel.finishedStrokes.value.map { it.stroke })
     }
 
     @Test

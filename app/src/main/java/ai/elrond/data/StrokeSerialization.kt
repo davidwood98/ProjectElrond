@@ -1,5 +1,6 @@
 package ai.elrond.data
 
+import ai.elrond.canvas.CanvasStroke
 import androidx.ink.brush.Brush
 import androidx.ink.brush.BrushFamily
 import androidx.ink.brush.InputToolType
@@ -30,6 +31,7 @@ object StrokeSerialization {
         pageId: String,
         createdAt: Long,
         isAiInk: Boolean = false,
+        groupId: String? = null,
     ): StrokeEntity {
         val points = ArrayList<SerializedStrokeInput>(stroke.inputs.size)
         val scratch = StrokeInput()
@@ -57,8 +59,13 @@ object StrokeSerialization {
             inputsJson = json.encodeToString(points),
             createdAt = createdAt,
             isAiInk = isAiInk,
+            groupId = groupId,
         )
     }
+
+    /** Reconstructs a [CanvasStroke] (stable id + group membership + ink) from a stored row. */
+    fun toCanvasStroke(entity: StrokeEntity): CanvasStroke =
+        CanvasStroke(id = entity.id, stroke = toStroke(entity), groupId = entity.groupId)
 
     fun toStroke(entity: StrokeEntity): Stroke {
         val points = json.decodeFromString<List<SerializedStrokeInput>>(entity.inputsJson)

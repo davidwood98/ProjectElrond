@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -101,6 +102,23 @@ class RoomDaoTest {
         strokeDao.replaceForPage("p1", listOf(stroke("s3")))
 
         assertEquals(listOf("s3"), strokeDao.getForPage("p1").map { it.id })
+    }
+
+    @Test
+    fun `stroke groupId round-trips through the dao`() = runTest {
+        seedPage()
+        strokeDao.insertAll(
+            listOf(
+                stroke("s1").copy(groupId = "g1"),
+                stroke("s2").copy(groupId = "g1"),
+                stroke("s3"),
+            ),
+        )
+
+        val rows = strokeDao.getForPage("p1").associateBy { it.id }
+        assertEquals("g1", rows.getValue("s1").groupId)
+        assertEquals("g1", rows.getValue("s2").groupId)
+        assertNull(rows.getValue("s3").groupId)
     }
 
     @Test

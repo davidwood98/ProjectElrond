@@ -61,6 +61,11 @@ data class StrokeEntity(
     val createdAt: Long,
     /** True for AI response ink, which is rendered visually distinct from user ink. */
     val isAiInk: Boolean = false,
+    /**
+     * Lasso-selection group id (FA-9). Null when ungrouped; strokes sharing a non-null value
+     * form one group that selects together and reloads grouped. Added in DB v7 (MIGRATION_6_7).
+     */
+    val groupId: String? = null,
 )
 
 /**

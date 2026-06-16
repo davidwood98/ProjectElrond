@@ -100,8 +100,12 @@ class CanvasViewModel(
     private val questionLineSelector: (List<List<Stroke>>, Int) -> List<Int> = ::selectQuestionLines,
     /** Returns a stroke's lasso polygon (gesture mode) or null when it isn't a loop. */
     private val lassoOf: (Stroke) -> List<GestureTriggerDetector.Point>? = ::strokeLoopOrNull,
-    /** Centroid of a stroke, used to test lasso enclosure (gesture mode). */
+    /** Centroid of a stroke, used to test lasso enclosure (gesture mode + lasso tool). */
     private val centroidOf: (Stroke) -> GestureTriggerDetector.Point = ::strokeCentroid,
+    /** Bakes a move/scale into a stroke (lasso tool). Injected so JVM tests use a fake. */
+    private val strokeTransformer: (Stroke, LiveTransform) -> Stroke = StrokeTransforms::transformStroke,
+    /** Axis-aligned bounds of a stroke (lasso tool). Injected so JVM tests use a fake. */
+    private val strokeBoundsOf: (Stroke) -> SelectionBounds = StrokeTransforms::strokeBounds,
     triggerModeFlow: Flow<TriggerMode>? = null,
     stylusOnlyFlow: Flow<Boolean>? = null,
     /** Write-through for the palm-rejection preference (null in tests). */
@@ -145,8 +149,20 @@ class CanvasViewModel(
         persistStylusOnly = { settings.setStylusOnly(it) },
     )
 
-    private val _finishedStrokes = MutableStateFlow<List<Stroke>>(emptyList())
-    val finishedStrokes: StateFlow<List<Stroke>> = _finishedStrokes.asStateFlow()
+    private val _finishedStrokes = MutableStateFlow<List<CanvasStroke>>(emptyList())
+    val finishedStrokes: StateFlow<List<CanvasStroke>> = _finishedStrokes.asStateFlow()
+
+    /** Lasso selection (FA-9): null when nothing is selected. UI-only, never persisted. */
+    private val _selection = MutableStateFlow<SelectionState?>(null)
+    val selection: StateFlow<SelectionState?> = _selection.asStateFlow()
+
+    /** Clipboard banner state (FA-9): drives the bottom bar + arms tap-to-paste. */
+    private val _clipboard = MutableStateFlow(ClipboardState.EMPTY)
+    val clipboard: StateFlow<ClipboardState> = _clipboard.asStateFlow()
+
+    /** Strokes held for paste (deep copies captured at copy/cut, with their group structure). */
+    private var clipboardStrokes: List<CanvasStroke> = emptyList()
+    private var clipboardBounds: SelectionBounds? = null
 
     private val _tool = MutableStateFlow(CanvasTool.PEN)
     val tool: StateFlow<CanvasTool> = _tool.asStateFlow()
@@ -194,8 +210,8 @@ class CanvasViewModel(
 
     // --- Undo / redo (stroke history) ---
 
-    private val undoStack = ArrayDeque<List<Stroke>>()
-    private val redoStack = ArrayDeque<List<Stroke>>()
+    private val undoStack = ArrayDeque<List<CanvasStroke>>()
+    private val redoStack = ArrayDeque<List<CanvasStroke>>()
 
     private val _canUndo = MutableStateFlow(false)
     val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
@@ -204,7 +220,7 @@ class CanvasViewModel(
     val canRedo: StateFlow<Boolean> = _canRedo.asStateFlow()
 
     /** Snapshot taken at eraser-gesture start so one gesture = one undo step. */
-    private var eraseGestureSnapshot: List<Stroke>? = null
+    private var eraseGestureSnapshot: List<CanvasStroke>? = null
 
     private var triggerDetectionJob: Job? = null
 
@@ -212,7 +228,17 @@ class CanvasViewModel(
     private var lastHandledPrompt: String? = null
 
     /** Strokes as last persisted — avoids redundant writes and enables the close-flush. */
-    private var lastPersisted: List<Stroke> = emptyList()
+    private var lastPersisted: List<CanvasStroke> = emptyList()
+
+    /**
+     * True once freehand pen ink has changed since the last extraction enqueue. Only genuinely new
+     * handwriting should trigger the FA-2 background auto-extraction — lasso edits (move / scale /
+     * duplicate / paste / cut / group / ungroup) rearrange or copy *existing* ink, so they must not
+     * re-run the extractor (a pasted item is already covered by the same de-dup). Set in
+     * [onStrokesFinished]; checked-and-cleared by the autosave before enqueuing.
+     */
+    @Volatile
+    private var contentDirtyForExtraction: Boolean = false
 
     /** AI notes as last persisted — same role for the ai_notes table. */
     private var lastPersistedAiNotes: List<AiInkNote> = emptyList()
@@ -286,8 +312,13 @@ class CanvasViewModel(
                     runCatching { repository.replaceStrokes(pageId, strokes) }
                         .onSuccess {
                             lastPersisted = strokes
-                            // Kick off background TODO/calendar extraction for the saved page.
-                            if (strokes.isNotEmpty()) enqueueExtraction?.invoke(pageId)
+                            // Kick off background TODO/calendar extraction only when genuinely new
+                            // pen ink was written — never for lasso edits (move/scale/duplicate/
+                            // paste/…), so pasted/duplicated ink isn't re-run by the extractor.
+                            if (strokes.isNotEmpty() && contentDirtyForExtraction) {
+                                contentDirtyForExtraction = false
+                                enqueueExtraction?.invoke(pageId)
+                            }
                         }
                 }
             }
@@ -335,6 +366,11 @@ class CanvasViewModel(
 
     fun selectTool(tool: CanvasTool) {
         _tool.value = tool
+        // The lasso tool's transient state (selection + clipboard) lives only while it's active.
+        if (tool != CanvasTool.LASSO) {
+            clearSelection()
+            clearClipboard()
+        }
     }
 
     fun setStylusOnly(enabled: Boolean) {
@@ -346,7 +382,9 @@ class CanvasViewModel(
     fun onStrokesFinished(strokes: Collection<Stroke>) {
         if (strokes.isEmpty()) return
         pushUndoSnapshot(_finishedStrokes.value)
-        _finishedStrokes.update { it + strokes }
+        clearSelection() // a fresh pen stroke isn't part of any lasso selection
+        contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
+        _finishedStrokes.update { current -> current + strokes.map { CanvasStroke(newStrokeId(), it) } }
         scheduleTriggerDetection()
     }
 
@@ -363,14 +401,15 @@ class CanvasViewModel(
             radius * 2,
             radius * 2,
         )
-        val after = before.filterNot { stroke ->
-            stroke.shape.computeCoverageIsGreaterThan(eraserBox, 0f)
+        val after = before.filterNot { cs ->
+            cs.stroke.shape.computeCoverageIsGreaterThan(eraserBox, 0f)
         }
         if (after.size == before.size) return
 
         val snapshot = eraseGestureSnapshot ?: before
         eraseGestureSnapshot = null // only one undo step per gesture
         pushUndoSnapshot(snapshot)
+        clearSelection() // an erased stroke may have been selected
         _finishedStrokes.value = after
     }
 
@@ -378,6 +417,7 @@ class CanvasViewModel(
         val snapshot = undoStack.removeLastOrNull() ?: return
         redoStack.addLast(_finishedStrokes.value)
         _finishedStrokes.value = snapshot
+        clearSelection() // selection may reference strokes the undo changed
         updateHistoryFlags()
     }
 
@@ -385,6 +425,7 @@ class CanvasViewModel(
         val snapshot = redoStack.removeLastOrNull() ?: return
         undoStack.addLast(_finishedStrokes.value)
         _finishedStrokes.value = snapshot
+        clearSelection()
         updateHistoryFlags()
     }
 
@@ -397,6 +438,8 @@ class CanvasViewModel(
         _aiNotes.value = emptyList()
         _aiState.value = AiUiState.Idle
         lastHandledPrompt = null
+        clearSelection()
+        clearClipboard()
     }
 
     fun dismissAiResponse() {
@@ -448,9 +491,215 @@ class CanvasViewModel(
         _aiNotes.update { notes -> notes.filterNot { it.id == id } }
     }
 
+    // --- Lasso selection tool (FA-9) ---
+
+    /**
+     * Selects every stroke whose centroid falls inside the drawn lasso [polygon], expanded to whole
+     * groups. An empty lasso (encloses nothing) just clears the current selection. The lasso path is
+     * a gesture captured in the UI — it is never committed as ink.
+     */
+    fun selectByLasso(polygon: List<GestureTriggerDetector.Point>) {
+        val strokes = _finishedStrokes.value
+        if (strokes.isEmpty() || polygon.size < 3) {
+            clearSelection()
+            return
+        }
+        val ids = strokes.map { it.id }
+        val centroids = strokes.map { centroidOf(it.stroke) }
+        val enclosed = StrokeSelection.enclosedIds(polygon, ids, centroids)
+        if (enclosed.isEmpty()) {
+            clearSelection()
+            return
+        }
+        setSelection(StrokeSelection.expandToGroups(enclosed, strokes))
+    }
+
+    fun clearSelection() {
+        if (_selection.value != null) _selection.value = null
+    }
+
+    /** Live move/scale preview while a transform gesture is in progress (no bake, no save yet). */
+    fun previewTransform(transform: LiveTransform) {
+        _selection.update { it?.copy(transform = transform) }
+    }
+
+    /** Abandons an in-progress transform preview without baking it. */
+    fun cancelTransform() {
+        _selection.update { it?.copy(transform = LiveTransform.IDENTITY) }
+    }
+
+    /** Bakes the previewed move/scale into the selected strokes once (one mesh rebuild each). */
+    fun commitTransform() {
+        val sel = _selection.value ?: return
+        val t = sel.transform
+        if (t.isIdentity) return
+        val before = _finishedStrokes.value
+        pushUndoSnapshot(before)
+        val after = before.map { cs ->
+            if (cs.id in sel.ids) cs.copy(stroke = strokeTransformer(cs.stroke, t)) else cs
+        }
+        _finishedStrokes.value = after
+        _selection.value = sel.copy(
+            transform = LiveTransform.IDENTITY,
+            bounds = boundsOfIds(sel.ids, after) ?: sel.displayBounds,
+        )
+    }
+
+    /** Duplicate: clones the selection in place (offset), preserving grouping; selects the copy. */
+    fun duplicateSelection() {
+        val sel = _selection.value ?: return
+        val copies = cloneStrokes(
+            _finishedStrokes.value.filter { it.id in sel.ids },
+            DUPLICATE_OFFSET_PX,
+            DUPLICATE_OFFSET_PX,
+        )
+        if (copies.isEmpty()) return
+        pushUndoSnapshot(_finishedStrokes.value)
+        _finishedStrokes.update { it + copies }
+        setSelection(copies.map { it.id }.toSet())
+    }
+
+    /** Bin: removes the selected strokes. */
+    fun deleteSelection() {
+        val sel = _selection.value ?: return
+        pushUndoSnapshot(_finishedStrokes.value)
+        _finishedStrokes.update { current -> current.filterNot { it.id in sel.ids } }
+        clearSelection()
+    }
+
+    /** Copy: holds deep copies of the selection on the clipboard; the selection stays put. */
+    fun copySelection() {
+        val sel = _selection.value ?: return
+        captureClipboard(sel.ids)
+    }
+
+    /** Cut: copies the selection to the clipboard, then removes it from the page. */
+    fun cutSelection() {
+        val sel = _selection.value ?: return
+        captureClipboard(sel.ids)
+        pushUndoSnapshot(_finishedStrokes.value)
+        _finishedStrokes.update { current -> current.filterNot { it.id in sel.ids } }
+        clearSelection()
+    }
+
+    /**
+     * Paste: stamps the clipboard at ([x], [y]) (its bounds' top-left lands there), preserving group
+     * structure, and selects the pasted copy so it can be dragged immediately. The clipboard is kept
+     * (repeatable) until [clearClipboard]. Pasted ink reuses existing content, so — like all lasso
+     * edits — it never triggers a fresh background extraction.
+     */
+    fun pasteAt(x: Float, y: Float) {
+        val source = clipboardStrokes
+        val bounds = clipboardBounds ?: return
+        if (source.isEmpty()) return
+        val pasted = cloneStrokes(source, dx = x - bounds.left, dy = y - bounds.top)
+        pushUndoSnapshot(_finishedStrokes.value)
+        _finishedStrokes.update { it + pasted }
+        setSelection(pasted.map { it.id }.toSet())
+    }
+
+    /** Clears the clipboard, deselects, and resets the lasso tool to its idle select state. */
+    fun clearClipboard() {
+        clipboardStrokes = emptyList()
+        clipboardBounds = null
+        if (_clipboard.value.active) _clipboard.value = ClipboardState.EMPTY
+        clearSelection()
+    }
+
+    /** Group: gives every selected stroke one shared (new) group id, so they select together. */
+    fun groupSelection() {
+        val sel = _selection.value ?: return
+        if (sel.ids.size < 2) return
+        val groupId = newGroupId()
+        _finishedStrokes.update { current ->
+            current.map { if (it.id in sel.ids) it.copy(groupId = groupId) else it }
+        }
+        _selection.update { it?.copy(grouped = true) }
+    }
+
+    /** Ungroup: clears the group id on every selected stroke. */
+    fun ungroupSelection() {
+        val sel = _selection.value ?: return
+        _finishedStrokes.update { current ->
+            current.map { if (it.id in sel.ids) it.copy(groupId = null) else it }
+        }
+        _selection.update { it?.copy(grouped = false) }
+    }
+
+    /** Toggles aspect-ratio lock for corner-handle scaling. */
+    fun setLockRatio(locked: Boolean) {
+        _selection.update { it?.copy(lockRatio = locked) }
+    }
+
+    /** AI prompt: recognizes the selected handwriting and sends it to the AI (a deliberate query). */
+    fun aiPromptSelection() {
+        val recognizer = recognizer ?: return
+        val sel = _selection.value ?: return
+        val selected = _finishedStrokes.value.filter { it.id in sel.ids }.map { it.stroke }
+        if (selected.isEmpty()) return
+        viewModelScope.launch {
+            val question = lineSplitter(selected)
+                .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
+                .joinToString(" ")
+                .ifBlank { null } ?: return@launch
+            submitQuery(question, question, notePlacer(selected), bypassDedup = true)
+        }
+    }
+
+    // --- Selection internals ---
+
+    /** Builds [SelectionState] for [ids]: bounds + whether they're all one existing group. */
+    private fun setSelection(ids: Set<String>) {
+        val strokes = _finishedStrokes.value.filter { it.id in ids }
+        val bounds = StrokeSelection.union(strokes.map { strokeBoundsOf(it.stroke) })
+        if (strokes.isEmpty() || bounds == null) {
+            clearSelection()
+            return
+        }
+        val groupIds = strokes.map { it.groupId }.toSet()
+        val grouped = groupIds.size == 1 && groupIds.single() != null
+        _selection.value = SelectionState(
+            ids = ids,
+            bounds = bounds,
+            lockRatio = _selection.value?.lockRatio ?: false, // keep the user's lock preference
+            grouped = grouped,
+        )
+    }
+
+    private fun captureClipboard(ids: Set<String>) {
+        val strokes = _finishedStrokes.value.filter { it.id in ids }
+        if (strokes.isEmpty()) return
+        clipboardStrokes = strokes
+        clipboardBounds = StrokeSelection.union(strokes.map { strokeBoundsOf(it.stroke) })
+        _clipboard.value = ClipboardState(count = strokes.size)
+    }
+
+    /**
+     * Deep-copies [source] shifted by ([dx], [dy]), giving each copy a fresh id and remapping group
+     * ids so the copy keeps its internal grouping without merging into the originals' group.
+     */
+    private fun cloneStrokes(source: List<CanvasStroke>, dx: Float, dy: Float): List<CanvasStroke> {
+        if (source.isEmpty()) return emptyList()
+        val remap = HashMap<String, String>()
+        val t = LiveTransform(dx = dx, dy = dy)
+        return source.map { cs ->
+            CanvasStroke(
+                id = newStrokeId(),
+                stroke = strokeTransformer(cs.stroke, t),
+                groupId = cs.groupId?.let { remap.getOrPut(it) { newGroupId() } },
+            )
+        }
+    }
+
+    private fun boundsOfIds(ids: Set<String>, strokes: List<CanvasStroke>): SelectionBounds? =
+        StrokeSelection.union(strokes.filter { it.id in ids }.map { strokeBoundsOf(it.stroke) })
+
+    private fun newStrokeId(): String = UUID.randomUUID().toString()
+    private fun newGroupId(): String = UUID.randomUUID().toString()
+
     // --- History internals ---
 
-    private fun pushUndoSnapshot(snapshot: List<Stroke>) {
+    private fun pushUndoSnapshot(snapshot: List<CanvasStroke>) {
         undoStack.addLast(snapshot)
         if (undoStack.size > MAX_HISTORY) undoStack.removeFirst()
         redoStack.clear()
@@ -474,8 +723,8 @@ class CanvasViewModel(
     }
 
     private suspend fun detectAndHandleTrigger(recognizer: HandwritingRecognizer) {
-        val strokes = _finishedStrokes.value
-        if (strokes.isEmpty()) return
+        if (_finishedStrokes.value.isEmpty()) return
+        val strokes = _finishedStrokes.value.map { it.stroke }
         val lines = lineSplitter(strokes)
         if (lines.isEmpty()) return
 
@@ -552,7 +801,7 @@ class CanvasViewModel(
             .ifBlank { null } ?: return
 
         // The lasso is a gesture, not content — take it back off the canvas.
-        _finishedStrokes.update { current -> current.filterNot { it === lassoStroke } }
+        _finishedStrokes.update { current -> current.filterNot { it.stroke === lassoStroke } }
 
         // A lasso is a deliberate, explicit request (like pressing a button): re-circling the
         // same selection must always re-run, so it bypasses the unchanged-content de-dupe guard.
@@ -903,6 +1152,9 @@ class CanvasViewModel(
 
         /** Margin from the page edge for a full-line AI response box. */
         const val AI_NOTE_MARGIN_PX: Float = 32f
+
+        /** Offset for a duplicated selection so the copy is visibly distinct from the original. */
+        const val DUPLICATE_OFFSET_PX: Float = 24f
 
         /** Fallback y for a re-sent query when the error note's position is unknown. */
         private const val RESEND_FALLBACK_Y: Float = 120f

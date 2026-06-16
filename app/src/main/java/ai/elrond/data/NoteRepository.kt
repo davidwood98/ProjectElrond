@@ -1,10 +1,10 @@
 package ai.elrond.data
 
 import ai.elrond.ai.AiInkNote
+import ai.elrond.canvas.CanvasStroke
 import ai.elrond.notes.NoteEditDay
 import ai.elrond.notes.Notebook
 import ai.elrond.notes.NotePage
-import androidx.ink.strokes.Stroke
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -81,45 +81,38 @@ class NoteRepository(
 
     // --- Strokes ---
 
-    suspend fun saveStrokes(pageId: String, strokes: List<Stroke>, isAiInk: Boolean = false) {
+    suspend fun saveStrokes(pageId: String, strokes: List<CanvasStroke>, isAiInk: Boolean = false) {
         if (strokes.isEmpty()) return
         val now = clock()
-        strokeDao.insertAll(
-            strokes.map { stroke ->
-                StrokeSerialization.toEntity(
-                    stroke = stroke,
-                    id = newId(),
-                    pageId = pageId,
-                    createdAt = now,
-                    isAiInk = isAiInk,
-                )
-            },
-        )
+        strokeDao.insertAll(strokes.map { it.toEntity(pageId, now, isAiInk) })
         pageDao.touch(pageId, now)
         recordEdit(pageId, now)
     }
 
-    suspend fun loadStrokes(pageId: String): List<Stroke> =
-        strokeDao.getForPage(pageId).map(StrokeSerialization::toStroke)
+    suspend fun loadStrokes(pageId: String): List<CanvasStroke> =
+        strokeDao.getForPage(pageId).map(StrokeSerialization::toCanvasStroke)
 
-    /** Atomically rewrites the page's strokes — canvas auto-save (handles erase/undo too). */
-    suspend fun replaceStrokes(pageId: String, strokes: List<Stroke>, isAiInk: Boolean = false) {
+    /** Atomically rewrites the page's strokes — canvas auto-save (handles erase/undo/lasso too). */
+    suspend fun replaceStrokes(pageId: String, strokes: List<CanvasStroke>, isAiInk: Boolean = false) {
         val now = clock()
-        strokeDao.replaceForPage(
-            pageId,
-            strokes.map { stroke ->
-                StrokeSerialization.toEntity(
-                    stroke = stroke,
-                    id = newId(),
-                    pageId = pageId,
-                    createdAt = now,
-                    isAiInk = isAiInk,
-                )
-            },
-        )
+        strokeDao.replaceForPage(pageId, strokes.map { it.toEntity(pageId, now, isAiInk) })
         pageDao.touch(pageId, now)
         recordEdit(pageId, now)
     }
+
+    /**
+     * Serializes a [CanvasStroke] for storage, carrying its stable [CanvasStroke.id] as the row id
+     * and its [CanvasStroke.groupId] so a lasso group reloads grouped.
+     */
+    private fun CanvasStroke.toEntity(pageId: String, createdAt: Long, isAiInk: Boolean) =
+        StrokeSerialization.toEntity(
+            stroke = stroke,
+            id = id,
+            pageId = pageId,
+            createdAt = createdAt,
+            isAiInk = isAiInk,
+            groupId = groupId,
+        )
 
     /**
      * Lightweight stroke polylines for note-card thumbnails, normalized to 0..1.
