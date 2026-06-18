@@ -816,8 +816,11 @@ Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):
 5. Auth flow: GoogleSignIn (scope `CalendarScopes.CALENDAR`) → `GoogleAccountCredential` → `Calendar` service. Method-to-API mapping is documented in `GoogleCalendarProvider`.
 
 ### Outlook / Microsoft Graph OAuth setup (wired in FA-11)
-The code is complete; it only needs a real Azure app registration to function (placeholder ⇒ Outlook
-stays NotConfigured and the Events tab explains it). To enable it:
+**Pre-release step (required — do this last, before release):** the FA-11 code is complete and shipped,
+but Outlook is **non-functional until an Azure app is registered** and its client id / signature hash
+are wired in. Until then Outlook stays NotConfigured (the Events tab shows a sign-in prompt that does
+nothing and the calendar falls back to the device provider) — that's expected, not a bug. Registering
+the Azure app is deliberately deferred to a final step before release. To enable it:
 1. Azure Portal → **App registrations** → New registration. Under **Authentication → Add platform →
    Android**, enter package `ai.elrond` and your **signature hash** (base64 SHA-1 of the signing cert)
    — the portal then shows the exact redirect URI `msauth://ai.elrond/<URL-encoded signature hash>` and
@@ -867,6 +870,7 @@ discipline.)
 - AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v7** — most recently `strokes.groupId` was added in `MIGRATION_6_7` for FA-9 lasso-selection groups (and `pending_suggestions` in `MIGRATION_5_6` for FA-2 background extraction).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
+- **Outlook Azure app registration — required final step before release.** FA-11's Outlook integration is fully coded but ships **inert** until an Azure app is registered and `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` are set (see *Outlook / Microsoft Graph OAuth setup*). This is intentionally deferred to a final pre-release task; until done, Outlook stays NotConfigured and the calendar falls back to the device provider (not a bug). Pairs with the Anthropic-key release blocker above.
 - **16 KB page size — resolved (FA-7).** All native libs, incl. ML Kit's `libdigitalink.so`, are 16 KB (`0x4000`) LOAD-segment aligned (verified in the built APK), via `digital-ink-recognition` 19.0.0 + `useLegacyPackaging = false`. No longer a release blocker. (The earlier FA-6 "accepted risk" framing was based on stale data — an aligned ML Kit build shipped Aug 2025.)
 
 ## Environment Notes (build)
