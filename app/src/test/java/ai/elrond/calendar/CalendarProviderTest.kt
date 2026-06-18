@@ -29,6 +29,21 @@ class CalendarProviderTest {
     }
 
     @Test
+    fun `createOrDeviceFallback degrades unconfigured providers to the device calendar`() {
+        // Google OAuth isn't wired, and the test build has no Outlook client id — both fall back.
+        assertTrue(
+            CalendarProviderFactory.createOrDeviceFallback(CalendarProviderType.GOOGLE, context) is DeviceCalendarProvider,
+        )
+        assertTrue(
+            CalendarProviderFactory.createOrDeviceFallback(CalendarProviderType.OUTLOOK, context) is DeviceCalendarProvider,
+        )
+        // Device is always available.
+        assertTrue(
+            CalendarProviderFactory.createOrDeviceFallback(CalendarProviderType.DEVICE, context) is DeviceCalendarProvider,
+        )
+    }
+
+    @Test
     fun `google stub is unauthenticated and fails every call`() = runTest {
         val provider = GoogleCalendarProvider(googleConfig())
         assertTrue(!provider.isAuthenticated)
@@ -41,12 +56,10 @@ class CalendarProviderTest {
     }
 
     @Test
-    fun `outlook stub is unauthenticated and fails every call`() = runTest {
-        val provider = OutlookCalendarProvider(
-            OAuthConfig("id", "redirect", listOf("Calendars.ReadWrite"), tenantId = "common"),
-        )
-        assertTrue(provider.createEvent(sampleEvent()).isFailure)
-        assertTrue(provider.getCalendars().exceptionOrNull() is CalendarNotAuthenticatedException)
+    fun `NoOpOutlookAuthProvider stays not-configured and refuses tokens`() = runTest {
+        val auth = NoOpOutlookAuthProvider()
+        assertEquals(OutlookAuthState.NotConfigured, auth.state.value)
+        assertTrue(auth.currentToken().exceptionOrNull() is CalendarNotAuthenticatedException)
     }
 
     private fun googleConfig() = OAuthConfig("id", "ai.elrond:/oauth2redirect", listOf("scope"))

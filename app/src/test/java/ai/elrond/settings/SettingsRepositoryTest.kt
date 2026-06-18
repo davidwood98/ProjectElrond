@@ -1,6 +1,7 @@
 package ai.elrond.settings
 
 import ai.elrond.ai.TriggerMode
+import ai.elrond.calendar.CalendarProviderType
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
@@ -74,5 +75,10 @@ class SettingsRepositoryTest {
         // Out-of-range threshold is clamped to the 0–10% range.
         repo.setLassoSnapBackThreshold(0.5f)
         assertEquals(0.10f, repo.lassoSnapBackThreshold.first(), 1e-4f)
+
+        // FA-11 calendar provider: default DEVICE, round-trips to OUTLOOK.
+        assertEquals(CalendarProviderType.DEVICE, repo.calendarProvider.first())
+        repo.setCalendarProvider(CalendarProviderType.OUTLOOK)
+        assertEquals(CalendarProviderType.OUTLOOK, repo.calendarProvider.first())
     }
 }

@@ -1,3 +1,4 @@
+import java.net.URLEncoder
 import java.util.Properties
 
 plugins {
@@ -33,6 +34,28 @@ android {
             "ANTHROPIC_API_KEY",
             "\"${localProperties.getProperty("anthropic.apiKey", "")}\"",
         )
+
+        // Outlook / Microsoft Graph OAuth (FA-11). All values come from local.properties
+        // (gitignored) — the Azure app client id must never be committed, same posture as the
+        // Anthropic key. Blank client id => the app runs with Outlook disabled (Events tab shows
+        // a sign-in prompt that explains it isn't configured). See CLAUDE.md → Outlook OAuth setup.
+        val outlookClientId = localProperties.getProperty("outlook.clientId", "")
+        val outlookTenantId = localProperties.getProperty("outlook.tenantId", "common")
+        // The package-signature hash (base64) from the Azure "Android" platform registration. The
+        // manifest redirect path uses it raw; the MSAL redirect_uri uses the URL-encoded form.
+        val outlookSignatureHash = localProperties.getProperty("outlook.signatureHash", "")
+        val outlookRedirectUri = if (outlookSignatureHash.isNotBlank()) {
+            "msauth://$applicationId/${URLEncoder.encode(outlookSignatureHash, "UTF-8")}"
+        } else {
+            ""
+        }
+        buildConfigField("String", "OUTLOOK_CLIENT_ID", "\"$outlookClientId\"")
+        buildConfigField("String", "OUTLOOK_TENANT_ID", "\"$outlookTenantId\"")
+        buildConfigField("String", "OUTLOOK_REDIRECT_URI", "\"$outlookRedirectUri\"")
+        // The MSAL BrowserTabActivity intent-filter path (manifest). Raw signature hash; a harmless
+        // placeholder keeps the manifest valid when Outlook isn't configured.
+        manifestPlaceholders["msalRedirectPath"] =
+            outlookSignatureHash.ifBlank { "PLACEHOLDER_SIGNATURE_HASH" }
     }
 
     buildTypes {
@@ -137,6 +160,15 @@ dependencies {
     implementation(libs.mlkit.digital.ink.recognition)
     implementation(libs.kotlinx.coroutines.play.services)
 
+    // Outlook calendar (FA-11): MSAL for OAuth, Ktor for Microsoft Graph REST calls.
+    // Ktor (over the heavy Graph SDK) keeps OutlookCalendarProvider unit-testable with
+    // ktor-client-mock — the same HTTP-mock pattern :aibackend uses for Anthropic.
+    implementation(libs.msal)
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.cio)
+    implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
+
     // Unit tests (JVM + Robolectric for real Room DAO/migration coverage)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -147,6 +179,9 @@ dependencies {
     testImplementation(libs.androidx.test.core.ktx)
     testImplementation(libs.androidx.room.testing)
     testImplementation(libs.androidx.work.testing)
+    testImplementation(libs.ktor.client.mock) // mock Microsoft Graph HTTP — never hit the real API
+
+    androidTestImplementation(libs.ktor.client.mock)
 
     // Instrumented tests
     androidTestImplementation(libs.androidx.junit)

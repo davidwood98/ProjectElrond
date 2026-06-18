@@ -1,6 +1,7 @@
 package ai.elrond.ui
 
 import ai.elrond.ai.TriggerMode
+import ai.elrond.calendar.CalendarProviderType
 import ai.elrond.settings.SettingsRepository
 import ai.elrond.settings.SettingsViewModel
 import androidx.compose.foundation.layout.Arrangement
@@ -68,6 +69,7 @@ fun SettingsScreen(
     val confirmCalendar by viewModel.confirmCalendarExtraction.collectAsStateWithLifecycle()
     val snapBackEnabled by viewModel.lassoSnapBackEnabled.collectAsStateWithLifecycle()
     val snapBackThreshold by viewModel.lassoSnapBackThreshold.collectAsStateWithLifecycle()
+    val calendarProvider by viewModel.calendarProvider.collectAsStateWithLifecycle()
 
     var draft by remember(trigger) { mutableStateOf(trigger) }
     // Local slider position, re-seeded whenever the persisted threshold changes (e.g. when toggling
@@ -214,6 +216,27 @@ fun SettingsScreen(
                 checked = aiSelectedOnCreate,
                 onCheckedChange = viewModel::setAiNoteSelectedOnCreate,
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text("Calendar", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Which calendar the Events tab reads. Device uses your phone's calendar; Outlook " +
+                    "connects your Microsoft account — sign in from Calendar → Events.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CalendarProviderType.entries.forEach { type ->
+                    FilterChip(
+                        selected = calendarProvider == type,
+                        onClick = { viewModel.setCalendarProvider(type) },
+                        label = {
+                            Text(type.name.lowercase().replaceFirstChar { it.uppercase() })
+                        },
+                    )
+                }
+            }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 

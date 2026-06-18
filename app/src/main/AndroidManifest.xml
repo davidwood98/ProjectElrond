@@ -30,6 +30,25 @@
             </intent-filter>
         </activity>
 
+        <!-- Outlook OAuth (FA-11): MSAL captures the browser redirect after interactive sign-in
+             via this activity. The scheme/host/path must match the redirect URI registered for the
+             Azure app ("Android" platform). The path is the base64 package-signature hash, injected
+             from local.properties (outlook.signatureHash) via the msalRedirectPath placeholder; a
+             harmless placeholder keeps the manifest valid when Outlook isn't configured. -->
+        <activity
+            android:name="com.microsoft.identity.client.BrowserTabActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="msauth"
+                    android:host="${applicationId}"
+                    android:path="/${msalRedirectPath}" />
+            </intent-filter>
+        </activity>
+
         <!-- @HiltWorker needs the Hilt WorkerFactory (provided via Configuration.Provider on
              ElrondApplication), so remove WorkManager's default on-demand initializer. -->
         <provider
