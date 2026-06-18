@@ -23,6 +23,9 @@ androidxTest = "1.6.1"
 androidxTestRunner = "1.6.2"
 hilt = "2.54"
 androidxHilt = "1.2.0"
+# MSAL (Outlook OAuth). Microsoft recommends the "8.+" range; pinned to a Maven Central
+# release for reproducibility (FA-11). Bump deliberately and re-run the device auth check.
+msal = "7.0.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -78,6 +81,7 @@ hilt-android-testing = { group = "com.google.dagger", name = "hilt-android-testi
 androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "androidxHilt" }
 androidx-hilt-work = { group = "androidx.hilt", name = "hilt-work", version.ref = "androidxHilt" }
 androidx-hilt-compiler = { group = "androidx.hilt", name = "hilt-compiler", version.ref = "androidxHilt" }
+msal = { group = "com.microsoft.identity.client", name = "msal", version.ref = "msal" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

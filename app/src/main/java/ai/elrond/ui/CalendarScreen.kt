@@ -1,9 +1,19 @@
 package ai.elrond.ui
 
+import ai.elrond.calendar.CalendarEvent
 import ai.elrond.calendar.CalendarGrid
 import ai.elrond.calendar.DayActivity
 import ai.elrond.notes.CalendarViewModel
+import ai.elrond.notes.EventsUiState
+import ai.elrond.notes.EventsViewModel
 import ai.elrond.notes.NotePage
+import android.app.Activity
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -59,6 +69,7 @@ private enum class CalendarMode { MONTH, WEEK, EVENTS }
 
 private val MONTH_TITLE = DateTimeFormatter.ofPattern("MMMM yyyy")
 private val DAY_TIME = DateTimeFormatter.ofPattern("HH:mm")
+private val EVENT_STAMP = DateTimeFormatter.ofPattern("EEE, d MMM · HH:mm")
 
 /** Muted-green dot marks days a note was created; dark-grey dot marks days one was edited. */
 private val CreatedDotColor = Color(0xFF66BB6A)
@@ -75,6 +86,7 @@ fun CalendarScreen(
     onOpenNote: (pageId: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CalendarViewModel = hiltViewModel(),
+    eventsViewModel: EventsViewModel = hiltViewModel(),
 ) {
     val activity by viewModel.activityByDay.collectAsStateWithLifecycle()
     val today = remember { LocalDate.now() }
@@ -162,7 +174,7 @@ fun CalendarScreen(
                     }
                 }
             }
-            CalendarMode.EVENTS -> EventsPlaceholder()
+            CalendarMode.EVENTS -> EventsTab(eventsViewModel)
         }
 
         if (mode != CalendarMode.EVENTS) {
@@ -354,16 +366,149 @@ private fun Legend(modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * The Events tab: shows upcoming events from the selected calendar provider, or — when Outlook is
+ * selected but not connected — a standard "Sign in with Microsoft" link (per FA-11). Stateless about
+ * Graph/MSAL; everything comes from [EventsViewModel.uiState].
+ */
 @Composable
-private fun EventsPlaceholder() {
+private fun EventsTab(viewModel: EventsViewModel) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val activity = context as? Activity
+
+    when (val s = state) {
+        is EventsUiState.Loading -> CenteredEvents {
+            CircularProgressIndicator()
+        }
+
+        is EventsUiState.NotConfigured -> OutlookSignInPrompt(
+            caption = "Outlook isn't configured in this build. Add an Azure client id to " +
+                "local.properties to connect your Microsoft account (see CLAUDE.md).",
+            onSignIn = { activity?.let(viewModel::signIn) },
+        )
+
+        is EventsUiState.NeedsSignIn -> OutlookSignInPrompt(
+            caption = "Connect your Microsoft account to see your Outlook calendar here.",
+            onSignIn = { activity?.let(viewModel::signIn) },
+        )
+
+        is EventsUiState.Error -> CenteredEvents {
+            Text(
+                "Couldn't load events:\n${s.message}",
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.error,
+            )
+            androidx.compose.material3.TextButton(onClick = viewModel::retry) { Text("Retry") }
+        }
+
+        is EventsUiState.Events -> EventsList(state = s, onSignOut = viewModel::signOut)
+    }
+}
+
+@Composable
+private fun CenteredEvents(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun OutlookSignInPrompt(caption: String, onSignIn: () -> Unit) {
+    CenteredEvents {
         Text(
-            "Calendar events will appear here.\n\nThis is where an integrated calendar " +
-                "(device, Google, or Outlook via the CalendarProvider layer) will populate " +
-                "full event details. Wiring is stubbed for now — see CLAUDE.md.",
+            "Outlook calendar",
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            caption,
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        MicrosoftSignInButton(onClick = onSignIn)
+    }
+}
+
+@Composable
+private fun EventsList(state: EventsUiState.Events, onSignOut: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (state.providerType == ai.elrond.calendar.CalendarProviderType.OUTLOOK) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    state.signedInAs?.let { "Signed in as $it" } ?: "Outlook calendar",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                androidx.compose.material3.TextButton(onClick = onSignOut) { Text("Sign out") }
+            }
+        }
+        if (state.events.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "No upcoming events.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(state.events, key = { it.id ?: (it.title + it.startTime) }) { event ->
+                    EventCard(event)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EventCard(event: CalendarEvent) {
+    val zone = java.time.ZoneId.systemDefault()
+    val start = java.time.Instant.ofEpochMilli(event.startTime).atZone(zone)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        tonalElevation = 2.dp,
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(event.title.ifBlank { "(untitled)" }, style = MaterialTheme.typography.titleSmall)
+            Text(
+                EVENT_STAMP.format(start),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            event.location?.takeIf { it.isNotBlank() }?.let {
+                Text("📍 $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/**
+ * A standard "Sign in with Microsoft" button: the four-colour Microsoft squares + label, matching
+ * Microsoft's branding guidance, drawn inline so it needs no bundled asset.
+ */
+@Composable
+private fun MicrosoftSignInButton(onClick: () -> Unit) {
+    androidx.compose.material3.OutlinedButton(onClick = onClick) {
+        Canvas(modifier = Modifier.size(18.dp)) {
+            val gap = size.width * 0.08f
+            val cell = (size.width - gap) / 2f
+            drawRect(Color(0xFFF25022), size = androidx.compose.ui.geometry.Size(cell, cell), topLeft = Offset(0f, 0f))
+            drawRect(Color(0xFF7FBA00), size = androidx.compose.ui.geometry.Size(cell, cell), topLeft = Offset(cell + gap, 0f))
+            drawRect(Color(0xFF00A4EF), size = androidx.compose.ui.geometry.Size(cell, cell), topLeft = Offset(0f, cell + gap))
+            drawRect(Color(0xFFFFB900), size = androidx.compose.ui.geometry.Size(cell, cell), topLeft = Offset(cell + gap, cell + gap))
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Text("Sign in with Microsoft")
     }
 }

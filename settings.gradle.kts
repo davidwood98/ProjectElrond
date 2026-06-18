@@ -22,6 +22,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // MSAL (com.microsoft.identity:common) pulls com.microsoft.device.display:display-mask,
+        // which is only published to Microsoft's Duo SDK feed — not Central/Google (FA-11).
+        maven {
+            url = uri("https://pkgs.dev.azure.com/MicrosoftDeviceSDK/DuoSDK-Public/_packaging/Duo-SDK-Feed/maven/v1")
+            content { includeGroupByRegex("com\\.microsoft\\.device.*") }
+        }
     }
 }
 

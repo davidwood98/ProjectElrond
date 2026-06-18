@@ -718,6 +718,72 @@ action plan, not an app regression).
   and, more to the point, `graphicsLayer` does no per-frame mesh redraw, so the 60fps budget is met by
   construction rather than by a fragile off-screen timing test.)
 
+## FA-11 — Outlook calendar integration (2026-06-18)
+
+First real cloud-calendar backend: the stubbed `OutlookCalendarProvider` is now a working Microsoft
+Graph client authenticated with MSAL, wired into the factory and surfaced in a populated **Events**
+tab. **274 app + aibackend JVM/Robolectric tests pass** (0 failures; was 254 — app 250 + aibackend
+24) plus a new instrumented test; `:app:compileDebugKotlin` and `:app:assembleDebugAndroidTest` build
+on the WSL Linux SDK. **No schema change — DB stays v7** (the provider preference is a DataStore
+pref; no calendar-event persistence change). The MSAL/Graph network paths are **device-validated**,
+not unit-tested (MSAL needs a real Activity + registered Azure app); the Graph mapping, the auth
+*seam*, and the Events-tab state machine are JVM-tested.
+
+- **Transport: Ktor REST, not the Graph SDK.** `OutlookCalendarProvider` calls Graph v1.0 over Ktor +
+  kotlinx-serialization (`calendar/GraphDtos.kt`), the same HTTP stack `:aibackend` uses for Anthropic
+  — so it is fully unit-testable with `ktor-client-mock` and stays light. Endpoints: `GET /me/calendars`,
+  `GET /me/calendarView?startDateTime=…&endDateTime=…` (ISO-8601; `Prefer: outlook.timezone="UTC"` so
+  the offset-less `dateTime` parses as UTC), `POST /me/events` (or `/me/calendars/{id}/events`),
+  `PATCH`/`DELETE /me/events/{id}`. `CalendarEvent.sourceNoteId` round-trips as a Graph
+  **singleValueExtendedProperty** (`String {GUID} Name ElrondSourceNoteId`), written on create and read
+  via `$expand`. Epoch-millis ↔ Graph `{dateTime,timeZone}` conversion is the pure, tested
+  `OutlookTimeMapper` (always UTC). All Graph calls stay inside the provider — nothing Graph-specific
+  reaches a ViewModel (same rule as the Anthropic API).
+- **Auth seam keeps MSAL out of everything else.** `OutlookAuthProvider` (`calendar/OutlookAuth.kt`)
+  is a small MSAL-free interface — `state: StateFlow<OutlookAuthState>` (NotConfigured / SignedOut /
+  SignedIn), `currentToken()` (silent), `signIn(activity)` (interactive), `signOut()`. The **only** file
+  importing `com.microsoft.identity.client.*` is `MsalOutlookAuthProvider` (single-account mode); the
+  calendar provider takes a `tokenProvider: suspend () -> Result<String>` lambda, so tests and the rest
+  of the app never touch MSAL. `NoOpOutlookAuthProvider` is the fallback when unconfigured (or in
+  tests). Per the spec: `currentToken` is silent-first; a `MsalUiRequiredException` (or any silent
+  failure) returns a failed Result **without** showing UI, and the Events tab offers interactive
+  sign-in; `MsalException`s are caught into Results, never thrown.
+- **Config never committed.** Azure **client id / tenant / signature hash** come from `local.properties`
+  → `BuildConfig.OUTLOOK_*` (same posture as the Anthropic key). The MSAL JSON config is **generated at
+  runtime** into the app cache (so no `res/raw` file carries the client id). Blank client id ⇒
+  `CalendarProviderFactory.isConfigured(OUTLOOK)` is false ⇒ `CalendarModule` binds the No-op provider,
+  so the Hilt graph (and instrumented tests) construct **without ever loading MSAL**.
+- **Graceful degradation.** `CalendarProviderFactory.create` builds the right provider;
+  `createOrDeviceFallback` returns `DeviceCalendarProvider` when the requested provider can't work in
+  this build (Google still a stub; Outlook with no client id) — so a misconfigured preference reads the
+  device calendar instead of crashing. Outlook *with* a client id is returned even when signed out: the
+  Events tab shows the sign-in prompt rather than silently falling back. `CalendarProviders` (a
+  `@Singleton`) caches one provider (and its Ktor client) per type.
+- **Events tab.** `EventsViewModel` (`notes/EventsViewModel.kt`, `@HiltViewModel` with the same
+  test-seam + `@Inject`-secondary pattern as CanvasViewModel) resolves the selected provider + Outlook
+  auth state into an `EventsUiState` (Loading / NotConfigured / NeedsSignIn / Events / Error) and loads
+  the next 30 days. The tab (`ui/CalendarScreen.kt`) renders a standard **"Sign in with Microsoft"**
+  button (four-square logo drawn inline) when Outlook isn't connected, the upcoming-events list (with
+  "Signed in as … / Sign out") when it is, and a retry on error.
+- **Settings.** A new **Calendar** section in `SettingsScreen` exposes the Device / Google / Outlook
+  picker (the `calendarProvider` DataStore pref existed but was never surfaced); connecting Outlook
+  happens from Calendar → Events.
+- **Manifest / deps.** MSAL `BrowserTabActivity` redirect handler added (`scheme=msauth`,
+  `host=${applicationId}`, `path=/${msalRedirectPath}` from `outlook.signatureHash`); deps add
+  `com.microsoft.identity.client:msal` (pinned `7.0.0`; MS recommends `8.+`) + Ktor client on `:app`.
+  MSAL's transitive `com.microsoft.device.display:display-mask` is only on Microsoft's **Duo SDK Maven
+  feed**, added to `settings.gradle.kts` (scoped to `com.microsoft.device.*`).
+
+New/updated tests: `OutlookCalendarProviderTest` (12; ktor-client-mock — endpoints, headers,
+event↔Graph mapping incl. the source-note extended property, calendar-scoped create, missing-token
+short-circuit, non-auth token-failure propagation, Graph-error mapping, `OutlookTimeMapper` round-trip
+with a literal UTC assertion), `EventsViewModelTest` (7; the
+NotConfigured/NeedsSignIn/Events/Error state machine + sign-in transition + device path),
+`CalendarProviderTest` (factory routing, `createOrDeviceFallback`, NoOp auth), `SettingsRepositoryTest`
+(+calendar-provider round-trip), and the instrumented `CalendarScreenTest`
+(+`events_tab_shows_microsoft_sign_in_when_outlook_not_connected`; the old placeholder assertion is
+gone). The MSAL flow itself is device/manual-verified like the other on-device pieces.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):
@@ -730,11 +796,12 @@ Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):
         ┌───────────────┼────────────────────┐
         ▼               ▼                     ▼
  DeviceCalendar   GoogleCalendar       OutlookCalendar
- Provider (REAL)  Provider (stub)      Provider (stub)
- CalendarContract  Google Cal API v3    MS Graph API
-                   + Google Sign-In     + MSAL
+ Provider (REAL)  Provider (stub)      Provider (REAL — FA-11)
+ CalendarContract  Google Cal API v3    MS Graph v1.0 (Ktor REST)
+                   + Google Sign-In     + MSAL (OutlookAuthProvider seam)
         ▲
- CalendarProviderFactory.create(type, context)  ← type from SettingsRepository.calendarProvider (DataStore)
+ CalendarProviderFactory.create(type, context, outlookAuth)  ← type from SettingsRepository.calendarProvider (DataStore)
+ CalendarProviderFactory.createOrDeviceFallback(...)         ← degrades unconfigured providers to DEVICE
 ```
 
 - **CalendarEvent** model: id, title, description, startTime, endTime, location, attendees, calendarId, `sourceNoteId` (links to originating note), `isAiSuggested`. Persisted in the `calendar_events` Room table (DB v4, `MIGRATION_3_4`) — AI suggestions (`isAiSuggested=1, isConfirmed=0`) and confirmed events. **No write to any real calendar without explicit user confirmation.**
@@ -748,18 +815,40 @@ Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):
 4. Put the client id into `CalendarProviderFactory.googleConfig` (or, better, inject from a secured config). Add the Google Sign-In + `com.google.api-client`/`google-api-services-calendar` dependencies.
 5. Auth flow: GoogleSignIn (scope `CalendarScopes.CALENDAR`) → `GoogleAccountCredential` → `Calendar` service. Method-to-API mapping is documented in `GoogleCalendarProvider`.
 
-### Outlook / Microsoft Graph OAuth setup (for when OutlookCalendarProvider is wired)
-1. Azure Portal → **App registrations** → New registration (single or multi-tenant).
-2. Add a **Mobile/desktop** redirect URI `msauth://ai.elrond/<base64 signature hash>`.
-3. API permissions → Microsoft Graph → delegated **Calendars.ReadWrite**.
-4. Put the application (client) id + tenant into `CalendarProviderFactory.outlookConfig`. Add the **MSAL** (`com.microsoft.identity.client`) + Microsoft Graph SDK dependencies.
-5. Auth flow: MSAL `acquireToken` (scope `Calendars.ReadWrite`) → `GraphServiceClient`. Mapping documented in `OutlookCalendarProvider`.
+### Outlook / Microsoft Graph OAuth setup (wired in FA-11)
+The code is complete; it only needs a real Azure app registration to function (placeholder ⇒ Outlook
+stays NotConfigured and the Events tab explains it). To enable it:
+1. Azure Portal → **App registrations** → New registration. Under **Authentication → Add platform →
+   Android**, enter package `ai.elrond` and your debug/release **signature hash** (base64) — the portal
+   then shows the exact redirect URI `msauth://ai.elrond/<base64 signature hash>` and a manifest snippet.
+2. API permissions → Microsoft Graph → delegated **Calendars.ReadWrite** (and grant consent).
+3. Add to `local.properties` (gitignored — never committed):
+   ```
+   outlook.clientId=<application (client) id>
+   outlook.tenantId=common        # or your tenant id; "common" = personal + work/school accounts
+   outlook.signatureHash=<base64 package-signature hash from the Android platform registration>
+   ```
+   `app/build.gradle.kts` feeds these into `BuildConfig.OUTLOOK_CLIENT_ID/TENANT_ID/REDIRECT_URI` and the
+   `msalRedirectPath` manifest placeholder (the `BrowserTabActivity` intent-filter). `CalendarProviderFactory.outlookConfig`
+   reads them — nothing is hardcoded.
+4. Dependencies are already added: **MSAL** (`com.microsoft.identity.client:msal`, pinned `7.0.0`; MS
+   recommends `8.+`) + Ktor client; MSAL's `com.microsoft.device.display:display-mask` needs Microsoft's
+   **Duo SDK Maven feed** (already in `settings.gradle.kts`).
+5. Auth flow: `MsalOutlookAuthProvider` (single-account) does silent `acquireTokenSilentAsync` first,
+   interactive `signIn` on demand (scope `Calendars.ReadWrite`); `OutlookCalendarProvider` calls Graph
+   v1.0 over Ktor REST. The MSAL config JSON is generated at runtime from BuildConfig — no committed
+   `res/raw` file holds the client id. Method-to-endpoint mapping is documented in `OutlookCalendarProvider`.
 
 ### iOS port reuse
 `CalendarProvider`, `CalendarEvent`, `DateRange`, and the AI extractor are pure/portable. An iOS port implements the same interface with EventKit (device) and the same Google/Graph REST APIs — the factory + DataStore preference pattern carries over unchanged.
 
 ### Known accepted risk (OAuth credentials)
-OAuth client ids in `CalendarProviderFactory` are placeholders. For production, client ids/secrets must not ship in the APK — use a server-side token exchange or platform secure storage, mirroring the Anthropic-key risk below.
+The Outlook (Azure) client id now comes from `local.properties` → `BuildConfig.OUTLOOK_CLIENT_ID`
+(FA-11) — never committed, but still extractable from a distributed APK (same posture as the Anthropic
+key). Google's client id is still a placeholder in `CalendarProviderFactory`. For production, OAuth
+client ids must not ship in the APK — use a server-side token exchange or platform secure storage.
+(A public-client OAuth *client id* is not itself a secret, but treat it with the same release
+discipline.)
 
 ## Security posture (audited 2026-06-04)
 
@@ -767,11 +856,12 @@ OAuth client ids in `CalendarProviderFactory` are placeholders. For production, 
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
 - AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v7** — most recently `strokes.groupId` was added in `MIGRATION_6_7` for FA-9 lasso-selection groups (and `pending_suggestions` in `MIGRATION_5_6` for FA-2 background extraction).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
-- OAuth client ids in `CalendarProviderFactory` are placeholders — for production, do not embed them; use a server-side token exchange (same posture as the Anthropic key).
+- OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
 - **16 KB page size — resolved (FA-7).** All native libs, incl. ML Kit's `libdigitalink.so`, are 16 KB (`0x4000`) LOAD-segment aligned (verified in the built APK), via `digital-ink-recognition` 19.0.0 + `useLegacyPackaging = false`. No longer a release blocker. (The earlier FA-6 "accepted risk" framing was based on stale data — an aligned ML Kit build shipped Aug 2025.)
 
 ## Environment Notes (build)
 
 - Two SDKs are in play: Android Studio (Windows) uses `sdk.dir=C:\...\Android\Sdk` in `local.properties`; WSL builds use the Linux SDK at `~/android-sdk` (swap `sdk.dir` temporarily during WSL builds, then restore — never leave the WSL path in the file or Studio breaks).
 - The Anthropic API key is read from `anthropic.apiKey` in `local.properties` into `BuildConfig.ANTHROPIC_API_KEY`. Without it the app runs with the AI disabled (a config-error card appears on `/Q`).
+- Outlook (FA-11): `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` in `local.properties` → `BuildConfig.OUTLOOK_*` + the `msalRedirectPath` manifest placeholder. Without `outlook.clientId` the app runs with Outlook disabled (the Events tab shows a "not configured" sign-in prompt; the calendar falls back to the device provider). MSAL's `com.microsoft.device.display:display-mask` resolves only from Microsoft's **Duo SDK Maven feed** (added to `settings.gradle.kts`) — a clean Gradle cache needs network to fetch it.
 - ML Kit downloads the en-US handwriting model on first `/Q` use — first trigger needs network.

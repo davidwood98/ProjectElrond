@@ -1,6 +1,7 @@
 package ai.elrond.settings
 
 import ai.elrond.ai.TriggerMode
+import ai.elrond.calendar.CalendarProviderType
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -47,6 +48,14 @@ class SettingsViewModel @Inject constructor(
 
     fun setStylusOnly(enabled: Boolean) {
         viewModelScope.launch { repository.setStylusOnly(enabled) }
+    }
+
+    /** The user's preferred calendar backend (Device / Google / Outlook). */
+    val calendarProvider: StateFlow<CalendarProviderType> = repository.calendarProvider
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CalendarProviderType.DEVICE)
+
+    fun setCalendarProvider(type: CalendarProviderType) {
+        viewModelScope.launch { repository.setCalendarProvider(type) }
     }
 
     fun setAiNoteSelectedOnCreate(enabled: Boolean) {
