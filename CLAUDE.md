@@ -819,8 +819,18 @@ Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):
 The code is complete; it only needs a real Azure app registration to function (placeholder ⇒ Outlook
 stays NotConfigured and the Events tab explains it). To enable it:
 1. Azure Portal → **App registrations** → New registration. Under **Authentication → Add platform →
-   Android**, enter package `ai.elrond` and your debug/release **signature hash** (base64) — the portal
-   then shows the exact redirect URI `msauth://ai.elrond/<base64 signature hash>` and a manifest snippet.
+   Android**, enter package `ai.elrond` and your **signature hash** (base64 SHA-1 of the signing cert)
+   — the portal then shows the exact redirect URI `msauth://ai.elrond/<URL-encoded signature hash>` and
+   a manifest snippet. Get the hash for the **debug** keystore (use the release keystore for release; you
+   can register both redirect URIs on one app):
+   ```bash
+   # macOS/Linux/WSL  (Windows debug keystore: %USERPROFILE%\.android\debug.keystore)
+   keytool -exportcert -alias androiddebugkey -keystore ~/.android/debug.keystore \
+     -storepass android -keypass android | openssl sha1 -binary | openssl base64
+   ```
+   The base64 output is `outlook.signatureHash` below. NOTE: the build URL-encodes it for the MSAL
+   redirect_uri while the manifest uses it raw — both are derived from this one value, so they always
+   match as long as the value you register in Azure equals `outlook.signatureHash`.
 2. API permissions → Microsoft Graph → delegated **Calendars.ReadWrite** (and grant consent).
 3. Add to `local.properties` (gitignored — never committed):
    ```
