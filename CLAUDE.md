@@ -56,6 +56,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   edge-aware clamp. Precedents: the unclear-request card centres on screen (FA-7); the lasso
   selection toolbar centres over the selection and clamps to both screen edges (FA-9, via the
   measured container + toolbar sizes).
+- **Canvas rendering has three layers — know which to use.** The ink canvas (`canvas/InkCanvas.kt`)
+  is a `FrameLayout` of: (1) **dry ink** — finished strokes in `DryStrokesView` (a plain
+  hardware-accelerated `View`, repainted via `invalidate()` off a StateFlow); (2) **wet ink** —
+  `InProgressStrokesView`, a front-buffered `SurfaceView` composited **on top of the whole window**
+  (`setZOrderOnTop`, warmed by `eagerInit()`); (3) **Compose overlays above the `AndroidView`** — the
+  lasso selection box/handles and the moving selected ink (`ui/SelectionLayer.kt`), and AI notes
+  (`ui/NoteCanvasScreen.kt`). `CanvasStrokeRenderer` (used by all ink drawing) calls `Canvas.drawMesh`
+  and is **hardware-only** — it throws "software rendering doesn't support meshes" on a software
+  Bitmap canvas (so don't unit-test ink rendering off-screen; use an instrumented Compose
+  `captureToImage` test).
+- **To move/scale content live during a gesture, use a layer/layout modifier reading the gesture
+  state — NOT a transform recomputed inside a draw lambda.** Compose does not re-run a `Canvas`/
+  `drawBehind` draw lambda just because a value it captured changed, so a transform applied *inside*
+  the draw stays frozen at its first value (FA-10 burned two device passes on exactly this: the
+  selection box moved via `absoluteOffset` but the ink, transformed inside the draw, was frozen at the
+  origin). The fix is `Modifier.graphicsLayer { translationX/scaleX/transformOrigin = … }` (or
+  `Modifier.offset { … }`) — same mechanism as the box, re-applied every frame, and GPU-cheap (the
+  strokes rasterise once; the layer is just re-composited — no per-frame mesh redraw). See FA-10.
 
 ## Testing Conventions
 
@@ -622,6 +640,83 @@ identical content yields one suggestion), `RoomDaoTest` (+1: `groupId` round-tri
 (real ink move/scale/clone/bounds, no point loss). The existing VM tests took mechanical
 `finishedStrokes.value.map { it.stroke }` updates for the `CanvasStroke` element type. The
 `SelectionLayer` gestures are device/manual-verified like the other Compose canvas flows.
+
+## FA-10 — lasso move: live ghost preview + snap-back (2026-06-18)
+
+Second lasso *feature* increment (after FA-9's tool): a faded "ghost" of where a selection is
+moving **from**, plus a configurable **snap-back** when a move is released near its origin.
+**230 app + 24 aibackend JVM/Robolectric tests pass** (0 failures; was 208+24) plus new instrumented
+tests; `:app:testDebugUnitTest`, `:aibackend:test`, and `:app:assembleDebugAndroidTest` all build on
+the WSL Linux SDK. **No schema change — DB stays v7** (both new settings are DataStore preferences,
+so no Room migration). **Device-confirmed on a Galaxy Tab S (SM-X510, Android 16) 2026-06-18:** lasso
+move now drags the ink live, the faded origin ghost shows, and snap-back works. The live-move render
+took **two failed device passes** first (see the lesson below). Instrumented suite: **15/16 pass** —
+the FA-10 tests (incl. the on-screen `SelectionStrokesRenderTest`) and the rest are green; the lone
+failure is the **pre-existing** `DeviceCalendarProviderTest` (unrelated to FA-10 — on this device's
+calendar provider a deleted event is still returned by the follow-up query; see the instrumented-suite
+action plan, not an app regression).
+
+- **Live move + ghost render in the Compose `SelectionLayer`, transformed by a `graphicsLayer`.**
+  This is the hard-won lesson of FA-10 (two device passes failed first). The selected strokes' live
+  move/scale (full colour) and the faded origin **ghost** (own colour at 30% alpha) are drawn by
+  `SelectionLayer.SelectionStrokes` — a Compose `Canvas` calling the same `CanvasStrokeRenderer` via
+  `drawIntoCanvas`/`nativeCanvas`. The **transform is applied as a `Modifier.graphicsLayer`, never
+  inside the draw lambda.** Two dead ends and why:
+  1. *View layer* (FA-9 / FA-10 v1): a `SelectionStrokesView` sibling under the wet-ink
+     `InProgressStrokesView` (a `setZOrderOnTop(true)` front-buffer `SurfaceView`). Didn't render the
+     live move on-device. Removed.
+  2. *Compose Canvas with the transform inside the draw lambda* (FA-10 v2): still frozen at origin,
+     ghost never appeared. Root cause (device-confirmed): **Compose does not re-run a draw lambda
+     just because a captured value changed** — so the ink rasterised once at the origin and the
+     per-frame transform updates never reached the screen. The dashed selection box moved the whole
+     time because it uses a **layout modifier** (`absoluteOffset`), which re-applies every frame.
+  The fix mirrors the box: apply the transform as a **`graphicsLayer`** (same modifier class), which
+  re-applies every frame AND is GPU-cheap — the strokes rasterise **once** and the layer is just
+  re-composited, so there's **no per-frame mesh redraw** (`CanvasStrokeRenderer` uses `Canvas.drawMesh`,
+  which is hardware-only — a plain off-screen software Bitmap throws "software rendering doesn't
+  support meshes"). The strokes `Canvas` is `key`ed on the stroke list so a new/just-baked selection
+  re-rasterises while a drag (same list) does not; the ghost is a separate conditionally-composed
+  layer (`StrokeTransforms.recolorStroke`, alpha-only, reuses the immutable input batch). `InkCanvas`
+  keeps only the dry + wet layers and excludes the selected ids so they aren't drawn twice.
+  **Architectural rule:** to move/scale content live during a gesture, drive it with a **layer/layout
+  modifier** (`graphicsLayer` / `offset`) reading the gesture state — NOT a transform recomputed
+  inside a `Canvas`/`drawBehind` lambda, which Compose won't re-invalidate on a value change.
+- **Snap-back.** Pure `StrokeSelection.shouldSnapBack(transform, canvasWidth, canvasHeight, threshold)`:
+  normalised travel `sqrt((dx/w)² + (dy/h)²)`, **strict `<` threshold** (a release exactly at the
+  threshold commits), **moves only** (a scale never snaps), and **off** when threshold ≤ 0 or the
+  canvas size is unknown. Enforced in `CanvasViewModel.commitTransform()` *before* the bake: a snap
+  reverts the transform to identity with **no bake and no undo step**; otherwise it bakes as before.
+  Needs the canvas height, so `setCanvasSize(widthPx, heightPx)` gained the height arg (the
+  `NoteCanvasScreen` `onSizeChanged` caller passes it). Gating on a known size keeps the FA-9 VM tests
+  (which report no size) committing unchanged.
+- **Settings.** `SettingsRepository` adds `lassoSnapBackThreshold: Flow<Float>` (default **0.025** =
+  2.5%, clamped 0–`MAX_LASSO_SNAP_BACK_THRESHOLD` = 0.10) and `lassoSnapBackEnabled: Flow<Boolean>`
+  (default on) — the first `floatPreferencesKey` in the app. `SettingsViewModel` exposes both and
+  **couples** them per the spec: setting the threshold to 0% auto-disables; toggling on while at 0%
+  restores the 0.025 default. New **"Interaction"** section in `SettingsScreen` (after "Canvas input"):
+  a Switch, a `Slider` (0–10%, 0.5% steps — the app's first Slider; greyed when off), and an
+  interactive `SnapBackPreview` (drag a dot, release inside the dashed threshold ring to see it snap).
+  `CanvasViewModel` collects both flows in its `@Inject` secondary constructor (the existing
+  `stylusOnly` pattern); the primary constructor keeps them as defaulted optional params so the JVM
+  tests construct it directly with `MutableStateFlow` fakes.
+- New/updated tests: `StrokeSelectionTest` (+10: `shouldSnapBack` within/beyond/boundary/zero/
+  unknown-size/scale-only/per-axis, `shouldShowGhost` none/idle/moving), `CanvasViewModelSelectionTest`
+  (snap-back: within = no bake, beyond = bake, exact boundary commits, 0% disables, toggle off
+  commits, no-canvas-size commits; plus a **strengthened** move-commit test that captures the baked
+  transform via the `onTransform(LiveTransform)` seam and asserts preview-doesn't-bake, the box
+  `displayBounds` tracks the live transform, the **final** transform bakes **once per stroke**, and a
+  cancel bakes nothing), `SettingsRepositoryTest` (+threshold/enabled round-trip + clamp), and new
+  `SettingsSnapBackCouplingTest` (+5: pure 0%→off / re-enable→restore-default coupling rules,
+  extracted to testable `SettingsViewModel` companion functions).
+- Instrumented (device-run; the VM tests can't see on-screen compositing — the gap that let the
+  broken live move ship twice): new **`SelectionStrokesRenderTest`** renders the real
+  `SelectionStrokes` over a white background and **pixel-asserts** the rasterised (navy) ink shifts by
+  the drag distance, and that the ghost renders at origin only while transforming — the on-screen
+  check no off-screen/VM test could make; `StrokeTransformsInstrumentedTest` (+`recolorStroke` keeps
+  points/geometry, changes only colour). (An earlier off-screen-Bitmap perf test was **removed**: it
+  crashed with "software rendering doesn't support meshes" — `CanvasStrokeRenderer` is hardware-only —
+  and, more to the point, `graphicsLayer` does no per-frame mesh redraw, so the 60fps budget is met by
+  construction rather than by a fragile off-screen timing test.)
 
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 

@@ -4,6 +4,7 @@ import ai.elrond.ai.TriggerMode
 import ai.elrond.settings.SettingsRepository
 import ai.elrond.settings.SettingsViewModel
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -38,6 +39,16 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Slider
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.hypot
 
 /** App settings: AI activation (command vs gesture), canvas input, AI responses, auto-extraction. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -55,8 +66,13 @@ fun SettingsScreen(
     val confirmEnabled by viewModel.extractionConfirmationEnabled.collectAsStateWithLifecycle()
     val confirmTodo by viewModel.confirmTodoExtraction.collectAsStateWithLifecycle()
     val confirmCalendar by viewModel.confirmCalendarExtraction.collectAsStateWithLifecycle()
+    val snapBackEnabled by viewModel.lassoSnapBackEnabled.collectAsStateWithLifecycle()
+    val snapBackThreshold by viewModel.lassoSnapBackThreshold.collectAsStateWithLifecycle()
 
     var draft by remember(trigger) { mutableStateOf(trigger) }
+    // Local slider position, re-seeded whenever the persisted threshold changes (e.g. when toggling
+    // snap-back on restores the default); persisted on release via onValueChangeFinished.
+    var snapBackPos by remember(snapBackThreshold) { mutableStateOf(snapBackThreshold) }
     val tooLong = draft.trim().length > SettingsRepository.MAX_TRIGGER_LENGTH
     val empty = draft.isBlank()
     val effectiveTrigger = if (!empty && !tooLong) draft.trim() else trigger
@@ -157,6 +173,35 @@ fun SettingsScreen(
                 checked = stylusOnly,
                 onCheckedChange = viewModel::setStylusOnly,
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text("Interaction", style = MaterialTheme.typography.titleMedium)
+            SettingRow(
+                title = "Snap selection back to origin",
+                subtitle = "When you nudge a lasso selection only a little and let go, it returns to " +
+                    "where it started — so a small accidental move doesn't shift your ink.",
+                checked = snapBackEnabled,
+                onCheckedChange = viewModel::setLassoSnapBackEnabled,
+            )
+            Text(
+                "Snap-back threshold: ${formatPercent(snapBackPos)}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (snapBackEnabled) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+            Slider(
+                value = snapBackPos,
+                onValueChange = { snapBackPos = it },
+                onValueChangeFinished = { viewModel.setLassoSnapBackThreshold(snapBackPos) },
+                valueRange = 0f..SettingsRepository.MAX_LASSO_SNAP_BACK_THRESHOLD,
+                steps = SNAP_BACK_SLIDER_STEPS,
+                enabled = snapBackEnabled,
+            )
+            SnapBackPreview(threshold = snapBackPos, enabled = snapBackEnabled)
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -266,3 +311,77 @@ private fun SettingRow(
         Switch(checked = checked, enabled = enabled, onCheckedChange = onCheckedChange)
     }
 }
+
+/** "2.5%" for a 0–1 fraction (one decimal). */
+private fun formatPercent(fraction: Float): String = "${"%.1f".format(fraction * 100f)}%"
+
+/**
+ * A feel-test for the snap-back threshold: an origin dot at the centre, a dashed ring at the snap
+ * radius ([threshold] × the box width), and a draggable dot that snaps back to the centre when
+ * released inside the ring — mirroring the canvas behaviour. Inert when snap-back is off.
+ */
+@Composable
+private fun SnapBackPreview(threshold: Float, enabled: Boolean) {
+    var dot by remember { mutableStateOf(Offset.Zero) } // offset from centre, px
+    val accent = MaterialTheme.colorScheme.primary
+    val originColor = MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                "Preview — drag the dot, release near the centre to snap back",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(modifier = Modifier.fillMaxWidth().height(SNAP_BACK_PREVIEW_DP.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(SNAP_BACK_PREVIEW_DP.dp)
+                        .align(Alignment.Center)
+                        .pointerInput(threshold, enabled) {
+                            detectDragGestures(
+                                onDragEnd = {
+                                    val s = size.width.toFloat()
+                                    if (enabled && s > 0f && hypot(dot.x / s, dot.y / s) < threshold) {
+                                        dot = Offset.Zero
+                                    }
+                                },
+                            ) { change, drag ->
+                                change.consume()
+                                val half = size.width / 2f
+                                dot = Offset(
+                                    (dot.x + drag.x).coerceIn(-half, half),
+                                    (dot.y + drag.y).coerceIn(-half, half),
+                                )
+                            }
+                        },
+                ) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val c = Offset(size.width / 2f, size.height / 2f)
+                        if (enabled && threshold > 0f) {
+                            drawCircle(
+                                color = accent.copy(alpha = 0.4f),
+                                radius = threshold * size.width,
+                                center = c,
+                                style = Stroke(
+                                    width = 2.dp.toPx(),
+                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f)),
+                                ),
+                            )
+                        }
+                        drawCircle(color = originColor, radius = 4.dp.toPx(), center = c)
+                        drawCircle(color = accent, radius = 7.dp.toPx(), center = c + dot)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Discrete slider stops for 0–10% in 0.5% steps (21 values → 19 between the endpoints). */
+private const val SNAP_BACK_SLIDER_STEPS = 19
+private const val SNAP_BACK_PREVIEW_DP = 160

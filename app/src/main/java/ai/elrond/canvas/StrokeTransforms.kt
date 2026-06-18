@@ -52,6 +52,23 @@ object StrokeTransforms {
     fun cloneStroke(stroke: Stroke, dx: Float, dy: Float): Stroke =
         transformStroke(stroke, LiveTransform(dx = dx, dy = dy))
 
+    /**
+     * A copy of [stroke] re-coloured to [colorIntArgb] with its geometry unchanged (FA-10). Used to
+     * draw the faded translucent "ghost" of a lasso selection at its original position during a
+     * move — the brush family/size/epsilon and all input points are preserved (the immutable input
+     * batch is reused), only the colour (and its alpha) change. Built once per gesture, never per
+     * frame.
+     */
+    fun recolorStroke(stroke: Stroke, colorIntArgb: Int): Stroke {
+        val brush = Brush.createWithColorIntArgb(
+            family = stroke.brush.family,
+            colorIntArgb = colorIntArgb,
+            size = stroke.brush.size,
+            epsilon = stroke.brush.epsilon,
+        )
+        return Stroke(brush, stroke.inputs)
+    }
+
     /** Axis-aligned bounds of a stroke's input points; a zero box when it has none. */
     fun strokeBounds(stroke: Stroke): SelectionBounds {
         val scratch = StrokeInput()

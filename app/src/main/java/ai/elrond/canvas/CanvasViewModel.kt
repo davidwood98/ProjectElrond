@@ -108,6 +108,10 @@ class CanvasViewModel(
     private val strokeBoundsOf: (Stroke) -> SelectionBounds = StrokeTransforms::strokeBounds,
     triggerModeFlow: Flow<TriggerMode>? = null,
     stylusOnlyFlow: Flow<Boolean>? = null,
+    /** Lasso-move snap-back threshold (fraction of canvas size); null keeps the default. */
+    lassoSnapBackThresholdFlow: Flow<Float>? = null,
+    /** Lasso-move snap-back on/off; null keeps the default (on). */
+    lassoSnapBackEnabledFlow: Flow<Boolean>? = null,
     /** Write-through for the palm-rejection preference (null in tests). */
     private val persistStylusOnly: (suspend (Boolean) -> Unit)? = null,
     private val triggerDebounceMillis: Long = TRIGGER_DEBOUNCE_MILLIS,
@@ -146,6 +150,8 @@ class CanvasViewModel(
         triggerCommandFlow = settings.triggerCommand,
         triggerModeFlow = settings.triggerMode,
         stylusOnlyFlow = settings.stylusOnly,
+        lassoSnapBackThresholdFlow = settings.lassoSnapBackThreshold,
+        lassoSnapBackEnabledFlow = settings.lassoSnapBackEnabled,
         persistStylusOnly = { settings.setStylusOnly(it) },
     )
 
@@ -246,6 +252,17 @@ class CanvasViewModel(
     /** Latest canvas width in px, reported by the UI; sizes new full-line AI boxes. */
     private var canvasWidthPx: Float = 0f
 
+    /** Latest canvas height in px, reported by the UI; used to normalise the snap-back distance. */
+    private var canvasHeightPx: Float = 0f
+
+    /** Lasso-move snap-back threshold (fraction of canvas size), kept in sync with settings. */
+    @Volatile
+    private var lassoSnapBackThreshold: Float = SettingsRepository.DEFAULT_LASSO_SNAP_BACK_THRESHOLD
+
+    /** Whether lasso-move snap-back is enabled, kept in sync with settings. */
+    @Volatile
+    private var lassoSnapBackEnabled: Boolean = SettingsRepository.DEFAULT_LASSO_SNAP_BACK_ENABLED
+
     /** Current activation command (default `/Q`), kept in sync with settings. */
     @Volatile
     private var triggerCommand: String = QueryTriggerDetector.DEFAULT_TRIGGER
@@ -263,6 +280,12 @@ class CanvasViewModel(
         }
         stylusOnlyFlow?.let { flow ->
             viewModelScope.launch { flow.collect { _stylusOnly.value = it } }
+        }
+        lassoSnapBackThresholdFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { lassoSnapBackThreshold = it } }
+        }
+        lassoSnapBackEnabledFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { lassoSnapBackEnabled = it } }
         }
         // Pre-download the handwriting model so the first /Q is fast.
         recognizer?.let { viewModelScope.launch { it.warmUp() } }
@@ -282,9 +305,13 @@ class CanvasViewModel(
         }
     }
 
-    /** Reports the live canvas width so new AI boxes default to a full line. */
-    fun setCanvasSize(widthPx: Float) {
+    /**
+     * Reports the live canvas size. Width sizes new full-line AI boxes; both dimensions normalise
+     * the lasso-move snap-back distance (see [commitTransform]).
+     */
+    fun setCanvasSize(widthPx: Float, heightPx: Float) {
         canvasWidthPx = widthPx
+        canvasHeightPx = heightPx
     }
 
     private fun defaultNoteWidth(): Float {
@@ -533,6 +560,15 @@ class CanvasViewModel(
         val sel = _selection.value ?: return
         val t = sel.transform
         if (t.isIdentity) return
+        // Snap-back (FA-10): a small move released near its origin reverts with nothing applied —
+        // no bake, no undo step. Gated on a known canvas size, so unit tests with no reported size
+        // (and resize gestures) always commit. Scales never snap.
+        if (lassoSnapBackEnabled &&
+            StrokeSelection.shouldSnapBack(t, canvasWidthPx, canvasHeightPx, lassoSnapBackThreshold)
+        ) {
+            _selection.update { it?.copy(transform = LiveTransform.IDENTITY) }
+            return
+        }
         val before = _finishedStrokes.value
         pushUndoSnapshot(before)
         val after = before.map { cs ->

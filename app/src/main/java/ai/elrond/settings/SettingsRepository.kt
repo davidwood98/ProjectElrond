@@ -7,6 +7,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -73,6 +74,32 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[AI_NOTE_SELECTED_ON_CREATE_KEY] = enabled }
     }
 
+    // --- Lasso move snap-back (FA-10) ---
+
+    /**
+     * Snap-back threshold as a fraction of the canvas size (0–[MAX_LASSO_SNAP_BACK_THRESHOLD]): a
+     * lasso move released within this normalised distance of its origin snaps back. 0 disables it.
+     */
+    val lassoSnapBackThreshold: Flow<Float> = context.settingsDataStore.data
+        .map {
+            (it[LASSO_SNAPBACK_THRESHOLD_KEY] ?: DEFAULT_LASSO_SNAP_BACK_THRESHOLD)
+                .coerceIn(0f, MAX_LASSO_SNAP_BACK_THRESHOLD)
+        }
+
+    suspend fun setLassoSnapBackThreshold(value: Float) {
+        context.settingsDataStore.edit {
+            it[LASSO_SNAPBACK_THRESHOLD_KEY] = value.coerceIn(0f, MAX_LASSO_SNAP_BACK_THRESHOLD)
+        }
+    }
+
+    /** Whether lasso-move snap-back is on (default true). A 0% threshold also turns it off. */
+    val lassoSnapBackEnabled: Flow<Boolean> = context.settingsDataStore.data
+        .map { it[LASSO_SNAPBACK_ENABLED_KEY] ?: DEFAULT_LASSO_SNAP_BACK_ENABLED }
+
+    suspend fun setLassoSnapBackEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[LASSO_SNAPBACK_ENABLED_KEY] = enabled }
+    }
+
     // --- Background auto-extraction (FA-2) ---
 
     /** Master switch: run TODO/calendar extraction in the background after a note is saved. */
@@ -123,11 +150,18 @@ class SettingsRepository(private val context: Context) {
         const val DEFAULT_AI_NOTE_SELECTED_ON_CREATE = true
         const val DEFAULT_STYLUS_ONLY = true
         const val DEFAULT_TRUE = true
+
+        /** Lasso-move snap-back: default 2.5% of the canvas size, capped at 10%; on by default. */
+        const val DEFAULT_LASSO_SNAP_BACK_THRESHOLD = 0.025f
+        const val MAX_LASSO_SNAP_BACK_THRESHOLD = 0.10f
+        const val DEFAULT_LASSO_SNAP_BACK_ENABLED = true
         private val TRIGGER_KEY = stringPreferencesKey("trigger_command")
         private val TRIGGER_MODE_KEY = stringPreferencesKey("trigger_mode")
         private val STYLUS_ONLY_KEY = booleanPreferencesKey("stylus_only")
         private val CALENDAR_PROVIDER_KEY = stringPreferencesKey("calendar_provider")
         private val AI_NOTE_SELECTED_ON_CREATE_KEY = booleanPreferencesKey("ai_note_selected_on_create")
+        private val LASSO_SNAPBACK_THRESHOLD_KEY = floatPreferencesKey("lasso_snapback_threshold")
+        private val LASSO_SNAPBACK_ENABLED_KEY = booleanPreferencesKey("lasso_snapback_enabled")
         private val AUTO_EXTRACTION_KEY = booleanPreferencesKey("auto_extraction_enabled")
         private val EXTRACTION_CONFIRM_KEY = booleanPreferencesKey("extraction_confirmation_enabled")
         private val CONFIRM_TODO_KEY = booleanPreferencesKey("confirm_todo_extraction")

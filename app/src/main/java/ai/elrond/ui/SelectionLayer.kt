@@ -6,6 +6,8 @@ import ai.elrond.canvas.Corner
 import ai.elrond.canvas.LiveTransform
 import ai.elrond.canvas.SelectionState
 import ai.elrond.canvas.StrokeSelection
+import ai.elrond.canvas.StrokeTransforms
+import android.graphics.Matrix
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,7 +42,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.runtime.key
+import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
+import androidx.ink.strokes.Stroke as InkStroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -74,6 +83,7 @@ fun SelectionLayer(
 ) {
     val selection by viewModel.selection.collectAsStateWithLifecycle()
     val clipboard by viewModel.clipboard.collectAsStateWithLifecycle()
+    val finishedStrokes by viewModel.finishedStrokes.collectAsStateWithLifecycle()
     // Container size in px (== canvas/stroke coordinate space) — clamps the floating menu on-screen.
     var layerSize by remember { mutableStateOf(IntSize.Zero) }
 
@@ -91,7 +101,21 @@ fun SelectionLayer(
             },
         )
 
-        selection?.let { sel -> SelectionBox(sel, viewModel, layerSize) }
+        selection?.let { sel ->
+            // The selected ink lives here (not in InkCanvas): the live move/scale + faded origin
+            // ghost, drawn with the ink renderer in this Compose layer so it repaints every frame
+            // (FA-10). Selected/ghost copies are built once per selection set; the box draws on top.
+            val selectedStrokes = remember(sel.ids, finishedStrokes) {
+                finishedStrokes.filter { it.id in sel.ids }.map { it.stroke }
+            }
+            val ghostStrokes = remember(sel.ids, finishedStrokes) {
+                finishedStrokes.filter { it.id in sel.ids }.map {
+                    StrokeTransforms.recolorStroke(it.stroke, fadedGhostColor(it.stroke.brush.colorIntArgb))
+                }
+            }
+            SelectionStrokes(selectedStrokes, ghostStrokes, sel.transform)
+            SelectionBox(sel, viewModel, layerSize)
+        }
 
         if (clipboard.active) {
             ClipboardBar(
@@ -342,3 +366,75 @@ private fun ClipboardBar(count: Int, onClear: () -> Unit, modifier: Modifier = M
 }
 
 private const val HANDLE_SIZE = 18
+
+/** Origin-ghost opacity during a lasso move (FA-10): the original colour at 30%. */
+private const val GHOST_ALPHA = 0.30f
+
+/** [original] ARGB re-alpha'd to [GHOST_ALPHA], keeping its RGB — the faded-origin ghost colour. */
+private fun fadedGhostColor(original: Int): Int {
+    val alpha = (GHOST_ALPHA * 255f).toInt().coerceIn(0, 255)
+    return (alpha shl 24) or (original and 0x00FFFFFF)
+}
+
+/**
+ * Draws the lasso-selected ink (FA-10): the [selected] strokes at the live move/scale [transform]
+ * (full colour), and — while a transform is in progress — a faded [ghost] of them at their original
+ * position. Rendered in the Compose overlay (not [ai.elrond.canvas.InkCanvas]) with the same
+ * [CanvasStrokeRenderer]; ghost/selected copies are built once per selection by the caller.
+ *
+ * The live transform is applied as a **`graphicsLayer`**, NOT inside the draw lambda. Compose does
+ * not re-run a draw lambda just because a captured value changed, so a transform applied there left
+ * the ink frozen at the origin (and the ghost pass never ran). `graphicsLayer` is the same
+ * layer-modifier mechanism the selection box uses (`absoluteOffset`), which re-applies every frame —
+ * and it's GPU-cheap: the strokes are rasterised once and the layer is just re-composited, so there
+ * is no per-frame mesh redraw. The strokes Canvas is `key`ed on the stroke list so a new (or
+ * just-baked) selection re-rasterises while a drag (same list) does not.
+ *
+ * `internal` (not private) so `SelectionStrokesRenderTest` can render it and pixel-assert the moved
+ * ink actually appears at the new position.
+ */
+@Composable
+internal fun SelectionStrokes(
+    selected: List<InkStroke>,
+    ghost: List<InkStroke>,
+    transform: LiveTransform,
+) {
+    val renderer = remember { CanvasStrokeRenderer.create() }
+    // Faded origin ghost — drawn once at the original position, shown only while transforming.
+    if (!transform.isIdentity) {
+        StrokeCanvas(ghost, renderer, Modifier)
+    }
+    // Live move/scale via a GPU graphicsLayer (reliable per-frame update; no mesh redraw).
+    key(selected) {
+        StrokeCanvas(
+            selected,
+            renderer,
+            Modifier.graphicsLayer {
+                translationX = transform.dx
+                translationY = transform.dy
+                scaleX = transform.scaleX
+                scaleY = transform.scaleY
+                // Scale about the same pivot LiveTransform uses, expressed as a fraction of the layer.
+                transformOrigin = if (size.width > 0f && size.height > 0f) {
+                    TransformOrigin(transform.pivotX / size.width, transform.pivotY / size.height)
+                } else {
+                    TransformOrigin(0f, 0f)
+                }
+            },
+        )
+    }
+}
+
+/** Rasterises [strokes] at their own coordinates (identity) with the ink renderer. */
+@Composable
+private fun StrokeCanvas(strokes: List<InkStroke>, renderer: CanvasStrokeRenderer, modifier: Modifier) {
+    val identity = remember { Matrix() }
+    Canvas(modifier.fillMaxSize()) {
+        drawIntoCanvas { canvas ->
+            val nativeCanvas = canvas.nativeCanvas
+            strokes.forEach { stroke ->
+                renderer.draw(canvas = nativeCanvas, stroke = stroke, strokeToScreenTransform = identity)
+            }
+        }
+    }
+}

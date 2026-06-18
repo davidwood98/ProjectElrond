@@ -111,4 +111,69 @@ class StrokeSelectionTest {
         assertEquals(15f, t.applyX(10f))
         assertEquals(8f, t.applyY(10f))
     }
+
+    // --- FA-10 snap-back geometry ---
+
+    @Test
+    fun `snap-back triggers for a small move within the threshold`() {
+        // 100x100 canvas, 10% threshold; a 9px move = 0.09 normalised < 0.1.
+        assertTrue(StrokeSelection.shouldSnapBack(LiveTransform(dx = 9f), 100f, 100f, 0.1f))
+    }
+
+    @Test
+    fun `snap-back does not trigger for a move beyond the threshold`() {
+        assertFalse(StrokeSelection.shouldSnapBack(LiveTransform(dx = 11f), 100f, 100f, 0.1f))
+    }
+
+    @Test
+    fun `snap-back is strict at exactly the threshold so the boundary commits`() {
+        // 10px / 100px = 0.1, exactly == threshold → strict < is false → no snap.
+        assertFalse(StrokeSelection.shouldSnapBack(LiveTransform(dx = 10f), 100f, 100f, 0.1f))
+    }
+
+    @Test
+    fun `a zero threshold disables snap-back`() {
+        assertFalse(StrokeSelection.shouldSnapBack(LiveTransform(dx = 1f, dy = 1f), 100f, 100f, 0f))
+    }
+
+    @Test
+    fun `snap-back needs a known canvas size`() {
+        assertFalse(StrokeSelection.shouldSnapBack(LiveTransform(dx = 1f), 0f, 100f, 0.1f))
+        assertFalse(StrokeSelection.shouldSnapBack(LiveTransform(dx = 1f), 100f, 0f, 0.1f))
+    }
+
+    @Test
+    fun `snap-back applies to moves only, never scales`() {
+        val scaled = LiveTransform(dx = 1f, dy = 1f, scaleX = 2f, scaleY = 2f)
+        assertFalse(StrokeSelection.shouldSnapBack(scaled, 100f, 100f, 0.5f))
+    }
+
+    @Test
+    fun `snap-back normalises each axis by its own canvas dimension`() {
+        // W=200,H=100: a (10,5) move = sqrt(0.05² + 0.05²) = 0.0707 < 0.1.
+        assertTrue(StrokeSelection.shouldSnapBack(LiveTransform(dx = 10f, dy = 5f), 200f, 100f, 0.1f))
+    }
+
+    // --- FA-10 ghost gating ---
+
+    @Test
+    fun `no ghost when nothing is selected`() {
+        assertFalse(StrokeSelection.shouldShowGhost(null))
+    }
+
+    @Test
+    fun `no ghost when a selection is idle (not being moved)`() {
+        val sel = SelectionState(ids = setOf("a"), bounds = SelectionBounds(0f, 0f, 10f, 10f))
+        assertFalse(StrokeSelection.shouldShowGhost(sel))
+    }
+
+    @Test
+    fun `ghost shows while a selection is being moved`() {
+        val sel = SelectionState(
+            ids = setOf("a"),
+            bounds = SelectionBounds(0f, 0f, 10f, 10f),
+            transform = LiveTransform(dx = 5f),
+        )
+        assertTrue(StrokeSelection.shouldShowGhost(sel))
+    }
 }

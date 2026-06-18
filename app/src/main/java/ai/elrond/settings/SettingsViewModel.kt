@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -50,6 +51,55 @@ class SettingsViewModel @Inject constructor(
 
     fun setAiNoteSelectedOnCreate(enabled: Boolean) {
         viewModelScope.launch { repository.setAiNoteSelectedOnCreate(enabled) }
+    }
+
+    // --- Lasso move snap-back (FA-10) ---
+
+    val lassoSnapBackEnabled: StateFlow<Boolean> = repository.lassoSnapBackEnabled
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_LASSO_SNAP_BACK_ENABLED,
+        )
+
+    val lassoSnapBackThreshold: StateFlow<Float> = repository.lassoSnapBackThreshold
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_LASSO_SNAP_BACK_THRESHOLD,
+        )
+
+    /** Sets the threshold; a 0% value also turns the feature off (the slider doubles as an off). */
+    fun setLassoSnapBackThreshold(value: Float) {
+        viewModelScope.launch {
+            repository.setLassoSnapBackThreshold(value)
+            if (snapBackDisabledByThreshold(value)) repository.setLassoSnapBackEnabled(false)
+        }
+    }
+
+    /** Toggles snap-back; turning it on while the threshold is 0 restores a usable default. */
+    fun setLassoSnapBackEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setLassoSnapBackEnabled(enabled)
+            if (enabled) {
+                // Read the persisted threshold directly (not the stateIn cache) so the restore is
+                // correct regardless of whether the StateFlow currently has a subscriber.
+                thresholdToRestoreOnEnable(repository.lassoSnapBackThreshold.first())
+                    ?.let { repository.setLassoSnapBackThreshold(it) }
+            }
+        }
+    }
+
+    companion object {
+        /** FA-10 coupling rule: a 0% (or lower) threshold also turns the snap-back toggle off. */
+        fun snapBackDisabledByThreshold(value: Float): Boolean = value <= 0f
+
+        /**
+         * FA-10 coupling rule: when re-enabling snap-back while the stored threshold is 0%, restore
+         * a usable default; otherwise leave the threshold unchanged (null = no change).
+         */
+        fun thresholdToRestoreOnEnable(current: Float): Float? =
+            if (current <= 0f) SettingsRepository.DEFAULT_LASSO_SNAP_BACK_THRESHOLD else null
     }
 
     // --- Auto-extraction (FA-2) ---

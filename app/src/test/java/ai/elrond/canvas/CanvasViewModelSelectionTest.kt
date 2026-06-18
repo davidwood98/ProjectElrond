@@ -8,9 +8,11 @@ import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
 import ai.elrond.aibackend.AIResponse
 import ai.elrond.data.NoteRepository
+import ai.elrond.settings.SettingsRepository
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
 import io.mockk.mockk
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -57,19 +59,33 @@ class CanvasViewModelSelectionTest {
         provider: AIProvider? = null,
         repository: NoteRepository? = null,
         enqueue: ((String) -> Unit)? = null,
-    ) = CanvasViewModel(
-        recognizer = recognizer,
-        aiProvider = provider,
-        lineSplitter = { listOf(it) },
-        notePlacer = { NotePosition(0f, 0f) },
-        repository = repository,
-        pageId = if (repository != null) "page-1" else null,
-        enqueueExtraction = enqueue,
-        centroidOf = { centroids[it] ?: p(0f, 0f) },
-        // Geometry-free fakes: keep the stroke object, report a fixed box (ink natives untouched).
-        strokeTransformer = { stroke, _ -> stroke },
-        strokeBoundsOf = { SelectionBounds(0f, 0f, 10f, 10f) },
-    )
+        canvasWidth: Float = 0f,
+        canvasHeight: Float = 0f,
+        snapBackThreshold: Float = SettingsRepository.DEFAULT_LASSO_SNAP_BACK_THRESHOLD,
+        snapBackEnabled: Boolean = true,
+        // Invoked with every transform baked by commitTransform (and clone) — lets a test count
+        // bakes (a real move-commit vs a snap-back, which bakes nothing) AND assert the exact
+        // transform applied, since the fake transformer is otherwise a geometry-free no-op.
+        onTransform: (LiveTransform) -> Unit = {},
+    ): CanvasViewModel {
+        val vm = CanvasViewModel(
+            recognizer = recognizer,
+            aiProvider = provider,
+            lineSplitter = { listOf(it) },
+            notePlacer = { NotePosition(0f, 0f) },
+            repository = repository,
+            pageId = if (repository != null) "page-1" else null,
+            enqueueExtraction = enqueue,
+            centroidOf = { centroids[it] ?: p(0f, 0f) },
+            // Geometry-free fakes: keep the stroke object, report a fixed box (ink natives untouched).
+            strokeTransformer = { stroke, t -> onTransform(t); stroke },
+            strokeBoundsOf = { SelectionBounds(0f, 0f, 10f, 10f) },
+            lassoSnapBackThresholdFlow = MutableStateFlow(snapBackThreshold),
+            lassoSnapBackEnabledFlow = MutableStateFlow(snapBackEnabled),
+        )
+        if (canvasWidth > 0f || canvasHeight > 0f) vm.setCanvasSize(canvasWidth, canvasHeight)
+        return vm
+    }
 
     /** Selects s1+s2 (centroids inside a 100px box) and returns the ready VM. */
     private fun selectFirstTwo(vm: CanvasViewModel) {
@@ -207,20 +223,151 @@ class CanvasViewModelSelectionTest {
     }
 
     @Test
-    fun `committing a move bakes the transform and is undoable`() {
-        val vm = viewModel()
-        selectFirstTwo(vm)
-        val before = vm.finishedStrokes.value
+    fun `a move previews on the box, then bakes the final transform once per stroke on commit`() =
+        runTest(dispatcher) {
+            val baked = mutableListOf<LiveTransform>()
+            val vm = viewModel(canvasWidth = 1000f, canvasHeight = 1000f, onTransform = { baked += it })
+            advanceUntilIdle()
+            selectFirstTwo(vm)
+            val before = vm.finishedStrokes.value
 
-        vm.previewTransform(LiveTransform(dx = 30f, dy = 40f))
+            // Preview: the box (displayBounds) tracks the live transform; nothing is baked yet.
+            vm.previewTransform(LiveTransform(dx = 10f, dy = 20f))
+            vm.previewTransform(LiveTransform(dx = 30f, dy = 40f))
+            assertTrue("preview must not bake any stroke", baked.isEmpty())
+            val shown = vm.selection.value!!.displayBounds // baseline bounds (0,0,10,10) + (30,40)
+            assertEquals(30f, shown.left, 1e-3f)
+            assertEquals(40f, shown.top, 1e-3f)
+            assertEquals(40f, shown.right, 1e-3f)
+
+            // Commit: bakes the FINAL transform exactly once per selected stroke (2), back to identity.
+            vm.commitTransform()
+            assertEquals(
+                listOf(LiveTransform(dx = 30f, dy = 40f), LiveTransform(dx = 30f, dy = 40f)),
+                baked,
+            )
+            assertEquals(2, vm.selection.value?.count) // selection survives the bake (tracked by id)
+            assertEquals(LiveTransform.IDENTITY, vm.selection.value?.transform)
+
+            vm.undo()
+            assertEquals(before, vm.finishedStrokes.value)
+        }
+
+    @Test
+    fun `cancelling a move bakes nothing and resets the transform`() = runTest(dispatcher) {
+        val baked = mutableListOf<LiveTransform>()
+        val vm = viewModel(canvasWidth = 1000f, canvasHeight = 1000f, onTransform = { baked += it })
+        advanceUntilIdle()
+        selectFirstTwo(vm)
+
+        vm.previewTransform(LiveTransform(dx = 200f, dy = 200f)) // well beyond the snap threshold
+        vm.cancelTransform()
+
+        assertTrue(baked.isEmpty())
+        assertEquals(LiveTransform.IDENTITY, vm.selection.value?.transform)
+        assertEquals(2, vm.selection.value?.count)
+    }
+
+    // --- FA-10 snap-back ---
+
+    @Test
+    fun `a small move released near origin snaps back without baking`() = runTest(dispatcher) {
+        var transforms = 0
+        val vm = viewModel(
+            canvasWidth = 1000f, canvasHeight = 1000f,
+            snapBackThreshold = 0.025f, snapBackEnabled = true,
+            onTransform = { transforms++ },
+        )
+        advanceUntilIdle() // apply the snap-back settings flows
+        selectFirstTwo(vm)
+
+        vm.previewTransform(LiveTransform(dx = 10f, dy = 10f)) // ~0.0141 < 0.025 → snap back
         vm.commitTransform()
 
-        // Selected strokes were rebuilt (transform applied); the selection survives by id.
-        assertEquals(2, vm.selection.value?.count)
         assertEquals(LiveTransform.IDENTITY, vm.selection.value?.transform)
+        assertEquals(0, transforms) // nothing was baked
+        assertEquals(2, vm.selection.value?.count) // selection survives
+    }
 
-        vm.undo()
-        assertEquals(before, vm.finishedStrokes.value)
+    @Test
+    fun `a move beyond the threshold commits the transform`() = runTest(dispatcher) {
+        var transforms = 0
+        val vm = viewModel(
+            canvasWidth = 1000f, canvasHeight = 1000f,
+            snapBackThreshold = 0.025f, onTransform = { transforms++ },
+        )
+        advanceUntilIdle()
+        selectFirstTwo(vm)
+
+        vm.previewTransform(LiveTransform(dx = 100f, dy = 100f)) // ~0.141 > 0.025 → commit
+        vm.commitTransform()
+
+        assertEquals(2, transforms) // both selected strokes baked
+        assertEquals(LiveTransform.IDENTITY, vm.selection.value?.transform)
+    }
+
+    @Test
+    fun `a move exactly at the threshold commits (strict boundary)`() = runTest(dispatcher) {
+        var transforms = 0
+        // 100x100 canvas, 10% threshold; a 10px move = 0.1 exactly == threshold → no snap.
+        val vm = viewModel(
+            canvasWidth = 100f, canvasHeight = 100f,
+            snapBackThreshold = 0.1f, onTransform = { transforms++ },
+        )
+        advanceUntilIdle()
+        selectFirstTwo(vm)
+
+        vm.previewTransform(LiveTransform(dx = 10f, dy = 0f))
+        vm.commitTransform()
+
+        assertEquals(2, transforms) // committed, not snapped
+    }
+
+    @Test
+    fun `a zero threshold disables snap-back so even a tiny move commits`() = runTest(dispatcher) {
+        var transforms = 0
+        val vm = viewModel(
+            canvasWidth = 1000f, canvasHeight = 1000f,
+            snapBackThreshold = 0f, onTransform = { transforms++ },
+        )
+        advanceUntilIdle()
+        selectFirstTwo(vm)
+
+        vm.previewTransform(LiveTransform(dx = 2f, dy = 2f))
+        vm.commitTransform()
+
+        assertEquals(2, transforms)
+    }
+
+    @Test
+    fun `snap-back turned off commits a small move`() = runTest(dispatcher) {
+        var transforms = 0
+        val vm = viewModel(
+            canvasWidth = 1000f, canvasHeight = 1000f,
+            snapBackThreshold = 0.025f, snapBackEnabled = false,
+            onTransform = { transforms++ },
+        )
+        advanceUntilIdle()
+        selectFirstTwo(vm)
+
+        vm.previewTransform(LiveTransform(dx = 5f, dy = 5f))
+        vm.commitTransform()
+
+        assertEquals(2, transforms)
+    }
+
+    @Test
+    fun `with no canvas size reported a small move still commits`() = runTest(dispatcher) {
+        // No setCanvasSize → dimensions unknown → snap-back inert (mirrors maxWidthAt gating).
+        var transforms = 0
+        val vm = viewModel(snapBackThreshold = 0.025f, onTransform = { transforms++ })
+        advanceUntilIdle()
+        selectFirstTwo(vm)
+
+        vm.previewTransform(LiveTransform(dx = 1f, dy = 1f))
+        vm.commitTransform()
+
+        assertEquals(2, transforms)
     }
 
     @Test

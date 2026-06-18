@@ -57,6 +57,22 @@ class StrokeTransformsInstrumentedTest {
     }
 
     @Test
+    fun recolor_keepsAllPointsAndGeometry_changingOnlyColour() {
+        val original = buildStroke()
+        val ghostColor = 0x4D1A237E.toInt() // ~30% alpha navy — the FA-10 origin ghost
+        val ghost = StrokeTransforms.recolorStroke(original, ghostColor)
+
+        assertEquals(original.inputs.size, ghost.inputs.size)
+        assertEquals(ghostColor, ghost.brush.colorIntArgb)
+        val before = StrokeTransforms.strokeBounds(original)
+        val after = StrokeTransforms.strokeBounds(ghost)
+        assertEquals(before.left, after.left, TOLERANCE)
+        assertEquals(before.top, after.top, TOLERANCE)
+        assertEquals(before.right, after.right, TOLERANCE)
+        assertEquals(before.bottom, after.bottom, TOLERANCE)
+    }
+
+    @Test
     fun strokeBounds_coversAllInputPoints() {
         val bounds = StrokeTransforms.strokeBounds(buildStroke())
         assertEquals(10f, bounds.left, TOLERANCE)

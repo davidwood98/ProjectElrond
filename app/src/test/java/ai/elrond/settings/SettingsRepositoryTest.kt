@@ -60,5 +60,19 @@ class SettingsRepositoryTest {
         assertEquals(">Q", repo.triggerCommand.first())
         assertEquals(TriggerMode.GESTURE, repo.triggerMode.first())
         assertFalse(repo.stylusOnly.first())
+
+        // FA-10 lasso snap-back: defaults (2.5%, on), then round-trip and persist.
+        assertEquals(0.025f, repo.lassoSnapBackThreshold.first(), 1e-4f)
+        assertTrue(repo.lassoSnapBackEnabled.first())
+
+        repo.setLassoSnapBackThreshold(0.05f)
+        repo.setLassoSnapBackEnabled(false)
+
+        assertEquals(0.05f, repo.lassoSnapBackThreshold.first(), 1e-4f)
+        assertFalse(repo.lassoSnapBackEnabled.first())
+
+        // Out-of-range threshold is clamped to the 0–10% range.
+        repo.setLassoSnapBackThreshold(0.5f)
+        assertEquals(0.10f, repo.lassoSnapBackThreshold.first(), 1e-4f)
     }
 }

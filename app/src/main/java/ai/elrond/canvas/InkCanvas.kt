@@ -27,17 +27,20 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
- * Handwriting canvas with three ink layers:
+ * Handwriting canvas with two ink layers:
  *  - Wet ink: [InProgressStrokesView] renders in-progress strokes with front-buffered,
  *    low-latency rendering (120Hz-capable) plus motion prediction. Its surface is warmed via
  *    `eagerInit()` on attach so the first stylus touch isn't eaten by lazy surface creation.
  *  - Dry ink: finished strokes from [CanvasViewModel] (minus any lasso-selected ones), drawn by
  *    [DryStrokesView].
- *  - Selection ink: the lasso-selected strokes, drawn by [SelectionStrokesView] with a live
- *    transform [Matrix] so a move/scale previews without rebuilding any mesh per frame; the
- *    ViewModel bakes the transform once on release.
  *
- * All layers are plain Android Views inside one [FrameLayout]. The dry layer is deliberately NOT a
+ * The lasso-selected strokes (live move/scale + the faded origin ghost) are NOT drawn here — they
+ * render in the Compose `SelectionLayer` overlay. The wet-ink view is a front-buffered SurfaceView
+ * composited on top of the whole window, and a plain sibling View beneath it does not reliably
+ * re-composite during a fast drag on-device (FA-10); Compose does, so the moving selection lives
+ * there. The dry layer just excludes the selected strokes so they aren't drawn twice.
+ *
+ * Both layers are plain Android Views inside one [FrameLayout]. The dry layer is deliberately NOT a
  * Compose `Canvas`: a Compose Canvas only repaints when composition is invalidated, and a bare
  * `StateFlow` emission (a finished stroke) does not reliably wake a recomposition on its own — which
  * left the very first stroke of a freshly opened page invisible until some unrelated recompose
@@ -88,37 +91,6 @@ private class DryStrokesView(context: Context) : View(context) {
     }
 }
 
-/** Selection layer: the lasso-selected strokes, drawn with a live move/scale [Matrix]. */
-@SuppressLint("ViewConstructor")
-private class SelectionStrokesView(context: Context) : View(context) {
-    private val renderer = CanvasStrokeRenderer.create()
-    private var strokes: List<Stroke> = emptyList()
-    private val transform = Matrix()
-
-    init {
-        setWillNotDraw(false)
-    }
-
-    fun setContent(value: List<Stroke>, matrix: Matrix) {
-        strokes = value
-        transform.set(matrix)
-        invalidate()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        strokes.forEach { stroke ->
-            renderer.draw(canvas = canvas, stroke = stroke, strokeToScreenTransform = transform)
-        }
-    }
-}
-
-/** Android `Matrix` for a [LiveTransform]: scale about the pivot, then translate. */
-private fun LiveTransform.toMatrix(): Matrix = Matrix().apply {
-    postScale(scaleX, scaleY, pivotX, pivotY)
-    postTranslate(dx, dy)
-}
-
 @SuppressLint("ClickableViewAccessibility")
 private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
     val rootView = FrameLayout(context)
@@ -127,7 +99,6 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
         FrameLayout.LayoutParams.MATCH_PARENT,
     )
     val dryStrokesView = DryStrokesView(context).apply { layoutParams = matchParent }
-    val selectionStrokesView = SelectionStrokesView(context).apply { layoutParams = matchParent }
     val inProgressStrokesView = InProgressStrokesView(context).apply {
         layoutParams = matchParent
         addFinishedStrokesListener(
@@ -141,15 +112,17 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
     }
     val predictor = MotionEventPredictor.newInstance(rootView)
     rootView.setOnTouchListener(createTouchListener(inProgressStrokesView, viewModel, predictor))
-    // Dry layer (bottom), selection layer (above dry), wet ink on top.
+    // Dry layer (bottom), wet ink on top. The lasso-selected strokes (live move/scale + the faded
+    // origin ghost) are drawn by the Compose SelectionLayer overlay, NOT here: the wet-ink view is a
+    // front-buffered SurfaceView composited on top of the whole window, and a plain sibling View
+    // beneath it does not reliably re-composite during a fast drag on-device (FA-10) — Compose
+    // (which already paints the selection box smoothly every frame) does. The dry layer just excludes
+    // the selected strokes so they aren't drawn twice.
     rootView.addView(dryStrokesView)
-    rootView.addView(selectionStrokesView)
     rootView.addView(inProgressStrokesView)
 
-    // Drive the dry + selection layers straight off the StateFlows while the screen is at least
-    // STARTED, so a finished stroke or a live move/scale repaints via invalidate() without waiting
-    // on a Compose recomposition. Selected strokes are drawn by the selection layer (with the live
-    // transform) and excluded from the dry layer, so a move/scale never shows a doubled image.
+    // Drive the dry layer straight off the StateFlows while the screen is at least STARTED, so a
+    // finished stroke repaints via invalidate() without waiting on a Compose recomposition.
     rootView.addOnAttachStateChangeListener(
         object : View.OnAttachStateChangeListener {
             private var job: Job? = null
@@ -163,17 +136,21 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
                 val owner = v.findViewTreeLifecycleOwner() ?: return
                 job = owner.lifecycleScope.launch {
                     owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                        // Cache the dry list so it's rebuilt only when the strokes or the selected set
+                        // change — never per drag frame.
+                        var splitKeyStrokes: List<CanvasStroke>? = null
+                        var splitKeyIds: Set<String> = emptySet()
+                        var dryCache: List<Stroke> = emptyList()
                         combine(viewModel.finishedStrokes, viewModel.selection) { strokes, sel ->
                             strokes to sel
                         }.collect { (strokes, sel) ->
                             val selectedIds = sel?.ids ?: emptySet()
-                            dryStrokesView.setStrokes(
-                                strokes.filterNot { it.id in selectedIds }.map { it.stroke },
-                            )
-                            selectionStrokesView.setContent(
-                                strokes.filter { it.id in selectedIds }.map { it.stroke },
-                                sel?.transform?.toMatrix() ?: Matrix(),
-                            )
+                            if (strokes !== splitKeyStrokes || selectedIds != splitKeyIds) {
+                                splitKeyStrokes = strokes
+                                splitKeyIds = selectedIds
+                                dryCache = strokes.filterNot { it.id in selectedIds }.map { it.stroke }
+                            }
+                            dryStrokesView.setStrokes(dryCache)
                         }
                     }
                 }

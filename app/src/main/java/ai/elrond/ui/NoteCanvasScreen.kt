@@ -106,7 +106,7 @@ fun NoteCanvasScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .onSizeChanged { viewModel.setCanvasSize(it.width.toFloat()) },
+            .onSizeChanged { viewModel.setCanvasSize(it.width.toFloat(), it.height.toFloat()) },
     ) {
         InkCanvas(
             viewModel = viewModel,

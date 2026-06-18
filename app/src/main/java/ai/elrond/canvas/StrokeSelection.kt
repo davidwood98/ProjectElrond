@@ -124,6 +124,38 @@ object StrokeSelection {
         )
     }
 
+    /**
+     * Whether a released move should snap back to its origin instead of being applied (FA-10).
+     *
+     * True only when snap-back is on ([threshold] > 0), the canvas size is known
+     * ([canvasWidth]/[canvasHeight] both > 0), the transform is a pure **move** (no scale — a resize
+     * never snaps), and the move's normalised travel distance is strictly **less than** [threshold]:
+     *
+     *     distance = sqrt((dx / canvasWidth)² + (dy / canvasHeight)²)
+     *
+     * A zero threshold, an unknown canvas size, or a scale gesture all return false. The comparison
+     * is strict, so a release exactly at the threshold commits (does not snap).
+     */
+    fun shouldSnapBack(
+        transform: LiveTransform,
+        canvasWidth: Float,
+        canvasHeight: Float,
+        threshold: Float,
+    ): Boolean {
+        if (threshold <= 0f) return false
+        if (canvasWidth <= 0f || canvasHeight <= 0f) return false
+        if (transform.scaleX != 1f || transform.scaleY != 1f) return false // moves only, never scales
+        return hypot(transform.dx / canvasWidth, transform.dy / canvasHeight) < threshold
+    }
+
+    /**
+     * Whether the canvas should draw the faded origin "ghost" (FA-10): something is selected and a
+     * move/scale is currently in progress (a non-identity [SelectionState.transform]). When nothing
+     * is selected, or the selection is idle, there is no ghost.
+     */
+    fun shouldShowGhost(selection: SelectionState?): Boolean =
+        selection != null && selection.ids.isNotEmpty() && !selection.transform.isIdentity
+
     private const val EPSILON = 0.01f
     private const val MIN_SCALE = 0.05f
 }
