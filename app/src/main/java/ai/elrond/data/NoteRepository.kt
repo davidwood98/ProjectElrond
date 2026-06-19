@@ -9,8 +9,10 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 /**
  * Repository for notebooks, note pages, ink strokes, and AI response notes.
@@ -95,7 +97,12 @@ class NoteRepository(
     /** Atomically rewrites the page's strokes — canvas auto-save (handles erase/undo/lasso too). */
     suspend fun replaceStrokes(pageId: String, strokes: List<CanvasStroke>, isAiInk: Boolean = false) {
         val now = clock()
-        strokeDao.replaceForPage(pageId, strokes.map { it.toEntity(pageId, now, isAiInk) })
+        // JSON-encoding every stroke's points is CPU work; keep it off the caller's thread (the
+        // autosave runs on the Main-dispatched viewModelScope).
+        val entities = withContext(Dispatchers.Default) {
+            strokes.map { it.toEntity(pageId, now, isAiInk) }
+        }
+        strokeDao.replaceForPage(pageId, entities)
         pageDao.touch(pageId, now)
         recordEdit(pageId, now)
     }
@@ -119,10 +126,13 @@ class NoteRepository(
      * Decodes stored points directly — no ink natives, cheap enough for lists.
      */
     suspend fun loadStrokePreview(pageId: String, maxStrokes: Int = PREVIEW_MAX_STROKES): List<List<Pair<Float, Float>>> {
-        val polylines = strokeDao.getForPage(pageId)
-            .take(maxStrokes)
-            .map { StrokeSerialization.decodePoints(it.inputsJson) }
-        return StrokePreviewNormalizer.normalize(polylines)
+        val rows = strokeDao.getForPage(pageId)
+        // Decode + normalize off the caller's thread — the note browser fetches previews from a
+        // Compose produceState (Main) for every card; keep that work off the main thread.
+        return withContext(Dispatchers.Default) {
+            val polylines = rows.take(maxStrokes).map { StrokeSerialization.decodePoints(it.inputsJson) }
+            StrokePreviewNormalizer.normalize(polylines)
+        }
     }
 
     suspend fun clearStrokes(pageId: String) {

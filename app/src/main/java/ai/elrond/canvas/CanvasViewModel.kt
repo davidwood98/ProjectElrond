@@ -66,6 +66,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -114,6 +115,11 @@ class CanvasViewModel(
     lassoSnapBackEnabledFlow: Flow<Boolean>? = null,
     /** Write-through for the palm-rejection preference (null in tests). */
     private val persistStylusOnly: (suspend (Boolean) -> Unit)? = null,
+    /**
+     * Renders + caches this page's note-card thumbnail (load preview → render → write). Injected as
+     * a seam so JVM tests assert the orchestration with a fake; null in tests / when no page is set.
+     */
+    private val thumbnailGenerator: (suspend (pageId: String) -> Unit)? = null,
     private val triggerDebounceMillis: Long = TRIGGER_DEBOUNCE_MILLIS,
     private val autoSaveDebounceMillis: Long = AUTOSAVE_DEBOUNCE_MILLIS,
     private val requestTimeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
@@ -137,6 +143,7 @@ class CanvasViewModel(
         suggestionRepository: SuggestionRepository,
         enqueueExtraction: @JvmSuppressWildcards (String) -> Unit,
         settings: SettingsRepository,
+        thumbnailCache: ThumbnailCache,
     ) : this(
         recognizer = recognizer,
         aiProvider = aiProvider,
@@ -153,6 +160,18 @@ class CanvasViewModel(
         lassoSnapBackThresholdFlow = settings.lassoSnapBackThreshold,
         lassoSnapBackEnabledFlow = settings.lassoSnapBackEnabled,
         persistStylusOnly = { settings.setStylusOnly(it) },
+        // Real generator: render the page's normalized polylines (the same data the card draws) to a
+        // bitmap off-thread and cache it; an empty page drops any stale file so the card shows blank.
+        thumbnailGenerator = { pid ->
+            val polylines = repository.loadStrokePreview(pid)
+            if (polylines.isEmpty()) {
+                thumbnailCache.delete(pid)
+            } else {
+                val bitmap = withContext(Dispatchers.Default) { ThumbnailRenderer.render(polylines) }
+                thumbnailCache.write(pid, bitmap)
+                bitmap.recycle()
+            }
+        },
     )
 
     private val _finishedStrokes = MutableStateFlow<List<CanvasStroke>>(emptyList())
@@ -246,6 +265,16 @@ class CanvasViewModel(
     @Volatile
     private var contentDirtyForExtraction: Boolean = false
 
+    /**
+     * True once ink changed since the page's note-card thumbnail was last (re)generated. Set on any
+     * ink mutation (a finished pen stroke; the autosave detecting a content change covers erase /
+     * undo / lasso edits too); cleared by [generateThumbnail]. Drives the close-flush in
+     * [onCleared] so a quick back-press still leaves a fresh thumbnail. Readable by tests.
+     */
+    @Volatile
+    internal var thumbnailDirty: Boolean = false
+        private set
+
     /** AI notes as last persisted — same role for the ai_notes table. */
     private var lastPersistedAiNotes: List<AiInkNote> = emptyList()
 
@@ -336,17 +365,20 @@ class CanvasViewModel(
         viewModelScope.launch {
             _finishedStrokes.debounce(autoSaveDebounceMillis).collect { strokes ->
                 if (strokes != lastPersisted) {
-                    runCatching { repository.replaceStrokes(pageId, strokes) }
-                        .onSuccess {
-                            lastPersisted = strokes
-                            // Kick off background TODO/calendar extraction only when genuinely new
-                            // pen ink was written — never for lasso edits (move/scale/duplicate/
-                            // paste/…), so pasted/duplicated ink isn't re-run by the extractor.
-                            if (strokes.isNotEmpty() && contentDirtyForExtraction) {
-                                contentDirtyForExtraction = false
-                                enqueueExtraction?.invoke(pageId)
-                            }
+                    val saved = runCatching { repository.replaceStrokes(pageId, strokes) }.isSuccess
+                    if (saved) {
+                        lastPersisted = strokes
+                        // The persisted ink changed — refresh the note-card thumbnail (reads the
+                        // freshly-saved strokes, so it runs after the write).
+                        generateThumbnail(pageId)
+                        // Kick off background TODO/calendar extraction only when genuinely new
+                        // pen ink was written — never for lasso edits (move/scale/duplicate/
+                        // paste/…), so pasted/duplicated ink isn't re-run by the extractor.
+                        if (strokes.isNotEmpty() && contentDirtyForExtraction) {
+                            contentDirtyForExtraction = false
+                            enqueueExtraction?.invoke(pageId)
                         }
+                    }
                 }
             }
         }
@@ -362,15 +394,31 @@ class CanvasViewModel(
         }
     }
 
+    /** (Re)generates + caches the page thumbnail, clearing [thumbnailDirty]. No-op without a generator. */
+    private suspend fun generateThumbnail(pageId: String) {
+        val generate = thumbnailGenerator ?: return
+        thumbnailDirty = false
+        runCatching { generate(pageId) }
+    }
+
     override fun onCleared() {
         // Final flush so a quick back-press inside the debounce window isn't lost.
         val repository = repository
         val pageId = pageId
         val strokes = _finishedStrokes.value
         val aiNotes = _aiNotes.value.filterNot { it.isError }
+        val needsThumbnail = thumbnailDirty
+        val generateThumbnail = thumbnailGenerator
         if (repository != null && pageId != null) {
-            if (strokes != lastPersisted) {
-                flushScope.launch { runCatching { repository.replaceStrokes(pageId, strokes) } }
+            if (strokes != lastPersisted || needsThumbnail) {
+                // Flush the strokes, THEN regenerate the thumbnail (it reads the just-saved strokes),
+                // so a back-press inside the autosave debounce still leaves a fresh thumbnail.
+                flushScope.launch {
+                    if (strokes != lastPersisted) runCatching { repository.replaceStrokes(pageId, strokes) }
+                    if (needsThumbnail && generateThumbnail != null) {
+                        runCatching { generateThumbnail(pageId) }
+                    }
+                }
             }
             if (aiNotes != lastPersistedAiNotes) {
                 flushScope.launch { runCatching { repository.replaceAiNotes(pageId, aiNotes) } }
@@ -411,6 +459,7 @@ class CanvasViewModel(
         pushUndoSnapshot(_finishedStrokes.value)
         clearSelection() // a fresh pen stroke isn't part of any lasso selection
         contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
+        thumbnailDirty = true // ink changed — the note-card thumbnail is now stale
         _finishedStrokes.update { current -> current + strokes.map { CanvasStroke(newStrokeId(), it) } }
         scheduleTriggerDetection()
     }

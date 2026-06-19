@@ -1,10 +1,12 @@
 package ai.elrond.notes
 
+import ai.elrond.canvas.ThumbnailCache
 import ai.elrond.data.NoteRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -24,6 +26,7 @@ class NoteListViewModelTest {
 
     private val dispatcher = StandardTestDispatcher()
     private val repository = mockk<NoteRepository>(relaxed = true)
+    private val thumbnailCache = mockk<ThumbnailCache>(relaxed = true)
 
     @Before
     fun setUp() {
@@ -46,7 +49,7 @@ class NoteListViewModelTest {
     @Test
     fun `pages exposes the repository timeline`() = runTest(dispatcher) {
         every { repository.observeTimeline() } returns flowOf(listOf(page("p1"), page("p2")))
-        val viewModel = NoteListViewModel(repository)
+        val viewModel = NoteListViewModel(repository, thumbnailCache)
 
         backgroundScope.launch { viewModel.pages.collect { } }
         advanceUntilIdle()
@@ -59,7 +62,7 @@ class NoteListViewModelTest {
         every { repository.observeTimeline() } returns flowOf(emptyList())
         coEvery { repository.ensureDefaultNotebook() } returns Notebook("nb-1", "My Notes", 1L)
         coEvery { repository.createPage("nb-1") } returns page("new-page")
-        val viewModel = NoteListViewModel(repository)
+        val viewModel = NoteListViewModel(repository, thumbnailCache)
 
         var openedId: String? = null
         viewModel.createNote { openedId = it }
@@ -69,13 +72,14 @@ class NoteListViewModelTest {
     }
 
     @Test
-    fun `deleteNote delegates to repository`() = runTest(dispatcher) {
+    fun `deleteNote delegates to repository and drops the cached thumbnail`() = runTest(dispatcher) {
         every { repository.observeTimeline() } returns flowOf(emptyList())
-        val viewModel = NoteListViewModel(repository)
+        val viewModel = NoteListViewModel(repository, thumbnailCache)
 
         viewModel.deleteNote("p1")
         advanceUntilIdle()
 
         coVerify { repository.deletePage("p1") }
+        verify { thumbnailCache.delete("p1") }
     }
 }

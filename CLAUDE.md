@@ -784,6 +784,66 @@ NotConfigured/NeedsSignIn/Events/Error state machine + sign-in transition + devi
 (+`events_tab_shows_microsoft_sign_in_when_outlook_not_connected`; the old placeholder assertion is
 gone). The MSAL flow itself is device/manual-verified like the other on-device pieces.
 
+## FA-12 — performance: incremental dry-layer render + WebP thumbnail cache (2026-06-19)
+
+Two targeted performance fixes for device stutter (a performance audit + on-device confirmation:
+16 notes, several full of strokes, 6 with to-do links, background auto-extraction running). **256 app
++ 24 aibackend JVM/Robolectric tests pass** (0 failures; was 250+24) plus an extended instrumented
+test; `:app:testDebugUnitTest`, `:aibackend:test`, and `:app:assembleDebugAndroidTest` build on the
+WSL Linux SDK. **No schema change — DB stays v7.** Device-confirmed on a Galaxy Tab S (2026-06-19):
+writing stutter and note-browser/nav-back stutter are gone.
+
+- **Incremental dry-layer render (writing stutter as a page fills).** `InkCanvas`'s dry-layer
+  collector called `DryStrokesView.setStrokes()` — which `invalidate()`s and repaints every dry
+  stroke via `CanvasStrokeRenderer.draw` — on *every* `combine(finishedStrokes, selection)` emission.
+  The combine also fires on every transform-only emission (each lasso-drag frame mutates
+  `selection.transform` but not the stroke list or the selected ids), so a full-page mesh repaint ran
+  per frame and cost grew linearly with stroke count. `setStrokes()` is now **inside** the
+  change-detection `if` (the FA-9 cache-key check), so the dry layer repaints only when the stroke
+  list or selected-id set actually changes — never per drag frame. First-stroke render is preserved
+  (the first emission still trips the `if`).
+- **Serialization off the autosave thread.** `NoteRepository.replaceStrokes` JSON-encoded every
+  stroke's points on the caller's context — the Main-dispatched `viewModelScope` autosave. The
+  `strokes.map { it.toEntity(...) }` is now wrapped in `withContext(Dispatchers.Default)`. (Safe for
+  tests: the VM tests mock the repository; `NoteRepositoryTest` awaits it sequentially.)
+- **File-backed WebP thumbnail cache (nav-back + browser load stutter).** The note browser used to
+  decode stroke JSON for up to `PREVIEW_MAX_STROKES` (60) strokes per card on the **main thread** (a
+  `produceState` calling `viewModel.preview`) and redraw the polylines from scratch on every
+  recomposition — a gridful at once stuttered the nav transition. New **`canvas/ThumbnailCache.kt`**:
+  one WebP per page under `<cacheDir>/thumbnails/<pageId>.webp` (`write`/`read`/`exists`/`delete`,
+  all off-thread), plus **`ThumbnailRenderer`** which renders the *same normalized polylines the card
+  drew* onto a software `Canvas` (`drawPath`) — NOT the live ink View. (The dry-ink View draws via
+  `CanvasStrokeRenderer.drawMesh`, which is **hardware-only** and throws on a software `Bitmap`
+  canvas, so it cannot be captured off-screen — the original audit's `view.draw(softwareCanvas)` plan
+  would have crashed.) Legacy `Bitmap.CompressFormat.WEBP` on an opaque `RGB_565` bitmap (minSdk 29 <
+  the API-30 `WEBP_LOSSLESS`).
+  - `CanvasViewModel` takes a `thumbnailGenerator` seam (the real impl — `loadStrokePreview` → render
+    → `cache.write`; empty page → `cache.delete` — is built in the `@Inject` ctor from an injected
+    `ThumbnailCache`; null/fake in JVM tests). It regenerates on autosave-success and on the
+    `onCleared` flush (ordered **after** the stroke write, so a quick back-press still leaves a fresh
+    thumbnail), gated by `thumbnailDirty` (set on a finished stroke / any persisted change, cleared by
+    `generateThumbnail`).
+  - `NoteCard` shows the cached `Image` when present, else the polyline `StrokeThumbnail` fallback;
+    both `produceState`s run off-main and are keyed on `modifiedAt`, so a freshly generated thumbnail
+    replaces the fallback on the next visit. `NoteRepository.loadStrokePreview`'s decode + normalize
+    also moved to `withContext(Dispatchers.Default)` — so the browser does **zero main-thread work**
+    whether or not a cached thumbnail exists yet. `NoteListViewModel.deleteNote` now also deletes the
+    cached file.
+  - `ThumbnailCache` is a Hilt `@Singleton` (`AppModule`, `context.cacheDir`); injected into
+    `CanvasViewModel` (`@Inject` secondary ctor) and `NoteListViewModel`.
+- **Deliberately skipped** the audit's `onStrokesFinished` ArrayDeque change: it's O(n) at emit time
+  either way (StateFlow + the combine `!==` check both need a fresh reference) and a mutable backing
+  list would desync from the ~10 other sites that set `_finishedStrokes`.
+
+Thumbnails render on an **opaque white** background (legacy WebP carries no alpha at minSdk 29) — fine
+on a light Card; a follow-up for dark-theme correctness would be `ARGB_8888` + `WEBP_LOSSLESS` behind
+an API-30 guard. New/updated tests: `ThumbnailCacheTest` (Robolectric — write/read round-trip, delete,
+missing→null), `CanvasViewModelThumbnailTest` (dirty-flag set on a finished stroke, autosave
+regenerates + clears it, an unchanged page neither saves nor generates), `NoteListViewModelTest`
+(+delete drops the cached thumbnail), and the instrumented `NoteListScreenTest`
+(+cached note shows the `Image`, uncached shows the polyline fallback — via test tags). The on-canvas
+render fidelity stays device-verified (software canvas can't host the ink meshes).
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):

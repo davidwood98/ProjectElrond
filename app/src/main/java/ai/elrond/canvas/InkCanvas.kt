@@ -136,21 +136,26 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
                 val owner = v.findViewTreeLifecycleOwner() ?: return
                 job = owner.lifecycleScope.launch {
                     owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                        // Cache the dry list so it's rebuilt only when the strokes or the selected set
-                        // change — never per drag frame.
+                        // Keys for the last dry-layer rebuild, so we rebuild + repaint ONLY when the
+                        // stroke list or the selected set actually changes.
                         var splitKeyStrokes: List<CanvasStroke>? = null
                         var splitKeyIds: Set<String> = emptySet()
-                        var dryCache: List<Stroke> = emptyList()
                         combine(viewModel.finishedStrokes, viewModel.selection) { strokes, sel ->
                             strokes to sel
                         }.collect { (strokes, sel) ->
                             val selectedIds = sel?.ids ?: emptySet()
+                            // setStrokes() invalidate()s, which repaints every dry stroke from scratch
+                            // via CanvasStrokeRenderer.draw. The combine also fires on every
+                            // transform-only emission (each lasso-drag frame updates selection.transform
+                            // but not the stroke list or the selected ids) — so calling setStrokes there
+                            // would redraw the whole page per frame. Gate it on a real change.
                             if (strokes !== splitKeyStrokes || selectedIds != splitKeyIds) {
                                 splitKeyStrokes = strokes
                                 splitKeyIds = selectedIds
-                                dryCache = strokes.filterNot { it.id in selectedIds }.map { it.stroke }
+                                dryStrokesView.setStrokes(
+                                    strokes.filterNot { it.id in selectedIds }.map { it.stroke },
+                                )
                             }
-                            dryStrokesView.setStrokes(dryCache)
                         }
                     }
                 }
