@@ -1,5 +1,6 @@
 package ai.elrond.ui
 
+import ai.elrond.canvas.ThumbnailCache
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.TodoRepository
@@ -8,9 +9,11 @@ import ai.elrond.settings.SettingsRepository
 import ai.elrond.settings.SettingsViewModel
 import ai.elrond.todo.TodoViewModel
 import android.content.Context
+import android.graphics.Bitmap
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -21,6 +24,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -39,6 +43,7 @@ class NoteListScreenTest {
 
     private lateinit var db: ElrondDatabase
     private lateinit var repository: NoteRepository
+    private lateinit var thumbnailCache: ThumbnailCache
     private lateinit var viewModel: NoteListViewModel
     private lateinit var todoViewModel: TodoViewModel
     private lateinit var settingsViewModel: SettingsViewModel
@@ -56,7 +61,9 @@ class NoteListScreenTest {
             aiNoteDao = db.aiNoteDao(),
             editEventDao = db.pageEditEventDao(),
         )
-        viewModel = NoteListViewModel(repository)
+        // Isolate the cache per run so a stale file from a prior run can't satisfy the fallback case.
+        thumbnailCache = ThumbnailCache(ctx.cacheDir.resolve("thumb-test-${System.nanoTime()}"))
+        viewModel = NoteListViewModel(repository, thumbnailCache)
         todoViewModel = TodoViewModel(TodoRepository(db.todoDao()))
         settingsViewModel = SettingsViewModel(SettingsRepository(ctx))
     }
@@ -108,6 +115,36 @@ class NoteListScreenTest {
         composeRule.waitUntil(TIMEOUT) {
             composeRule.onAllNodesWithText("Test Note").fetchSemanticsNodes().isEmpty()
         }
+    }
+
+    @Test
+    fun cached_thumbnail_shows_image_uncached_shows_polyline_fallback() {
+        runBlocking {
+            val notebook = repository.ensureDefaultNotebook()
+            val cached = repository.createPage(notebook.id, customTitle = "Cached Note")
+            repository.createPage(notebook.id, customTitle = "Uncached Note")
+            thumbnailCache.write(cached.id, Bitmap.createBitmap(8, 8, Bitmap.Config.RGB_565))
+        }
+        composeRule.setContent {
+            NoteListScreen(
+                onOpenNote = {},
+                onOpenSettings = {},
+                viewModel = viewModel,
+                todoViewModel = todoViewModel,
+                settingsViewModel = settingsViewModel,
+            )
+        }
+
+        // One card has a cached WebP (Image), the other falls back to the polyline thumbnail.
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithTag(THUMBNAIL_IMAGE_TAG).fetchSemanticsNodes().isNotEmpty()
+        }
+        assertTrue(
+            composeRule.onAllNodesWithTag(THUMBNAIL_IMAGE_TAG).fetchSemanticsNodes().isNotEmpty(),
+        )
+        assertTrue(
+            composeRule.onAllNodesWithTag(THUMBNAIL_FALLBACK_TAG).fetchSemanticsNodes().isNotEmpty(),
+        )
     }
 
     private companion object {

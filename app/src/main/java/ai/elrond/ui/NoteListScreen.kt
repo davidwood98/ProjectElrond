@@ -4,7 +4,9 @@ import ai.elrond.notes.NoteListViewModel
 import ai.elrond.notes.NotePage
 import ai.elrond.settings.SettingsViewModel
 import ai.elrond.todo.TodoViewModel
+import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -54,8 +56,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -203,21 +208,13 @@ private fun NoteCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
-    // Re-fetch the thumbnail when the page is edited.
-    val preview by produceState<List<List<Pair<Float, Float>>>>(
-        initialValue = emptyList(),
-        key1 = page.id,
-        key2 = page.modifiedAt,
-    ) {
-        value = viewModel.preview(page.id)
-    }
-
     Card(
         modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            StrokeThumbnail(
-                polylines = preview,
+            NoteThumbnail(
+                page = page,
+                viewModel = viewModel,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(120.dp),
@@ -233,6 +230,37 @@ private fun NoteCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/**
+ * Card thumbnail: shows the cached WebP if one exists (decoded off the main thread), otherwise
+ * draws the stroke polylines (also decoded off-main — see [NoteListViewModel.preview]). Both are
+ * re-fetched when the page is edited (keyed on [NotePage.modifiedAt]), so a freshly generated
+ * thumbnail replaces the polyline fallback on the next visit.
+ */
+@Composable
+private fun NoteThumbnail(
+    page: NotePage,
+    viewModel: NoteListViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val bitmap by produceState<Bitmap?>(null, page.id, page.modifiedAt) {
+        value = viewModel.thumbnail(page.id)
+    }
+    val cached = bitmap
+    if (cached != null) {
+        Image(
+            bitmap = cached.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier.testTag(THUMBNAIL_IMAGE_TAG),
+        )
+    } else {
+        val preview by produceState<List<List<Pair<Float, Float>>>>(emptyList(), page.id, page.modifiedAt) {
+            value = viewModel.preview(page.id)
+        }
+        StrokeThumbnail(polylines = preview, modifier = modifier.testTag(THUMBNAIL_FALLBACK_TAG))
     }
 }
 
@@ -289,3 +317,7 @@ private fun EmptyState(modifier: Modifier = Modifier) {
 }
 
 private val EDITED_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM, HH:mm")
+
+/** Test tags distinguishing the cached-bitmap thumbnail from the polyline fallback. */
+internal const val THUMBNAIL_IMAGE_TAG = "note-thumbnail-image"
+internal const val THUMBNAIL_FALLBACK_TAG = "note-thumbnail-fallback"

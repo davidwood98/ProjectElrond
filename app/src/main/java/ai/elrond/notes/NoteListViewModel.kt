@@ -1,6 +1,8 @@
 package ai.elrond.notes
 
+import ai.elrond.canvas.ThumbnailCache
 import ai.elrond.data.NoteRepository
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -14,6 +16,7 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class NoteListViewModel @Inject constructor(
     private val repository: NoteRepository,
+    private val thumbnailCache: ThumbnailCache,
 ) : ViewModel() {
 
     /** All pages, most recently edited first. */
@@ -30,10 +33,16 @@ class NoteListViewModel @Inject constructor(
     }
 
     fun deleteNote(pageId: String) {
-        viewModelScope.launch { repository.deletePage(pageId) }
+        viewModelScope.launch {
+            repository.deletePage(pageId)
+            thumbnailCache.delete(pageId) // drop the cached WebP so stale files don't accumulate
+        }
     }
 
-    /** Normalized stroke polylines for the card thumbnail. */
+    /** Cached WebP thumbnail for the card (decoded off the main thread), or null if none exists yet. */
+    suspend fun thumbnail(pageId: String): Bitmap? = thumbnailCache.read(pageId)
+
+    /** Normalized stroke polylines — the fallback thumbnail when no cached bitmap exists yet. */
     suspend fun preview(pageId: String): List<List<Pair<Float, Float>>> =
         runCatching { repository.loadStrokePreview(pageId) }.getOrDefault(emptyList())
 }

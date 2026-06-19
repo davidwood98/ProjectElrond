@@ -1,5 +1,6 @@
 package ai.elrond.di
 
+import ai.elrond.canvas.ThumbnailCache
 import ai.elrond.data.CalendarRepository
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NoteRepository
@@ -58,6 +59,11 @@ object AppModule {
     @Singleton
     fun provideSettingsRepository(@ApplicationContext context: Context): SettingsRepository =
         SettingsRepository(context)
+
+    @Provides
+    @Singleton
+    fun provideThumbnailCache(@ApplicationContext context: Context): ThumbnailCache =
+        ThumbnailCache(context.cacheDir)
 
     /**
      * Enqueues background auto-extraction for a page (wraps WorkManager + app context).
