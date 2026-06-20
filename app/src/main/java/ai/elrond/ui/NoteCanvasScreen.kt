@@ -194,12 +194,30 @@ fun NoteCanvasScreen(
                 selected = tool == CanvasTool.PEN,
                 treatment = toolTreatment,
             )
+            // Visual placeholders (Highlighter / Pencil / Text) — NOT yet wired as tools. Present in
+            // the handoff order so the full toolbar spacing/feel can be reviewed on-device; they
+            // render in the resting state and no-op on tap.
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Highlighter),
+                contentDescription = "Highlighter (coming soon)",
+                onClick = {},
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Pencil),
+                contentDescription = "Pencil (coming soon)",
+                onClick = {},
+            )
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Eraser),
                 contentDescription = "Eraser",
                 onClick = { viewModel.selectTool(CanvasTool.ERASER) },
                 selected = tool == CanvasTool.ERASER,
                 treatment = toolTreatment,
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Text),
+                contentDescription = "Text (coming soon)",
+                onClick = {},
             )
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Lasso),
