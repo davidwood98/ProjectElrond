@@ -40,6 +40,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `ui/` — Compose UI components, screens, theme.
 - `data/` — Room database, repositories, models. Page metadata: created, modified, tags, AI context summary. Supports "created X / last edited Y" timeline views.
 
+### Package layout — by layer
+
+The `:app` packages follow a strict **by-layer** convention — the clean dependency flow
+(UI → ViewModel → Repository → Room/`:aibackend`) made visible in the package tree:
+
+- **`ai.elrond`** (root) — app entry points only: `ElrondApplication`, `MainActivity`.
+- **`ai.elrond.ui`** — **front end**: everything you see — Compose screens/components, the ink
+  `View`s, theme, icons.
+- **`ai.elrond.presentation`** — the **bridge**: ViewModels + the UI-state classes they expose.
+  Holds screen state and turns user actions into calls on the layer below. No drawing, no storage.
+- **`ai.elrond.domain`** — the app's own **pure logic & in-memory models**: detectors, stroke
+  geometry, date resolution, the extraction runner, models, enums. No storage/network/Compose.
+- **`ai.elrond.data`** — **back end**: storage + network + device/cloud integrations — Room (db,
+  DAOs, entities, repositories), serialization, the thumbnail cache, the ML Kit recognizer, the
+  WorkManager extraction worker/scheduler, the calendar providers.
+- **`ai.elrond.di`** — Hilt modules (cross-cutting wiring).
+- **`:aibackend`** (separate module) — AI logic + the Anthropic API, zero Android. The true back end.
+
+**Naming rule of thumb:** `*Screen` / `*View` / `@Composable` ⇒ `ui`; `*ViewModel` ⇒
+`presentation`; `*Repository` / `*Dao` / `*Entity` / `*Provider` / `*Worker` ⇒ `data`;
+detectors / mappers / models / enums ⇒ `domain`.
+
 ### UI design assets (`app/src/main/res/`)
 
 Home for design elements — pen/eraser symbols, loading-indicator animations, etc. (Material
