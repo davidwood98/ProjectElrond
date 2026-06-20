@@ -1,7 +1,7 @@
 package ai.elrond.data
 
 import ai.elrond.domain.AiInkNote
-import ai.elrond.calendar.CalendarEvent
+import ai.elrond.data.CalendarEvent
 import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.TodoItem

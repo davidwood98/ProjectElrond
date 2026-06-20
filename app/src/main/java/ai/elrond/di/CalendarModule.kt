@@ -1,10 +1,10 @@
 package ai.elrond.di
 
-import ai.elrond.calendar.CalendarProviderFactory
-import ai.elrond.calendar.CalendarProviderType
-import ai.elrond.calendar.MsalOutlookAuthProvider
-import ai.elrond.calendar.NoOpOutlookAuthProvider
-import ai.elrond.calendar.OutlookAuthProvider
+import ai.elrond.data.CalendarProviderFactory
+import ai.elrond.data.CalendarProviderType
+import ai.elrond.data.MsalOutlookAuthProvider
+import ai.elrond.data.NoOpOutlookAuthProvider
+import ai.elrond.data.OutlookAuthProvider
 import android.content.Context
 import dagger.Module
 import dagger.Provides

@@ -1,6 +1,6 @@
 package ai.elrond.ui
 
-import ai.elrond.calendar.CalendarEvent
+import ai.elrond.data.CalendarEvent
 import ai.elrond.domain.CalendarGrid
 import ai.elrond.domain.DayActivity
 import ai.elrond.presentation.CalendarViewModel
@@ -438,7 +438,7 @@ private fun OutlookSignInPrompt(caption: String, onSignIn: () -> Unit) {
 @Composable
 private fun EventsList(state: EventsUiState.Events, onSignOut: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
-        if (state.providerType == ai.elrond.calendar.CalendarProviderType.OUTLOOK) {
+        if (state.providerType == ai.elrond.data.CalendarProviderType.OUTLOOK) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,

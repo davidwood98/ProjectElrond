@@ -1,6 +1,6 @@
 package ai.elrond.data
 
-import ai.elrond.calendar.CalendarEvent
+import ai.elrond.data.CalendarEvent
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.map
 /**
  * Stores calendar events locally — AI suggestions (pending confirmation) and
  * user-confirmed events linked back to their source note. Writing to an actual
- * device/Google/Outlook calendar is the [ai.elrond.calendar.CalendarProvider]'s
+ * device/Google/Outlook calendar is the [ai.elrond.data.CalendarProvider]'s
  * job and only happens after explicit confirmation.
  */
 class CalendarRepository(

@@ -1,5 +1,7 @@
 package ai.elrond.extract
 
+import ai.elrond.data.ExtractionWorker
+import ai.elrond.data.ExtractionScheduler
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.NetworkType

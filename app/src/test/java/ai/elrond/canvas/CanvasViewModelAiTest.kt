@@ -3,8 +3,8 @@ package ai.elrond.canvas
 import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.presentation.AiUiState
 import ai.elrond.domain.GestureTriggerDetector
-import ai.elrond.ai.HandwritingRecognizer
-import ai.elrond.ai.RecognitionCandidate
+import ai.elrond.data.HandwritingRecognizer
+import ai.elrond.data.RecognitionCandidate
 import ai.elrond.domain.TriggerMode
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider

@@ -1,4 +1,4 @@
-package ai.elrond.calendar
+package ai.elrond.data
 
 /**
  * Google Calendar API v3 provider via Google Sign-In OAuth 2.0.

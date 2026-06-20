@@ -1,7 +1,7 @@
 package ai.elrond.canvas
 
 import ai.elrond.presentation.CanvasViewModel
-import ai.elrond.calendar.CalendarEvent
+import ai.elrond.data.CalendarEvent
 import ai.elrond.data.CalendarRepository
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository

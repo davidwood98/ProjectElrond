@@ -1,9 +1,9 @@
 package ai.elrond.ui
 
-import ai.elrond.calendar.CalendarEvent
-import ai.elrond.calendar.CalendarProviderType
-import ai.elrond.calendar.DateRange
-import ai.elrond.calendar.NoOpOutlookAuthProvider
+import ai.elrond.data.CalendarEvent
+import ai.elrond.data.CalendarProviderType
+import ai.elrond.data.DateRange
+import ai.elrond.data.NoOpOutlookAuthProvider
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NoteRepository
 import ai.elrond.presentation.CalendarViewModel

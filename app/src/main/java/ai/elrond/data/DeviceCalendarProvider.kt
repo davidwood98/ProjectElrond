@@ -1,4 +1,4 @@
-package ai.elrond.calendar
+package ai.elrond.data
 
 import android.content.ContentResolver
 import android.content.ContentUris

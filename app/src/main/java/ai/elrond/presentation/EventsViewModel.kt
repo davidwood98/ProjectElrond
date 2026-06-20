@@ -1,12 +1,12 @@
 package ai.elrond.presentation
 
-import ai.elrond.calendar.CalendarEvent
-import ai.elrond.calendar.CalendarNotAuthenticatedException
-import ai.elrond.calendar.CalendarProviderType
-import ai.elrond.calendar.CalendarProviders
-import ai.elrond.calendar.DateRange
-import ai.elrond.calendar.OutlookAuthProvider
-import ai.elrond.calendar.OutlookAuthState
+import ai.elrond.data.CalendarEvent
+import ai.elrond.data.CalendarNotAuthenticatedException
+import ai.elrond.data.CalendarProviderType
+import ai.elrond.data.CalendarProviders
+import ai.elrond.data.DateRange
+import ai.elrond.data.OutlookAuthProvider
+import ai.elrond.data.OutlookAuthState
 import ai.elrond.data.SettingsRepository
 import android.app.Activity
 import androidx.lifecycle.ViewModel
@@ -46,7 +46,7 @@ sealed interface EventsUiState {
 
 /**
  * Backs the Calendar → Events tab: resolves the user's selected [CalendarProviderType], reflects the
- * Outlook auth state, and loads upcoming events from the corresponding [ai.elrond.calendar.CalendarProvider].
+ * Outlook auth state, and loads upcoming events from the corresponding [ai.elrond.data.CalendarProvider].
  *
  * No Graph/MSAL types appear in this ViewModel — it goes through the [OutlookAuthProvider] seam and a
  * [loadEvents] lambda (the architectural rule that provider APIs stay behind their interfaces). The

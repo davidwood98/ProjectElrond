@@ -1,8 +1,8 @@
-package ai.elrond.extract
+package ai.elrond.data
 
 import ai.elrond.domain.RecognizedLine
 import ai.elrond.domain.AutoExtractionRunner
-import ai.elrond.ai.HandwritingRecognizer
+import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.domain.groupStrokesIntoLines
 import androidx.ink.strokes.Stroke
 import androidx.ink.strokes.StrokeInput

@@ -1,7 +1,7 @@
 package ai.elrond.ui
 
 import ai.elrond.domain.TriggerMode
-import ai.elrond.calendar.CalendarProviderType
+import ai.elrond.data.CalendarProviderType
 import ai.elrond.data.SettingsRepository
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.domain.ToolSelectedTreatment

@@ -1,4 +1,4 @@
-package ai.elrond.calendar
+package ai.elrond.data
 
 import ai.elrond.BuildConfig
 import android.content.Context

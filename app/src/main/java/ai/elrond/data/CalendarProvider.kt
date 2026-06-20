@@ -1,4 +1,4 @@
-package ai.elrond.calendar
+package ai.elrond.data
 
 /** Which calendar backend a [CalendarProvider] talks to. */
 enum class CalendarProviderType { GOOGLE, OUTLOOK, DEVICE }

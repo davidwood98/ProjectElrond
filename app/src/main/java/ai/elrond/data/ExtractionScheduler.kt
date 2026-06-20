@@ -1,4 +1,4 @@
-package ai.elrond.extract
+package ai.elrond.data
 
 import android.content.Context
 import androidx.work.BackoffPolicy

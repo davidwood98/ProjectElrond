@@ -1,4 +1,4 @@
-package ai.elrond.ai
+package ai.elrond.data
 
 import androidx.ink.strokes.Stroke
 import androidx.ink.strokes.StrokeInput

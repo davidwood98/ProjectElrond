@@ -8,7 +8,7 @@ import ai.elrond.aibackend.AIRequest
 import ai.elrond.aibackend.AIResponse
 import ai.elrond.aibackend.ExtractedTask
 import ai.elrond.aibackend.TaskExtractor
-import ai.elrond.ai.HandwritingRecognizer
+import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository

@@ -3,7 +3,7 @@ package ai.elrond.presentation
 import ai.elrond.domain.ToolSelectedTreatment
 import ai.elrond.data.SettingsRepository
 import ai.elrond.domain.TriggerMode
-import ai.elrond.calendar.CalendarProviderType
+import ai.elrond.data.CalendarProviderType
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel

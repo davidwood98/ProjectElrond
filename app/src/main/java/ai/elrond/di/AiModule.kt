@@ -1,8 +1,8 @@
 package ai.elrond.di
 
 import ai.elrond.BuildConfig
-import ai.elrond.ai.HandwritingRecognizer
-import ai.elrond.ai.MlKitHandwritingRecognizer
+import ai.elrond.data.HandwritingRecognizer
+import ai.elrond.data.MlKitHandwritingRecognizer
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AiCalendarEventExtractor
 import ai.elrond.aibackend.AiTaskExtractor

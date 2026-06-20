@@ -14,8 +14,8 @@ import ai.elrond.BuildConfig
 import ai.elrond.domain.AiInkNote
 import ai.elrond.presentation.AiUiState
 import ai.elrond.domain.GestureTriggerDetector
-import ai.elrond.ai.HandwritingRecognizer
-import ai.elrond.ai.MlKitHandwritingRecognizer
+import ai.elrond.data.HandwritingRecognizer
+import ai.elrond.data.MlKitHandwritingRecognizer
 import ai.elrond.domain.NotePosition
 import ai.elrond.domain.QueryTriggerDetector
 import ai.elrond.domain.TriggerMode
@@ -32,12 +32,12 @@ import ai.elrond.aibackend.AssistantCapabilities
 import ai.elrond.aibackend.TaskExtractor
 import ai.elrond.aibackend.anthropic.AnthropicConfig
 import ai.elrond.aibackend.anthropic.AnthropicProvider
-import ai.elrond.calendar.CalendarEvent
+import ai.elrond.data.CalendarEvent
 import ai.elrond.data.CalendarRepository
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
-import ai.elrond.extract.ExtractionScheduler
+import ai.elrond.data.ExtractionScheduler
 import ai.elrond.domain.PendingSuggestion
 import ai.elrond.domain.SuggestionType
 import ai.elrond.data.SettingsRepository
