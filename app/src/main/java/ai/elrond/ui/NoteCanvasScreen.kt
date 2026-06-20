@@ -8,6 +8,7 @@ import ai.elrond.extract.PendingSuggestion
 import ai.elrond.extract.SuggestionType
 import ai.elrond.settings.SettingsViewModel
 import ai.elrond.todo.TodoViewModel
+import ai.elrond.ui.icons.ElrondIcons
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -28,14 +29,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,10 +57,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -89,6 +92,9 @@ fun NoteCanvasScreen(
     val pendingSuggestions by viewModel.pendingSuggestions.collectAsStateWithLifecycle()
     val hasNewExtractedItems by settingsViewModel.hasNewExtractedItems.collectAsStateWithLifecycle()
     val transientMessage by viewModel.transientMessage.collectAsStateWithLifecycle()
+    // The active-tool highlight style (A soft tile / B filled / C underline), from Settings.
+    val toolTreatment by settingsViewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
+    var showMoreMenu by remember { mutableStateOf(false) }
 
     // AI-box selection lives in the UI (not persisted). When the "edit mode on creation"
     // setting is on (default) a freshly created note starts selected; loaded notes always
@@ -160,88 +166,112 @@ fun NoteCanvasScreen(
             SelectionLayer(viewModel = viewModel, modifier = Modifier.fillMaxSize())
         }
 
-
-        Surface(
+        // ── Leap note toolbar (Claude Design "Note Tool Icons" handoff) ──────────────────────
+        // Left pod: exit the page.
+        LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(48.dp),
-            shape = MaterialTheme.shapes.extraLarge,
-            tonalElevation = 3.dp,
-            shadowElevation = 4.dp,
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to notes")
-            }
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Close),
+                contentDescription = "Back to notes",
+                onClick = onBack,
+            )
         }
 
-        // TODO list button with outstanding-count badge.
-        Surface(
+        // Centre pod: drawing tools + undo/redo. The active tool uses the user's chosen highlight
+        // style (A soft tile / B filled / C underline). Undo/Redo are actions — greyed when unavailable.
+        LeapToolbarContainer(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(48.dp),
+        ) {
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Pen),
+                contentDescription = "Pen",
+                onClick = { viewModel.selectTool(CanvasTool.PEN) },
+                selected = tool == CanvasTool.PEN,
+                treatment = toolTreatment,
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Eraser),
+                contentDescription = "Eraser",
+                onClick = { viewModel.selectTool(CanvasTool.ERASER) },
+                selected = tool == CanvasTool.ERASER,
+                treatment = toolTreatment,
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Lasso),
+                contentDescription = "Lasso select",
+                onClick = { viewModel.selectTool(CanvasTool.LASSO) },
+                selected = tool == CanvasTool.LASSO,
+                treatment = toolTreatment,
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Hand),
+                contentDescription = "Finger drawing",
+                onClick = { viewModel.setStylusOnly(!stylusOnly) },
+                selected = !stylusOnly,
+                treatment = toolTreatment,
+            )
+            ToolbarDivider()
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Undo),
+                contentDescription = "Undo",
+                onClick = viewModel::undo,
+                enabled = canUndo,
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Redo),
+                contentDescription = "Redo",
+                onClick = viewModel::redo,
+                enabled = canRedo,
+            )
+        }
+
+        // Right pod: the to-do list (with its outstanding-count badge) + a More menu (Clear page).
+        LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(48.dp),
-            shape = MaterialTheme.shapes.extraLarge,
-            tonalElevation = 3.dp,
-            shadowElevation = 4.dp,
         ) {
-            IconButton(onClick = {
-                showTodoPanel = true
-                // Opening the panel clears the "new items" flair.
-                settingsViewModel.markExtractedItemsSeen()
-            }) {
-                BadgedBox(
-                    badge = {
-                        when {
-                            hasNewExtractedItems -> Badge { Text("+") }
-                            todoCount > 0 -> Badge { Text(todoCount.toString()) }
-                        }
-                    },
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = "To-do list")
+            val todoBadge: (@Composable () -> Unit)? = when {
+                hasNewExtractedItems -> {
+                    { Badge { Text("+") } }
                 }
+                todoCount > 0 -> {
+                    { Badge { Text(todoCount.toString()) } }
+                }
+                else -> null
             }
-        }
-
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(48.dp), //Header bar position 
-            shape = MaterialTheme.shapes.extraLarge,
-            tonalElevation = 3.dp,
-            shadowElevation = 4.dp,
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FilterChip(
-                    selected = tool == CanvasTool.PEN,
-                    onClick = { viewModel.selectTool(CanvasTool.PEN) },
-                    label = { Text("Pen") },
+            ToolbarButton(
+                painter = rememberVectorPainter(Icons.AutoMirrored.Filled.List),
+                contentDescription = "To-do list",
+                onClick = {
+                    showTodoPanel = true
+                    // Opening the panel clears the "new items" flair.
+                    settingsViewModel.markExtractedItemsSeen()
+                },
+                badge = todoBadge,
+            )
+            Box {
+                ToolbarButton(
+                    painter = painterResource(ElrondIcons.MoreVert),
+                    contentDescription = "More actions",
+                    onClick = { showMoreMenu = true },
                 )
-                FilterChip(
-                    selected = tool == CanvasTool.ERASER,
-                    onClick = { viewModel.selectTool(CanvasTool.ERASER) },
-                    label = { Text("Eraser") },
-                )
-                FilterChip(
-                    selected = tool == CanvasTool.LASSO,
-                    onClick = { viewModel.selectTool(CanvasTool.LASSO) },
-                    label = { Text("Lasso") },
-                )
-                FilterChip(
-                    selected = !stylusOnly,
-                    onClick = { viewModel.setStylusOnly(!stylusOnly) },
-                    label = { Text("Finger draw") },
-                )
-                TextButton(onClick = viewModel::undo, enabled = canUndo) {
-                    Text("↶ Undo")
-                }
-                TextButton(onClick = viewModel::redo, enabled = canRedo) {
-                    Text("↷ Redo")
-                }
-                TextButton(onClick = viewModel::clearPage) {
-                    Text("Clear")
+                DropdownMenu(
+                    expanded = showMoreMenu,
+                    onDismissRequest = { showMoreMenu = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Clear page") },
+                        onClick = {
+                            showMoreMenu = false
+                            viewModel.clearPage()
+                        },
+                    )
                 }
             }
         }

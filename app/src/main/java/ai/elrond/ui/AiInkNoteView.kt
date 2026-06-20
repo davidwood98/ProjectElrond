@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import ai.elrond.ui.theme.LeapPink
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -56,8 +57,8 @@ import kotlin.math.roundToInt
 /** Handwriting-style font for AI ink (Caveat, OFL — see licenses/CAVEAT_OFL.txt). */
 val HandwritingFontFamily = FontFamily(Font(R.font.caveat))
 
-/** AI ink colour — a distinct but aesthetically consistent violet. */
-val AiInkColor = Color(0xFF6A1B9A)
+/** AI ink colour — Leap Pink, a brand accent kept distinct from the navy user ink and cyan toolbar. */
+val AiInkColor = LeapPink
 
 /** Colour for AI error responses and the "request unclear" affordance. */
 val ErrorInkColor = Color(0xFFC62828)

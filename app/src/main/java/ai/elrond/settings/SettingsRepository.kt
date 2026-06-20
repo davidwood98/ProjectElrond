@@ -50,6 +50,14 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[STYLUS_ONLY_KEY] = enabled }
     }
 
+    /** How the active note-tool is highlighted in the toolbar (A soft tile / B filled / C underline). */
+    val toolSelectedTreatment: Flow<ToolSelectedTreatment> = context.settingsDataStore.data
+        .map { ToolSelectedTreatment.fromName(it[TOOL_TREATMENT_KEY]) }
+
+    suspend fun setToolSelectedTreatment(treatment: ToolSelectedTreatment) {
+        context.settingsDataStore.edit { it[TOOL_TREATMENT_KEY] = treatment.name }
+    }
+
     /** The user's preferred calendar backend (default DEVICE). */
     val calendarProvider: Flow<CalendarProviderType> = context.settingsDataStore.data
         .map { prefs ->
@@ -158,6 +166,7 @@ class SettingsRepository(private val context: Context) {
         private val TRIGGER_KEY = stringPreferencesKey("trigger_command")
         private val TRIGGER_MODE_KEY = stringPreferencesKey("trigger_mode")
         private val STYLUS_ONLY_KEY = booleanPreferencesKey("stylus_only")
+        private val TOOL_TREATMENT_KEY = stringPreferencesKey("tool_selected_treatment")
         private val CALENDAR_PROVIDER_KEY = stringPreferencesKey("calendar_provider")
         private val AI_NOTE_SELECTED_ON_CREATE_KEY = booleanPreferencesKey("ai_note_selected_on_create")
         private val LASSO_SNAPBACK_THRESHOLD_KEY = floatPreferencesKey("lasso_snapback_threshold")

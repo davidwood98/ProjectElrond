@@ -3,12 +3,12 @@ package ai.elrond
 import ai.elrond.ui.HomeScreen
 import ai.elrond.ui.NoteCanvasScreen
 import ai.elrond.ui.SettingsScreen
+import ai.elrond.ui.theme.ElrondTheme
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -25,7 +25,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MaterialTheme {
+            ElrondTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     ElrondNavHost()
                 }
