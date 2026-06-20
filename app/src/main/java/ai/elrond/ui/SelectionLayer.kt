@@ -1,12 +1,12 @@
 package ai.elrond.ui
 
-import ai.elrond.ai.GestureTriggerDetector
+import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.presentation.CanvasViewModel
-import ai.elrond.canvas.Corner
-import ai.elrond.canvas.LiveTransform
-import ai.elrond.canvas.SelectionState
-import ai.elrond.canvas.StrokeSelection
-import ai.elrond.canvas.StrokeTransforms
+import ai.elrond.domain.Corner
+import ai.elrond.domain.LiveTransform
+import ai.elrond.domain.SelectionState
+import ai.elrond.domain.StrokeSelection
+import ai.elrond.domain.StrokeTransforms
 import android.graphics.Matrix
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background

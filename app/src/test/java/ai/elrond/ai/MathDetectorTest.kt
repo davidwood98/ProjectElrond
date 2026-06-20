@@ -1,5 +1,6 @@
 package ai.elrond.ai
 
+import ai.elrond.domain.MathDetector
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

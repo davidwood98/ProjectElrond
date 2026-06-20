@@ -1,6 +1,12 @@
 package ai.elrond.canvas
 
-import ai.elrond.ai.GestureTriggerDetector
+import ai.elrond.domain.SelectionBounds
+import ai.elrond.domain.SelectionState
+import ai.elrond.domain.LiveTransform
+import ai.elrond.domain.Corner
+import ai.elrond.domain.StrokeSelection
+import ai.elrond.domain.CanvasStroke
+import ai.elrond.domain.GestureTriggerDetector
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

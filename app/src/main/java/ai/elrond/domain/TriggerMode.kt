@@ -1,4 +1,4 @@
-package ai.elrond.ai
+package ai.elrond.domain
 
 /** How the user activates the AI assistant on the canvas. Persisted in settings. */
 enum class TriggerMode {

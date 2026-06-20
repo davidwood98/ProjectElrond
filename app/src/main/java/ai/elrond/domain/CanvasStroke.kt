@@ -1,4 +1,4 @@
-package ai.elrond.canvas
+package ai.elrond.domain
 
 import androidx.ink.strokes.Stroke
 

@@ -1,29 +1,29 @@
 package ai.elrond.presentation
 
-import ai.elrond.canvas.LiveTransform
+import ai.elrond.domain.LiveTransform
 import ai.elrond.data.ThumbnailRenderer
 import ai.elrond.data.ThumbnailCache
-import ai.elrond.canvas.StrokeTransforms
-import ai.elrond.canvas.StrokeSelection
-import ai.elrond.canvas.SelectionState
-import ai.elrond.canvas.SelectionBounds
-import ai.elrond.canvas.ClipboardState
-import ai.elrond.canvas.CanvasTool
-import ai.elrond.canvas.CanvasStroke
+import ai.elrond.domain.StrokeTransforms
+import ai.elrond.domain.StrokeSelection
+import ai.elrond.domain.SelectionState
+import ai.elrond.domain.SelectionBounds
+import ai.elrond.domain.ClipboardState
+import ai.elrond.domain.CanvasTool
+import ai.elrond.domain.CanvasStroke
 import ai.elrond.BuildConfig
-import ai.elrond.ai.AiInkNote
+import ai.elrond.domain.AiInkNote
 import ai.elrond.presentation.AiUiState
-import ai.elrond.ai.GestureTriggerDetector
+import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.ai.HandwritingRecognizer
 import ai.elrond.ai.MlKitHandwritingRecognizer
-import ai.elrond.ai.NotePosition
-import ai.elrond.ai.QueryTriggerDetector
-import ai.elrond.ai.TriggerMode
-import ai.elrond.ai.defaultAiNotePosition
-import ai.elrond.ai.groupStrokesIntoLines
-import ai.elrond.ai.selectQuestionLines
-import ai.elrond.ai.strokeCentroid
-import ai.elrond.ai.strokeLoopOrNull
+import ai.elrond.domain.NotePosition
+import ai.elrond.domain.QueryTriggerDetector
+import ai.elrond.domain.TriggerMode
+import ai.elrond.domain.defaultAiNotePosition
+import ai.elrond.domain.groupStrokesIntoLines
+import ai.elrond.domain.selectQuestionLines
+import ai.elrond.domain.strokeCentroid
+import ai.elrond.domain.strokeLoopOrNull
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
@@ -38,11 +38,11 @@ import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
 import ai.elrond.extract.ExtractionScheduler
-import ai.elrond.extract.PendingSuggestion
-import ai.elrond.extract.SuggestionType
+import ai.elrond.domain.PendingSuggestion
+import ai.elrond.domain.SuggestionType
 import ai.elrond.data.SettingsRepository
-import ai.elrond.todo.PendingTaskExtraction
-import ai.elrond.todo.TodoPriority
+import ai.elrond.domain.PendingTaskExtraction
+import ai.elrond.domain.TodoPriority
 import android.content.Context
 import androidx.ink.brush.Brush
 import androidx.ink.brush.StockBrushes
@@ -1264,7 +1264,7 @@ class CanvasViewModel(
          */
         private fun String?.toEpochMillisOrNull(today: java.time.LocalDate): Long? {
             if (this.isNullOrBlank()) return null
-            val date = ai.elrond.ai.RelativeDateResolver.resolve(this, today)
+            val date = ai.elrond.domain.RelativeDateResolver.resolve(this, today)
                 ?: runCatching { java.time.LocalDate.parse(this.trim()) }.getOrNull()
                 ?: return null
             return date.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()

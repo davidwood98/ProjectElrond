@@ -1,4 +1,4 @@
-package ai.elrond.ai
+package ai.elrond.domain
 
 import java.time.DayOfWeek
 import java.time.LocalDate

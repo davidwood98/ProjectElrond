@@ -1,4 +1,4 @@
-package ai.elrond.ai
+package ai.elrond.domain
 
 /**
  * Detects the handwritten AI trigger command at the end of the page content and

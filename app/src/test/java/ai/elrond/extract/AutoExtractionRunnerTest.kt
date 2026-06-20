@@ -1,5 +1,8 @@
 package ai.elrond.extract
 
+import ai.elrond.domain.SuggestionType
+import ai.elrond.domain.RecognizedLine
+import ai.elrond.domain.AutoExtractionRunner
 import ai.elrond.aibackend.CalendarEventExtractor
 import ai.elrond.aibackend.ExtractedEvent
 import ai.elrond.aibackend.ExtractedTask

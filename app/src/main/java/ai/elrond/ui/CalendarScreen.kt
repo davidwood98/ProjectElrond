@@ -1,12 +1,12 @@
 package ai.elrond.ui
 
 import ai.elrond.calendar.CalendarEvent
-import ai.elrond.calendar.CalendarGrid
-import ai.elrond.calendar.DayActivity
+import ai.elrond.domain.CalendarGrid
+import ai.elrond.domain.DayActivity
 import ai.elrond.presentation.CalendarViewModel
 import ai.elrond.presentation.EventsUiState
 import ai.elrond.presentation.EventsViewModel
-import ai.elrond.notes.NotePage
+import ai.elrond.domain.NotePage
 import android.app.Activity
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Spacer

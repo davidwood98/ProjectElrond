@@ -1,4 +1,4 @@
-package ai.elrond.todo
+package ai.elrond.domain
 
 /** Priority levels for a TODO item. Ordinal maps to the stored integer. */
 enum class TodoPriority { NONE, LOW, MEDIUM, HIGH }

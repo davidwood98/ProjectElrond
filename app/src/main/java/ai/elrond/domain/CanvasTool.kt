@@ -1,4 +1,4 @@
-package ai.elrond.canvas
+package ai.elrond.domain
 
 /** Drawing tools available on the note canvas. */
 enum class CanvasTool {

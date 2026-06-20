@@ -1,7 +1,7 @@
 package ai.elrond.data
 
-import ai.elrond.extract.PendingSuggestion
-import ai.elrond.extract.SuggestionType
+import ai.elrond.domain.PendingSuggestion
+import ai.elrond.domain.SuggestionType
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map

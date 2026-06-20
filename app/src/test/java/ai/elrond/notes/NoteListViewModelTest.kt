@@ -1,5 +1,7 @@
 package ai.elrond.notes
 
+import ai.elrond.domain.Notebook
+import ai.elrond.domain.NotePage
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.NoteRepository

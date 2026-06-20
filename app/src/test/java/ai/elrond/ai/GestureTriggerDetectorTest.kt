@@ -1,6 +1,7 @@
 package ai.elrond.ai
 
-import ai.elrond.ai.GestureTriggerDetector.Point
+import ai.elrond.domain.GestureTriggerDetector
+import ai.elrond.domain.GestureTriggerDetector.Point
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

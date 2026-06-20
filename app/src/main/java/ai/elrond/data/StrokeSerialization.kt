@@ -1,6 +1,6 @@
 package ai.elrond.data
 
-import ai.elrond.canvas.CanvasStroke
+import ai.elrond.domain.CanvasStroke
 import androidx.ink.brush.Brush
 import androidx.ink.brush.BrushFamily
 import androidx.ink.brush.InputToolType

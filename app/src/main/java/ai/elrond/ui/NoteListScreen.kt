@@ -1,7 +1,7 @@
 package ai.elrond.ui
 
 import ai.elrond.presentation.NoteListViewModel
-import ai.elrond.notes.NotePage
+import ai.elrond.domain.NotePage
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.TodoViewModel
 import android.graphics.Bitmap

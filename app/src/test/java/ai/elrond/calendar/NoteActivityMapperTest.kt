@@ -1,7 +1,8 @@
 package ai.elrond.calendar
 
-import ai.elrond.notes.NoteEditDay
-import ai.elrond.notes.NotePage
+import ai.elrond.domain.NoteActivityMapper
+import ai.elrond.domain.NoteEditDay
+import ai.elrond.domain.NotePage
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime

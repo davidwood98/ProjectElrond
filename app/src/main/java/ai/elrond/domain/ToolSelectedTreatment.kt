@@ -1,4 +1,4 @@
-package ai.elrond.settings
+package ai.elrond.domain
 
 /**
  * How the active note-tool is highlighted in the toolbar — the three "selected" directions from the

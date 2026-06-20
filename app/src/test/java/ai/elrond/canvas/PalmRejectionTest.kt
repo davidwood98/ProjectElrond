@@ -1,5 +1,6 @@
 package ai.elrond.canvas
 
+import ai.elrond.domain.PalmRejection
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

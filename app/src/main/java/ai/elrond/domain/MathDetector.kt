@@ -1,4 +1,4 @@
-package ai.elrond.ai
+package ai.elrond.domain
 
 /**
  * Heuristic detector for whether an AI response is a mathematical expression

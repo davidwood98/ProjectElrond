@@ -1,6 +1,6 @@
 package ai.elrond.ui
 
-import ai.elrond.settings.ToolSelectedTreatment
+import ai.elrond.domain.ToolSelectedTreatment
 import ai.elrond.ui.theme.LeapTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background

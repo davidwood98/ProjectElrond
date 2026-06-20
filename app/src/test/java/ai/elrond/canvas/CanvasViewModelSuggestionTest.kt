@@ -6,9 +6,9 @@ import ai.elrond.data.CalendarRepository
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
-import ai.elrond.extract.PendingSuggestion
-import ai.elrond.extract.SuggestionType
-import ai.elrond.notes.NotePage
+import ai.elrond.domain.PendingSuggestion
+import ai.elrond.domain.SuggestionType
+import ai.elrond.domain.NotePage
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
 import io.mockk.coVerify

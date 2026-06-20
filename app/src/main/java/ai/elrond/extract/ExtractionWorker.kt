@@ -1,5 +1,6 @@
 package ai.elrond.extract
 
+import ai.elrond.domain.AutoExtractionRunner
 import ai.elrond.ai.HandwritingRecognizer
 import ai.elrond.aibackend.CalendarEventExtractor
 import ai.elrond.aibackend.TaskExtractor

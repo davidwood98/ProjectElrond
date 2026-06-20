@@ -1,4 +1,4 @@
-package ai.elrond.ai
+package ai.elrond.domain
 
 /**
  * Groups handwriting strokes into horizontal lines by vertical-span overlap.

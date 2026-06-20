@@ -1,4 +1,4 @@
-package ai.elrond.notes
+package ai.elrond.domain
 
 import java.time.Instant
 import java.time.LocalDate

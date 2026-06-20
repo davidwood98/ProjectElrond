@@ -1,7 +1,7 @@
 package ai.elrond.ui
 
-import ai.elrond.todo.TodoItem
-import ai.elrond.todo.TodoPriority
+import ai.elrond.domain.TodoItem
+import ai.elrond.domain.TodoPriority
 import ai.elrond.presentation.TodoViewModel
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

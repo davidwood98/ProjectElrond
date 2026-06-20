@@ -1,4 +1,4 @@
-package ai.elrond.ai
+package ai.elrond.domain
 
 import kotlin.math.abs
 import kotlin.math.sqrt

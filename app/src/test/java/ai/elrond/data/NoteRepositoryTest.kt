@@ -98,7 +98,7 @@ class NoteRepositoryTest {
 
         repository.replaceAiNotes(
             "page-1",
-            listOf(ai.elrond.ai.AiInkNote(id = "n1", text = "hi", x = 1f, y = 2f, widthPx = 300f)),
+            listOf(ai.elrond.domain.AiInkNote(id = "n1", text = "hi", x = 1f, y = 2f, widthPx = 300f)),
         )
 
         assertEquals(1, slot.captured.size)

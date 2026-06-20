@@ -1,4 +1,4 @@
-package ai.elrond.extract
+package ai.elrond.domain
 
 /** What an AI background-extraction suggestion will become if the user accepts it. */
 enum class SuggestionType { TODO, EVENT }

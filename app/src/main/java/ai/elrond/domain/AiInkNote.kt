@@ -1,4 +1,4 @@
-package ai.elrond.ai
+package ai.elrond.domain
 
 /**
  * An AI response rendered on the canvas as handwriting-style text —

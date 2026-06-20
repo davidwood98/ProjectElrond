@@ -1,4 +1,4 @@
-package ai.elrond.todo
+package ai.elrond.domain
 
 /**
  * Tasks the AI extracted from the current page, awaiting the user's confirmation

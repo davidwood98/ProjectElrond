@@ -1,13 +1,13 @@
-package ai.elrond.extract
+package ai.elrond.domain
 
-import ai.elrond.ai.RelativeDateResolver
+import ai.elrond.domain.RelativeDateResolver
 import ai.elrond.aibackend.CalendarEventExtractor
 import ai.elrond.aibackend.TaskExtractor
 import ai.elrond.calendar.CalendarEvent
 import ai.elrond.data.CalendarRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
-import ai.elrond.todo.TodoPriority
+import ai.elrond.domain.TodoPriority
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime

@@ -1,6 +1,7 @@
 package ai.elrond.ai
 
-import ai.elrond.ai.StrokeLineGrouper.Span
+import ai.elrond.domain.StrokeLineGrouper
+import ai.elrond.domain.StrokeLineGrouper.Span
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

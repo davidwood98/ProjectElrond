@@ -1,7 +1,7 @@
 package ai.elrond.data
 
-import ai.elrond.extract.PendingSuggestion
-import ai.elrond.extract.SuggestionType
+import ai.elrond.domain.PendingSuggestion
+import ai.elrond.domain.SuggestionType
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider

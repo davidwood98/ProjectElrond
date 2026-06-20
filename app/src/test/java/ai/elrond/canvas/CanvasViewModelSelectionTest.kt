@@ -1,9 +1,11 @@
 package ai.elrond.canvas
 
+import ai.elrond.domain.SelectionBounds
+import ai.elrond.domain.LiveTransform
 import ai.elrond.presentation.CanvasViewModel
-import ai.elrond.ai.GestureTriggerDetector
+import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.ai.HandwritingRecognizer
-import ai.elrond.ai.NotePosition
+import ai.elrond.domain.NotePosition
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest

@@ -1,4 +1,4 @@
-package ai.elrond.canvas
+package ai.elrond.domain
 
 /**
  * Pure palm-rejection decision, factored out of [InkCanvas] so it can be unit-tested without

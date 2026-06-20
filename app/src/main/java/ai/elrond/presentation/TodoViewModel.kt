@@ -1,7 +1,7 @@
 package ai.elrond.presentation
 
-import ai.elrond.todo.TodoPriority
-import ai.elrond.todo.TodoItem
+import ai.elrond.domain.TodoPriority
+import ai.elrond.domain.TodoItem
 import ai.elrond.data.TodoRepository
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
