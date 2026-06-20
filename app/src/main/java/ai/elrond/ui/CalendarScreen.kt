@@ -3,9 +3,9 @@ package ai.elrond.ui
 import ai.elrond.calendar.CalendarEvent
 import ai.elrond.calendar.CalendarGrid
 import ai.elrond.calendar.DayActivity
-import ai.elrond.notes.CalendarViewModel
-import ai.elrond.notes.EventsUiState
-import ai.elrond.notes.EventsViewModel
+import ai.elrond.presentation.CalendarViewModel
+import ai.elrond.presentation.EventsUiState
+import ai.elrond.presentation.EventsViewModel
 import ai.elrond.notes.NotePage
 import android.app.Activity
 import androidx.compose.foundation.Canvas

@@ -1,7 +1,7 @@
 package ai.elrond.ui
 
 import ai.elrond.ai.GestureTriggerDetector
-import ai.elrond.canvas.CanvasViewModel
+import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.canvas.Corner
 import ai.elrond.canvas.LiveTransform
 import ai.elrond.canvas.SelectionState

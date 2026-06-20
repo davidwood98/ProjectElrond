@@ -1,9 +1,9 @@
 package ai.elrond.ui
 
-import ai.elrond.notes.NoteListViewModel
+import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.notes.NotePage
-import ai.elrond.settings.SettingsViewModel
-import ai.elrond.todo.TodoViewModel
+import ai.elrond.presentation.SettingsViewModel
+import ai.elrond.presentation.TodoViewModel
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -270,7 +270,7 @@ private fun StrokeThumbnail(
     polylines: List<List<Pair<Float, Float>>>,
     modifier: Modifier = Modifier,
 ) {
-    val inkColor = Color(ai.elrond.canvas.CanvasViewModel.USER_INK_COLOR)
+    val inkColor = Color(ai.elrond.presentation.CanvasViewModel.USER_INK_COLOR)
     Canvas(modifier = modifier) {
         if (polylines.isEmpty()) {
             // Blank page hint: a few faint ruled lines.

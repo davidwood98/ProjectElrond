@@ -1,6 +1,7 @@
 package ai.elrond.canvas
 
-import ai.elrond.ai.AiUiState
+import ai.elrond.presentation.CanvasViewModel
+import ai.elrond.presentation.AiUiState
 import ai.elrond.ai.GestureTriggerDetector
 import ai.elrond.ai.HandwritingRecognizer
 import ai.elrond.ai.RecognitionCandidate

@@ -3,7 +3,7 @@ package ai.elrond.ui
 import ai.elrond.ai.TriggerMode
 import ai.elrond.calendar.CalendarProviderType
 import ai.elrond.settings.SettingsRepository
-import ai.elrond.settings.SettingsViewModel
+import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.settings.ToolSelectedTreatment
 import ai.elrond.ui.icons.ElrondIcons
 import androidx.compose.foundation.clickable

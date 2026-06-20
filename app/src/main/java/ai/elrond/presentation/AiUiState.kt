@@ -1,4 +1,4 @@
-package ai.elrond.ai
+package ai.elrond.presentation
 
 /**
  * Transient state of the embedded AI assistant. Successful answers are not a

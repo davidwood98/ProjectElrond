@@ -1,5 +1,6 @@
 package ai.elrond.canvas
 
+import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.ai.GestureTriggerDetector
 import ai.elrond.ai.HandwritingRecognizer
 import ai.elrond.ai.NotePosition

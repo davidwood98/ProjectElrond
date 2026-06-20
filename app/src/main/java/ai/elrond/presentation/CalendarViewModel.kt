@@ -1,5 +1,7 @@
-package ai.elrond.notes
+package ai.elrond.presentation
 
+import ai.elrond.notes.NoteEditDay
+import ai.elrond.notes.NotePage
 import ai.elrond.calendar.DayActivity
 import ai.elrond.calendar.NoteActivityMapper
 import ai.elrond.data.NoteRepository

@@ -1,5 +1,6 @@
 package ai.elrond.canvas
 
+import ai.elrond.presentation.CanvasViewModel
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas

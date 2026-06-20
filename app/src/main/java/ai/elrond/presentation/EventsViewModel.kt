@@ -1,4 +1,4 @@
-package ai.elrond.notes
+package ai.elrond.presentation
 
 import ai.elrond.calendar.CalendarEvent
 import ai.elrond.calendar.CalendarNotAuthenticatedException

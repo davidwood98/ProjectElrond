@@ -1,5 +1,6 @@
 package ai.elrond.canvas
 
+import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.canvas.CanvasStroke
 import ai.elrond.data.NoteRepository
 import androidx.ink.strokes.Stroke

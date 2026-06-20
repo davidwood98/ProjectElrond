@@ -1,8 +1,18 @@
-package ai.elrond.canvas
+package ai.elrond.presentation
 
+import ai.elrond.canvas.LiveTransform
+import ai.elrond.canvas.ThumbnailRenderer
+import ai.elrond.canvas.ThumbnailCache
+import ai.elrond.canvas.StrokeTransforms
+import ai.elrond.canvas.StrokeSelection
+import ai.elrond.canvas.SelectionState
+import ai.elrond.canvas.SelectionBounds
+import ai.elrond.canvas.ClipboardState
+import ai.elrond.canvas.CanvasTool
+import ai.elrond.canvas.CanvasStroke
 import ai.elrond.BuildConfig
 import ai.elrond.ai.AiInkNote
-import ai.elrond.ai.AiUiState
+import ai.elrond.presentation.AiUiState
 import ai.elrond.ai.GestureTriggerDetector
 import ai.elrond.ai.HandwritingRecognizer
 import ai.elrond.ai.MlKitHandwritingRecognizer

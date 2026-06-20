@@ -1,5 +1,7 @@
 package ai.elrond.notes
 
+import ai.elrond.presentation.EventsUiState
+import ai.elrond.presentation.EventsViewModel
 import ai.elrond.calendar.CalendarEvent
 import ai.elrond.calendar.CalendarNotAuthenticatedException
 import ai.elrond.calendar.CalendarProviderType

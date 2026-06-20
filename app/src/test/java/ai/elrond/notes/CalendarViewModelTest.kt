@@ -1,5 +1,6 @@
 package ai.elrond.notes
 
+import ai.elrond.presentation.CalendarViewModel
 import ai.elrond.data.NoteRepository
 import io.mockk.coEvery
 import io.mockk.every

@@ -1,5 +1,6 @@
 package ai.elrond.canvas
 
+import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.ai.NotePosition
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
