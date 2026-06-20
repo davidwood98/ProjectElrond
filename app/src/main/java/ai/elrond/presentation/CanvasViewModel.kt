@@ -12,7 +12,6 @@ import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.CanvasStroke
 import ai.elrond.BuildConfig
 import ai.elrond.domain.AiInkNote
-import ai.elrond.presentation.AiUiState
 import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.MlKitHandwritingRecognizer

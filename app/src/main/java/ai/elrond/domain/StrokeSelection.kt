@@ -1,6 +1,5 @@
 package ai.elrond.domain
 
-import ai.elrond.domain.GestureTriggerDetector
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max

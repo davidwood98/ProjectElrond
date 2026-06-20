@@ -1,6 +1,5 @@
 package ai.elrond.data
 
-import ai.elrond.data.CalendarEvent
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map

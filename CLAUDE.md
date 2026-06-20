@@ -28,17 +28,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Package layout (`app/src/main/java/ai/elrond/`)
 
-- `canvas/` — Ink rendering, stroke management, S Pen input (pressure, tilt, palm rejection). Low-latency rendering targeting 120Hz via Android Ink API / stylus MotionEvents. Eraser support (stylus eraser + drawn eraser tool).
-- `notes/` — Note pages, notebooks, page management. Pages have auto-generated timestamp titles or custom titles, organised in notebook/folder structure.
-- `ai/` — AI activation and response rendering:
-  - Trigger detection: handwritten `/Q` command on canvas activates AI prompt mode
-  - Prompt scope: selected/grouped handwriting around the trigger
-  - Two input modes: ML Kit handwriting recognition → text, or raw image crop (base64) for image-based models
-  - Responses rendered onto the canvas in a handwriting-style font (e.g. Caveat/Patrick Hand), in moveable/resizable text boxes, visually distinct from user ink (different colour)
-- `todo/` — Persistent TODO panel accessible from any page. Items auto-extracted by AI from notes, linkable back to source page; manual CRUD, due dates, priority.
-- `calendar/` — Device calendar via CalendarProvider. AI suggests entries from written content; **user must confirm before any calendar write**. Upcoming-events side panel.
-- `ui/` — Compose UI components, screens, theme.
-- `data/` — Room database, repositories, models. Page metadata: created, modified, tags, AI context summary. Supports "created X / last edited Y" timeline views.
+The packages are organised **by layer** (the convention + naming rule are in "Package
+layout — by layer" just below). What each layer holds, and where the old feature areas now
+live:
+
+- **(root)** — app entry points only: `ElrondApplication`, `MainActivity`.
+- **`ui/`** — everything you see (front end): Compose screens/components, the ink `View`s,
+  theme, icons. The note canvas + low-latency S Pen ink rendering (`InkCanvas`: pressure,
+  tilt, palm rejection, 120Hz via the Android Ink API / stylus MotionEvents; stylus + drawn
+  eraser), the lasso `SelectionLayer`, `NoteCanvasScreen`, AI response views, `TodoPanel`,
+  `CalendarScreen`, `NoteListScreen`, `SettingsScreen`, and `ui/theme` (Leap design system)
+  + `ui/icons`.
+- **`presentation/`** — the bridge: ViewModels + the UI-state they expose (`CanvasViewModel`,
+  `Calendar`/`Events`/`NoteList`/`Settings`/`Todo` `ViewModel`, `AiUiState`).
+- **`domain/`** — the app's own pure logic & in-memory models. `/Q` trigger + recognition
+  grouping (`QueryTriggerDetector`, `GestureTriggerDetector`, `StrokeLineGrouper`,
+  `MathDetector`, `RelativeDateResolver`) — handwritten `/Q` (or a circle gesture) activates
+  AI prompt mode over the selected/grouped handwriting; stroke geometry/selection
+  (`CanvasStroke`, `CanvasTool`, `StrokeSelection`, `StrokeTransforms`, `PalmRejection`); the
+  background auto-extraction core (`AutoExtractionRunner`); and the models — `AiInkNote`,
+  page/notebook `Models`, `TodoItem` (auto-extracted, linkable back to source page),
+  `PendingSuggestion`, `NoteActivity`, `TriggerMode`, `ToolSelectedTreatment`.
+- **`data/`** — storage + network + device/cloud integrations (back end): Room
+  (`ElrondDatabase`, DAOs, entities, converters, mappers — page metadata + "created X / last
+  edited Y" timeline), the repositories (notes, todo, suggestions, calendar,
+  `SettingsRepository`), stroke serialization, the WebP `ThumbnailCache`, the ML Kit
+  `HandwritingRecognizer`, the WorkManager extraction `ExtractionWorker` /
+  `ExtractionScheduler` / `LineRecognition`, and the calendar providers (`CalendarProvider` +
+  Device/Google/Outlook implementations, MSAL auth, Graph DTOs — **a calendar write always
+  requires explicit user confirmation**).
+- **`di/`** — Hilt modules (`AppModule`, `AiModule`, `CalendarModule`).
 
 ### Package layout — by layer
 
@@ -95,7 +114,7 @@ Home for design elements — pen/eraser symbols, loading-indicator animations, e
   edge-aware clamp. Precedents: the unclear-request card centres on screen (FA-7); the lasso
   selection toolbar centres over the selection and clamps to both screen edges (FA-9, via the
   measured container + toolbar sizes).
-- **Canvas rendering has three layers — know which to use.** The ink canvas (`canvas/InkCanvas.kt`)
+- **Canvas rendering has three layers — know which to use.** The ink canvas (`ui/InkCanvas.kt`)
   is a `FrameLayout` of: (1) **dry ink** — finished strokes in `DryStrokesView` (a plain
   hardware-accelerated `View`, repainted via `invalidate()` off a StateFlow); (2) **wet ink** —
   `InProgressStrokesView`, a front-buffered `SurfaceView` composited **on top of the whole window**
@@ -656,9 +675,9 @@ Galaxy Tab S (2026-06-16): select / move / scale / duplicate / delete / AI / cop
   membership to/from storage. `NoteRepository` round-trips it; `StrokeSerialization` carries `groupId`.
 - **Group persistence (DB v7).** `strokes.groupId` column + `MIGRATION_6_7`
   (`ALTER TABLE strokes ADD COLUMN groupId TEXT`). Strokes sharing a non-null `groupId` form one group.
-- **Geometry split (test seams).** Pure JVM-testable `canvas/StrokeSelection.kt` (`expandToGroups`,
+- **Geometry split (test seams).** Pure JVM-testable `domain/StrokeSelection.kt` (`expandToGroups`,
   `union`, `enclosedIds`, `scaleTransform`, `LiveTransform`, `SelectionState`, `ClipboardState`,
-  `Corner`); ink-native `canvas/StrokeTransforms.kt` (move/scale/clone/bounds, mirrors
+  `Corner`); ink-native `domain/StrokeTransforms.kt` (move/scale/clone/bounds, mirrors
   `StrokeSerialization.toStroke`) injected into `CanvasViewModel` as `strokeTransformer`/
   `strokeBoundsOf` seams (defaulted), so VM unit tests run with `mockk<Stroke>` + fakes and the ink
   reconstruction is covered on-device.
@@ -775,7 +794,7 @@ not unit-tested (MSAL needs a real Activity + registered Azure app); the Graph m
 *seam*, and the Events-tab state machine are JVM-tested.
 
 - **Transport: Ktor REST, not the Graph SDK.** `OutlookCalendarProvider` calls Graph v1.0 over Ktor +
-  kotlinx-serialization (`calendar/GraphDtos.kt`), the same HTTP stack `:aibackend` uses for Anthropic
+  kotlinx-serialization (`data/GraphDtos.kt`), the same HTTP stack `:aibackend` uses for Anthropic
   — so it is fully unit-testable with `ktor-client-mock` and stays light. Endpoints: `GET /me/calendars`,
   `GET /me/calendarView?startDateTime=…&endDateTime=…` (ISO-8601; `Prefer: outlook.timezone="UTC"` so
   the offset-less `dateTime` parses as UTC), `POST /me/events` (or `/me/calendars/{id}/events`),
@@ -784,7 +803,7 @@ not unit-tested (MSAL needs a real Activity + registered Azure app); the Graph m
   via `$expand`. Epoch-millis ↔ Graph `{dateTime,timeZone}` conversion is the pure, tested
   `OutlookTimeMapper` (always UTC). All Graph calls stay inside the provider — nothing Graph-specific
   reaches a ViewModel (same rule as the Anthropic API).
-- **Auth seam keeps MSAL out of everything else.** `OutlookAuthProvider` (`calendar/OutlookAuth.kt`)
+- **Auth seam keeps MSAL out of everything else.** `OutlookAuthProvider` (`data/OutlookAuth.kt`)
   is a small MSAL-free interface — `state: StateFlow<OutlookAuthState>` (NotConfigured / SignedOut /
   SignedIn), `currentToken()` (silent), `signIn(activity)` (interactive), `signOut()`. The **only** file
   importing `com.microsoft.identity.client.*` is `MsalOutlookAuthProvider` (single-account mode); the
@@ -804,7 +823,7 @@ not unit-tested (MSAL needs a real Activity + registered Azure app); the Graph m
   device calendar instead of crashing. Outlook *with* a client id is returned even when signed out: the
   Events tab shows the sign-in prompt rather than silently falling back. `CalendarProviders` (a
   `@Singleton`) caches one provider (and its Ktor client) per type.
-- **Events tab.** `EventsViewModel` (`notes/EventsViewModel.kt`, `@HiltViewModel` with the same
+- **Events tab.** `EventsViewModel` (`presentation/EventsViewModel.kt`, `@HiltViewModel` with the same
   test-seam + `@Inject`-secondary pattern as CanvasViewModel) resolves the selected provider + Outlook
   auth state into an `EventsUiState` (Loading / NotConfigured / NeedsSignIn / Events / Error) and loads
   the next 30 days. The tab (`ui/CalendarScreen.kt`) renders a standard **"Sign in with Microsoft"**
@@ -854,7 +873,7 @@ writing stutter and note-browser/nav-back stutter are gone.
 - **File-backed WebP thumbnail cache (nav-back + browser load stutter).** The note browser used to
   decode stroke JSON for up to `PREVIEW_MAX_STROKES` (60) strokes per card on the **main thread** (a
   `produceState` calling `viewModel.preview`) and redraw the polylines from scratch on every
-  recomposition — a gridful at once stuttered the nav transition. New **`canvas/ThumbnailCache.kt`**:
+  recomposition — a gridful at once stuttered the nav transition. New **`data/ThumbnailCache.kt`**:
   one WebP per page under `<cacheDir>/thumbnails/<pageId>.webp` (`write`/`read`/`exists`/`delete`,
   all off-thread), plus **`ThumbnailRenderer`** which renders the *same normalized polylines the card
   drew* onto a software `Canvas` (`drawPath`) — NOT the live ink View. (The dry-ink View draws via
@@ -932,7 +951,7 @@ new functional tools) + app-wide recolour.
   (badge) + a **More** kebab menu holding **Clear page** (the old toolbar's Clear/finger-draw chips
   moved into icon tiles / the kebab). Undo/Redo grey out via `enabled` (handoff disabled state).
 - **Selected-tool style (A/B/C), user-selectable.** New `ToolSelectedTreatment { SOFT_TILE, FILLED,
-  UNDERLINE }` (`settings/`). **A · soft tile is the default**; B · filled accent and C · underline are
+  UNDERLINE }` (`domain/`). **A · soft tile is the default**; B · filled accent and C · underline are
   chosen in **Settings → Selected tool style**, which renders the real `ToolbarButton` in each
   treatment as a live, tappable preview. Persisted via `SettingsRepository.toolSelectedTreatment`
   (DataStore string, default SOFT_TILE) → `SettingsViewModel`; `NoteCanvasScreen` collects it and
@@ -947,7 +966,7 @@ new functional tools) + app-wide recolour.
 
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
-Swappable calendar integration behind `CalendarProvider` (`app/.../calendar/`):
+Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
 
 ```
               ┌─────────────────────┐

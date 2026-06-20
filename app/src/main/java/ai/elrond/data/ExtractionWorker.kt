@@ -1,14 +1,8 @@
 package ai.elrond.data
 
 import ai.elrond.domain.AutoExtractionRunner
-import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.aibackend.CalendarEventExtractor
 import ai.elrond.aibackend.TaskExtractor
-import ai.elrond.data.CalendarRepository
-import ai.elrond.data.NoteRepository
-import ai.elrond.data.SuggestionRepository
-import ai.elrond.data.TodoRepository
-import ai.elrond.data.SettingsRepository
 import android.content.Context
 import android.os.PowerManager
 import androidx.hilt.work.HiltWorker
