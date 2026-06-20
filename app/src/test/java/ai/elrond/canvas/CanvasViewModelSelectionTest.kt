@@ -9,7 +9,7 @@ import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
 import ai.elrond.aibackend.AIResponse
 import ai.elrond.data.NoteRepository
-import ai.elrond.settings.SettingsRepository
+import ai.elrond.data.SettingsRepository
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
 import io.mockk.mockk

@@ -3,7 +3,7 @@ package ai.elrond.ui
 import ai.elrond.presentation.AiUiState
 import ai.elrond.canvas.CanvasTool
 import ai.elrond.presentation.CanvasViewModel
-import ai.elrond.canvas.InkCanvas
+import ai.elrond.ui.InkCanvas
 import ai.elrond.extract.PendingSuggestion
 import ai.elrond.extract.SuggestionType
 import ai.elrond.presentation.SettingsViewModel

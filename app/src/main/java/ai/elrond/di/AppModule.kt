@@ -1,13 +1,13 @@
 package ai.elrond.di
 
-import ai.elrond.canvas.ThumbnailCache
+import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.CalendarRepository
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
 import ai.elrond.extract.ExtractionScheduler
-import ai.elrond.settings.SettingsRepository
+import ai.elrond.data.SettingsRepository
 import android.content.Context
 import dagger.Module
 import dagger.Provides

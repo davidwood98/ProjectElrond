@@ -7,7 +7,7 @@ import ai.elrond.data.CalendarRepository
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
-import ai.elrond.settings.SettingsRepository
+import ai.elrond.data.SettingsRepository
 import android.content.Context
 import android.os.PowerManager
 import androidx.hilt.work.HiltWorker

@@ -1,5 +1,8 @@
-package ai.elrond.canvas
+package ai.elrond.ui
 
+import ai.elrond.canvas.PalmRejection
+import ai.elrond.canvas.CanvasTool
+import ai.elrond.canvas.CanvasStroke
 import ai.elrond.presentation.CanvasViewModel
 import android.annotation.SuppressLint
 import android.content.Context

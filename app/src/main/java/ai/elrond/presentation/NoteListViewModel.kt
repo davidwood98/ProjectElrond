@@ -1,7 +1,7 @@
 package ai.elrond.presentation
 
 import ai.elrond.notes.NotePage
-import ai.elrond.canvas.ThumbnailCache
+import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.NoteRepository
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel

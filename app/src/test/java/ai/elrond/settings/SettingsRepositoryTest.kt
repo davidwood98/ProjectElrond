@@ -1,5 +1,6 @@
 package ai.elrond.settings
 
+import ai.elrond.data.SettingsRepository
 import ai.elrond.ai.TriggerMode
 import ai.elrond.calendar.CalendarProviderType
 import android.content.Context

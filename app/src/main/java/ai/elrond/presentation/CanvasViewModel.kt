@@ -1,8 +1,8 @@
 package ai.elrond.presentation
 
 import ai.elrond.canvas.LiveTransform
-import ai.elrond.canvas.ThumbnailRenderer
-import ai.elrond.canvas.ThumbnailCache
+import ai.elrond.data.ThumbnailRenderer
+import ai.elrond.data.ThumbnailCache
 import ai.elrond.canvas.StrokeTransforms
 import ai.elrond.canvas.StrokeSelection
 import ai.elrond.canvas.SelectionState
@@ -40,7 +40,7 @@ import ai.elrond.data.TodoRepository
 import ai.elrond.extract.ExtractionScheduler
 import ai.elrond.extract.PendingSuggestion
 import ai.elrond.extract.SuggestionType
-import ai.elrond.settings.SettingsRepository
+import ai.elrond.data.SettingsRepository
 import ai.elrond.todo.PendingTaskExtraction
 import ai.elrond.todo.TodoPriority
 import android.content.Context

@@ -1,7 +1,7 @@
 package ai.elrond.presentation
 
 import ai.elrond.settings.ToolSelectedTreatment
-import ai.elrond.settings.SettingsRepository
+import ai.elrond.data.SettingsRepository
 import ai.elrond.ai.TriggerMode
 import ai.elrond.calendar.CalendarProviderType
 import androidx.lifecycle.ViewModel

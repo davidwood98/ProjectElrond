@@ -7,7 +7,7 @@ import ai.elrond.calendar.CalendarProviders
 import ai.elrond.calendar.DateRange
 import ai.elrond.calendar.OutlookAuthProvider
 import ai.elrond.calendar.OutlookAuthState
-import ai.elrond.settings.SettingsRepository
+import ai.elrond.data.SettingsRepository
 import android.app.Activity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope

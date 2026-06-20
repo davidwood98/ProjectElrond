@@ -1,4 +1,4 @@
-package ai.elrond.canvas
+package ai.elrond.data
 
 import ai.elrond.presentation.CanvasViewModel
 import android.graphics.Bitmap
