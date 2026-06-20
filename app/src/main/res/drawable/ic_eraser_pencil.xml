@@ -1,0 +1,39 @@
+<!-- Leap note tool · Rubber (pencil-end). From the Claude Design handoff (angled 45°). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:name="rot"
+        android:pivotX="12"
+        android:pivotY="12"
+        android:rotation="45">
+        <path
+            android:pathData="M9.8 3.8h4.4v5.2h-4.4z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="2"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M9 9h6v2.8h-6z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="2"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M11 9v2.8M13 9v2.8"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="1.6"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M8.3 11.8h7.4v2.7a3.7 3.7 0 0 1,-7.4 0z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="2"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
+</vector>

@@ -40,6 +40,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `ui/` — Compose UI components, screens, theme.
 - `data/` — Room database, repositories, models. Page metadata: created, modified, tags, AI context summary. Supports "created X / last edited Y" timeline views.
 
+### UI design assets (`app/src/main/res/`)
+
+Home for design elements — pen/eraser symbols, loading-indicator animations, etc. (Material
+`ImageVector` icons are still used for generic chrome; this is for custom/branded artwork.)
+
+- **`res/drawable/`** — vector symbols as `VectorDrawable` XML (`ic_<name>.xml`, e.g. `ic_pen.xml`)
+  and simple animations as `AnimatedVectorDrawable` (`anim_<name>.xml`). Import SVGs via Android
+  Studio → *New → Vector Asset*. Author with a single `fillColor` and tint at the call site:
+  `Icon(painterResource(R.drawable.ic_pen), contentDescription = "Pen")`. `ic_pen.xml` is a
+  deletable example/template.
+- **`res/raw/`** — richer animation files (Lottie JSON, `loading_*.json`). Lottie needs the
+  `com.airbnb.android:lottie-compose` dependency (not yet added — a deliberate dep decision); until
+  then prefer an `AnimatedVectorDrawable` in `res/drawable/` or a Compose-coded animation (as the
+  on-canvas loading dots already are).
+- `res/` subdirs are **flat** (no nested folders) — organize by the `ic_*` / `anim_*` naming
+  prefixes above. Each folder keeps a `.gitkeep` so it survives even when it holds no assets.
+
 ### Architectural rules
 
 - **MVVM** with clean separation: Compose UI → ViewModel → Repository → Room/`:aibackend`.
@@ -74,6 +91,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   origin). The fix is `Modifier.graphicsLayer { translationX/scaleX/transformOrigin = … }` (or
   `Modifier.offset { … }`) — same mechanism as the box, re-applied every frame, and GPU-cheap (the
   strokes rasterise once; the layer is just re-composited — no per-frame mesh redraw). See FA-10.
+- **A custom Material3 `lightColorScheme` must set the full `surfaceContainer*` ramp +
+  `inverseSurface`** — unset roles fall back to the baseline (purple) Material palette, which leaks
+  into `NavigationBar` / `ModalDrawerSheet` / badges / pills. (Adjacent traps: Compose variable fonts
+  need `Font(res, weight, variationSettings = FontVariation.Settings(FontVariation.weight(n)))` under
+  `@OptIn(ExperimentalTextApi::class)`; `BadgedBox(badge = …)` takes a `BoxScope.()->Unit`, so pass
+  `badge = { x() }`, not a bare `() -> Unit`.) See FA-13.
 
 ## Testing Conventions
 
@@ -843,6 +866,62 @@ regenerates + clears it, an unchanged page neither saves nor generates), `NoteLi
 (+delete drops the cached thumbnail), and the instrumented `NoteListScreenTest`
 (+cached note shows the `Image`, uncached shows the polyline fallback — via test tags). The on-canvas
 render fidelity stays device-verified (software canvas can't host the ink meshes).
+
+## FA-13 — Leap design system: toolbar restyle + app theme (2026-06-20)
+
+First **Claude Design handoff** brought into the app (`Claude Design/Note app toolbar icons-handoff.zip`
+→ "Note Tool Icons" + the Leap AI design system). Re-skins the note toolbar to the Leap look with a
+user-selectable selected-tool style, and introduces an app-wide Leap theme. **258 app + 24 aibackend
+JVM/Robolectric tests pass** (0 failures; was 256+24); `:app:testDebugUnitTest`, `:aibackend:test`, and
+`:app:assembleDebugAndroidTest` build on the WSL Linux SDK. **No schema change — DB stays v7** (the
+treatment is a DataStore pref). The visuals are **device/manual-verified** like the other Compose flows.
+Scope was confirmed with the user up front (handoff README asks to): restyle existing tools only (no
+new functional tools) + app-wide recolour.
+
+- **Icon set → vector drawables.** All 14 handoff line icons recreated as `res/drawable/ic_*.xml`
+  (pen, highlighter, pencil, eraser, eraser_pencil, text, lasso, import, record, hand, close,
+  more_vert, undo, redo) — 24dp, 2px stroke, rounded caps, black stroke/fill so Compose `Icon` tints
+  them. (`ic_pen` replaces the FA-pre placeholder.) The lasso loop is drawn solid — VectorDrawable has
+  no stroke-dash. Registered in `ui/icons/ElrondIcons.kt` (typed `@DrawableRes` accessors) — one place
+  to swap artwork on a future handoff. The full set is registered incl. tools not yet wired
+  (highlighter/pencil/text/import/record) so they drop in instantly.
+- **Design-token layer (`ui/theme/`).** `Color.kt` (the Leap palette, canonical hex from the brand
+  guide), `LeapTokens.kt` (a `LeapTokens` data class behind `LocalLeapTokens`/`LeapTheme.tokens` for
+  what Material3 doesn't capture — toolbar surface/border, the selected accent + its derived
+  `accentSoft`/`accentStrong`, tile/container radii — plus `mixSrgb`, a CSS-`color-mix(in srgb,…)`
+  match), and `Theme.kt` (`ElrondTheme`: a light Material3 scheme mapped from Leap tokens + brand
+  radii, provides the tokens). `MainActivity` now wraps the app in `ElrondTheme` — so the **main menu
+  (and the whole app) is recoloured to Leap** (Leap Blue accent/FAB, Leap Grey text, neutral
+  surfaces, soft shadows). This is the reusable layer the "restructure to adopt future design updates"
+  ask called for: a future handoff is a one-place token edit. Leap **typography** is wired (`Type.kt`
+  → `LeapTypography`): Poppins 700/800 for display/headlines, Albert Sans (variable) for
+  titles/body/UI, bundled as full OFL `.ttf` in `res/font`. The handoff `.woff2` are subset to the
+  mockup's glyphs (unusable for real text), so the full faces were fetched from Google Fonts. The AI
+  'handwritten' style (Caveat / `HandwritingFontFamily`) is applied at its call sites and untouched.
+- **Follow-up theming fixes (same pass).** AI ink recoloured violet → **Leap Pink** (`AiInkColor`,
+  distinct from navy user ink + cyan toolbar). `ElrondTheme` now sets the full **`surfaceContainer*`
+  ramp + `inverseSurface`** to Leap neutrals + transparent `surfaceTint` — without them the bottom
+  `NavigationBar`, the `ModalDrawerSheet`, and the on-canvas pill fell back to baseline Material purple.
+- **Toolbar restyle (`ui/CanvasToolbar.kt`).** Reusable `LeapToolbarContainer` (white, hairline
+  border, soft shadow, rounded), `ToolbarDivider`, and `ToolbarButton` (46dp tile, 26dp icon; takes a
+  `Painter` so it serves both the bespoke drawables and Material chrome icons; optional `badge` slot).
+  `NoteCanvasScreen`'s three Material `Surface`/`FilterChip` pods became: **left** = exit (close icon);
+  **centre** = Pen / Eraser / Lasso / Hand(finger-draw toggle) │ Undo / Redo; **right** = to-do list
+  (badge) + a **More** kebab menu holding **Clear page** (the old toolbar's Clear/finger-draw chips
+  moved into icon tiles / the kebab). Undo/Redo grey out via `enabled` (handoff disabled state).
+- **Selected-tool style (A/B/C), user-selectable.** New `ToolSelectedTreatment { SOFT_TILE, FILLED,
+  UNDERLINE }` (`settings/`). **A · soft tile is the default**; B · filled accent and C · underline are
+  chosen in **Settings → Selected tool style**, which renders the real `ToolbarButton` in each
+  treatment as a live, tappable preview. Persisted via `SettingsRepository.toolSelectedTreatment`
+  (DataStore string, default SOFT_TILE) → `SettingsViewModel`; `NoteCanvasScreen` collects it and
+  passes it to each tool tile. The accent is **Leap Blue** (`--acc-soft`/`--acc-strong` derived via
+  `mixSrgb`, matching the handoff).
+- New/updated tests: `LeapTokensTest` (Robolectric — `mixSrgb` endpoints + the soft/strong shades
+  match the handoff `color-mix` for Leap Blue) and `SettingsRepositoryTest` (+treatment round-trip,
+  default SOFT_TILE → FILLED → UNDERLINE). The toolbar/settings Compose visuals are device-verified.
+- Handoff source kept under `Claude Design/` (the zip); extracted assets are not committed beyond the
+  recreated drawables. Future handoffs: drop new `ic_*` glyphs in `res/drawable` + register in
+  `ElrondIcons`, and adjust `LeapTokens`/`Color.kt` for any palette change.
 
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 

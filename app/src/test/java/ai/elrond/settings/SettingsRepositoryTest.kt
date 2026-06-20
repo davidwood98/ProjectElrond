@@ -80,5 +80,12 @@ class SettingsRepositoryTest {
         assertEquals(CalendarProviderType.DEVICE, repo.calendarProvider.first())
         repo.setCalendarProvider(CalendarProviderType.OUTLOOK)
         assertEquals(CalendarProviderType.OUTLOOK, repo.calendarProvider.first())
+
+        // FA-13 selected-tool treatment: default SOFT_TILE, round-trips to FILLED / UNDERLINE.
+        assertEquals(ToolSelectedTreatment.SOFT_TILE, repo.toolSelectedTreatment.first())
+        repo.setToolSelectedTreatment(ToolSelectedTreatment.FILLED)
+        assertEquals(ToolSelectedTreatment.FILLED, repo.toolSelectedTreatment.first())
+        repo.setToolSelectedTreatment(ToolSelectedTreatment.UNDERLINE)
+        assertEquals(ToolSelectedTreatment.UNDERLINE, repo.toolSelectedTreatment.first())
     }
 }

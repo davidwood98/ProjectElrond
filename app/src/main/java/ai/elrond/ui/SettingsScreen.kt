@@ -4,6 +4,9 @@ import ai.elrond.ai.TriggerMode
 import ai.elrond.calendar.CalendarProviderType
 import ai.elrond.settings.SettingsRepository
 import ai.elrond.settings.SettingsViewModel
+import ai.elrond.settings.ToolSelectedTreatment
+import ai.elrond.ui.icons.ElrondIcons
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,10 +48,14 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Slider
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlin.math.hypot
 
 /** App settings: AI activation (command vs gesture), canvas input, AI responses, auto-extraction. */
@@ -62,6 +69,7 @@ fun SettingsScreen(
     val trigger by viewModel.triggerCommand.collectAsStateWithLifecycle()
     val triggerMode by viewModel.triggerMode.collectAsStateWithLifecycle()
     val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
+    val toolTreatment by viewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
     val aiSelectedOnCreate by viewModel.aiNoteSelectedOnCreate.collectAsStateWithLifecycle()
     val autoExtraction by viewModel.autoExtractionEnabled.collectAsStateWithLifecycle()
     val confirmEnabled by viewModel.extractionConfirmationEnabled.collectAsStateWithLifecycle()
@@ -175,6 +183,38 @@ fun SettingsScreen(
                 checked = stylusOnly,
                 onCheckedChange = viewModel::setStylusOnly,
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text("Selected tool style", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "How the active tool is highlighted in the note toolbar. Tap a style to use it.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                TreatmentOption(
+                    label = "Soft tile",
+                    treatment = ToolSelectedTreatment.SOFT_TILE,
+                    current = toolTreatment,
+                    onSelect = { viewModel.setToolSelectedTreatment(ToolSelectedTreatment.SOFT_TILE) },
+                )
+                TreatmentOption(
+                    label = "Filled",
+                    treatment = ToolSelectedTreatment.FILLED,
+                    current = toolTreatment,
+                    onSelect = { viewModel.setToolSelectedTreatment(ToolSelectedTreatment.FILLED) },
+                )
+                TreatmentOption(
+                    label = "Underline",
+                    treatment = ToolSelectedTreatment.UNDERLINE,
+                    current = toolTreatment,
+                    onSelect = { viewModel.setToolSelectedTreatment(ToolSelectedTreatment.UNDERLINE) },
+                )
+            }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -295,6 +335,47 @@ private fun TriggerPreview(example: String) {
             )
             Text(example, style = MaterialTheme.typography.bodyLarge)
         }
+    }
+}
+
+/**
+ * A tappable preview of one selected-tool style (the handoff's A/B/C). Renders the real
+ * [ToolbarButton] in that treatment so the user sees exactly what they'll get; the chosen one's
+ * label is shown in the accent colour.
+ */
+@Composable
+private fun TreatmentOption(
+    label: String,
+    treatment: ToolSelectedTreatment,
+    current: ToolSelectedTreatment,
+    onSelect: () -> Unit,
+) {
+    val chosen = treatment == current
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onSelect)
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ToolbarButton(
+            painter = painterResource(ElrondIcons.Pen),
+            contentDescription = "$label preview",
+            onClick = onSelect,
+            selected = true,
+            treatment = treatment,
+        )
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (chosen) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
     }
 }
 

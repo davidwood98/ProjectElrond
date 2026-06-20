@@ -50,6 +50,14 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { repository.setStylusOnly(enabled) }
     }
 
+    /** Active-tool highlight style shown in the note toolbar (default A · soft tile). */
+    val toolSelectedTreatment: StateFlow<ToolSelectedTreatment> = repository.toolSelectedTreatment
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ToolSelectedTreatment.DEFAULT)
+
+    fun setToolSelectedTreatment(treatment: ToolSelectedTreatment) {
+        viewModelScope.launch { repository.setToolSelectedTreatment(treatment) }
+    }
+
     /** The user's preferred calendar backend (Device / Google / Outlook). */
     val calendarProvider: StateFlow<CalendarProviderType> = repository.calendarProvider
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CalendarProviderType.DEVICE)

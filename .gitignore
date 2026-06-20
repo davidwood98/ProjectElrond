@@ -18,3 +18,6 @@ secrets.properties
 
 # Logcat
 logcat/
+
+# Claude Design handoffs (design-source artifacts — recreated assets live in the app, not these)
+/Claude Design/
