@@ -59,6 +59,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -442,6 +443,10 @@ fun NoteCanvasScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    // Scrim that consumes taps so the user can't draw on the canvas behind a modal
+                    // clarify prompt (the note has its own Okay / Edit controls).
+                    .background(Color(0x33262626))
+                    .pointerInput(Unit) { detectTapGestures {} }
                     .padding(24.dp),
                 contentAlignment = Alignment.Center,
             ) {

@@ -90,13 +90,6 @@ private val TODO_DUE = DateTimeFormatter.ofPattern("d MMM")
 internal const val LIBRARY_EMPTY_TAG = "library-empty"
 internal const val LIBRARY_NOTE_CARD_TAG = "library-note-card"
 
-/** FA-14 workflow-status label + dot colour (matches the editor panel + handoff pill). */
-private val LibraryStatusMeta = mapOf(
-    TodoStatus.TODO to ("To-do" to Color(0xFFA9ABAC)),
-    TodoStatus.IN_PROGRESS to ("In progress" to Color(0xFF4652A3)),
-    TodoStatus.DONE to ("Done" to Color(0xFF3CB078)),
-)
-
 // ─────────────────────────────────── Notes ───────────────────────────────────
 
 @Composable
@@ -469,7 +462,7 @@ private fun KanbanBoard(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         TodoStatus.entries.forEach { status ->
-            val (label, color) = LibraryStatusMeta.getValue(status)
+            val (label, color) = TodoStatusStyle.getValue(status)
             val colItems = items.filter { it.status == status }
             Column(
                 modifier = Modifier
@@ -532,7 +525,7 @@ private fun KanbanCard(item: TodoItem, onSetStatus: (TodoStatus) -> Unit, onOpen
 @Composable
 private fun StatusPill(current: TodoStatus, onSetStatus: (TodoStatus) -> Unit) {
     var open by remember { mutableStateOf(false) }
-    val (label, color) = LibraryStatusMeta.getValue(current)
+    val (label, color) = TodoStatusStyle.getValue(current)
     Box {
         AssistChip(
             onClick = { open = true },
@@ -558,7 +551,7 @@ private fun MoveMenu(current: TodoStatus, onSetStatus: (TodoStatus) -> Unit) {
 private fun StatusDropdown(open: Boolean, onDismiss: () -> Unit, onSetStatus: (TodoStatus) -> Unit) {
     DropdownMenu(expanded = open, onDismissRequest = onDismiss) {
         TodoStatus.entries.forEach { s ->
-            val (label, color) = LibraryStatusMeta.getValue(s)
+            val (label, color) = TodoStatusStyle.getValue(s)
             DropdownMenuItem(
                 text = { Text(label) },
                 leadingIcon = { Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(color)) },

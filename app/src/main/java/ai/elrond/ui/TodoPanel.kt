@@ -67,13 +67,6 @@ private val PriorityColors = mapOf(
 
 private val DUE_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM")
 
-/** FA-14 workflow-status label + dot colour (matches the Kanban / handoff status pill). */
-private val StatusMeta = mapOf(
-    TodoStatus.TODO to ("To-do" to Color(0xFFA9ABAC)),
-    TodoStatus.IN_PROGRESS to ("In progress" to Color(0xFF4652A3)),
-    TodoStatus.DONE to ("Done" to Color(0xFF3CB078)),
-)
-
 /**
  * Floating TODO drawer anchored to the right edge, dismissed by tapping the scrim.
  * Active tasks sit at the top; completed tasks drop into a separate section below;
@@ -308,7 +301,7 @@ private fun TodoRow(
             }
             // Workflow status (FA-14): a chip + dropdown to move between To-do / In progress / Done.
             Box {
-                val (statusLabel, statusColor) = StatusMeta.getValue(item.status)
+                val (statusLabel, statusColor) = TodoStatusStyle.getValue(item.status)
                 AssistChip(
                     onClick = { statusMenuOpen = true },
                     label = { Text(statusLabel) },
@@ -319,7 +312,7 @@ private fun TodoRow(
                 )
                 DropdownMenu(expanded = statusMenuOpen, onDismissRequest = { statusMenuOpen = false }) {
                     TodoStatus.entries.forEach { s ->
-                        val (label, color) = StatusMeta.getValue(s)
+                        val (label, color) = TodoStatusStyle.getValue(s)
                         DropdownMenuItem(
                             text = { Text(label) },
                             leadingIcon = {

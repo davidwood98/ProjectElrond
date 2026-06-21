@@ -40,13 +40,16 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,6 +57,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
@@ -126,16 +132,25 @@ fun EditorHeader(
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             if (editing) {
+                val focusRequester = remember { FocusRequester() }
                 var text by remember(title) { mutableStateOf(title) }
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
                     singleLine = true,
-                    modifier = Modifier.widthIn(max = 320.dp),
+                    modifier = Modifier
+                        .widthIn(max = 320.dp)
+                        .focusRequester(focusRequester)
+                        // Commit when focus is lost (tap away), not only on the IME Done action.
+                        .onFocusChanged { if (!it.isFocused && editing) { onRename(text); editing = false } },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { onRename(text); editing = false }),
                 )
+                // Focus + raise the keyboard immediately so the user can type on the first tap.
+                LaunchedEffect(Unit) { focusRequester.requestFocus() }
             } else {
+                // The title is NOT clickable: a wide clickable here sits over the canvas and would
+                // swallow S Pen strokes that start in the header band. Rename is via the edit icon.
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleLarge,
@@ -143,10 +158,16 @@ fun EditorHeader(
                     color = LeapGrey,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .widthIn(max = 320.dp)
-                        .clickable { editing = true },
+                    modifier = Modifier.widthIn(max = 320.dp),
                 )
+                IconButton(onClick = { editing = true }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Outlined.Edit,
+                        contentDescription = "Rename note",
+                        tint = Neutral500,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
             Spacer(Modifier.weight(1f))
             Text(
