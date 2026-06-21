@@ -1,5 +1,6 @@
 package ai.elrond.ai
 
+import ai.elrond.domain.QueryTriggerDetector
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

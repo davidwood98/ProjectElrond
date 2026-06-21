@@ -1,19 +1,20 @@
 package ai.elrond.canvas
 
-import ai.elrond.ai.NotePosition
+import ai.elrond.presentation.CanvasViewModel
+import ai.elrond.domain.NotePosition
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
 import ai.elrond.aibackend.AIResponse
 import ai.elrond.aibackend.ExtractedTask
 import ai.elrond.aibackend.TaskExtractor
-import ai.elrond.ai.HandwritingRecognizer
+import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
-import ai.elrond.extract.PendingSuggestion
-import ai.elrond.extract.SuggestionType
-import ai.elrond.notes.NotePage
+import ai.elrond.domain.PendingSuggestion
+import ai.elrond.domain.SuggestionType
+import ai.elrond.domain.NotePage
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -111,7 +112,7 @@ class CanvasViewModelExtractionTest {
 
         assertNull(vm.pendingExtraction.value)
         assertEquals("Buy milk", tasksSlot.captured.single().content)
-        assertEquals(ai.elrond.todo.TodoPriority.MEDIUM, tasksSlot.captured.single().priority)
+        assertEquals(ai.elrond.domain.TodoPriority.MEDIUM, tasksSlot.captured.single().priority)
     }
 
     @Test

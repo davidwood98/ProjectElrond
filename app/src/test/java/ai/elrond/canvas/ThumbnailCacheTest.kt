@@ -1,5 +1,6 @@
 package ai.elrond.canvas
 
+import ai.elrond.data.ThumbnailCache
 import android.graphics.Bitmap
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertFalse

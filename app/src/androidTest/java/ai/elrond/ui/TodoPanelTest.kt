@@ -2,7 +2,7 @@ package ai.elrond.ui
 
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.TodoRepository
-import ai.elrond.todo.TodoViewModel
+import ai.elrond.presentation.TodoViewModel
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.isToggleable

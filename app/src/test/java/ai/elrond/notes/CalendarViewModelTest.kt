@@ -1,5 +1,9 @@
 package ai.elrond.notes
 
+import ai.elrond.domain.NoteEditDay
+import ai.elrond.domain.Notebook
+import ai.elrond.domain.NotePage
+import ai.elrond.presentation.CalendarViewModel
 import ai.elrond.data.NoteRepository
 import io.mockk.coEvery
 import io.mockk.every

@@ -1,11 +1,13 @@
 package ai.elrond.notes
 
-import ai.elrond.calendar.CalendarEvent
-import ai.elrond.calendar.CalendarNotAuthenticatedException
-import ai.elrond.calendar.CalendarProviderType
-import ai.elrond.calendar.DateRange
-import ai.elrond.calendar.OutlookAuthProvider
-import ai.elrond.calendar.OutlookAuthState
+import ai.elrond.presentation.EventsUiState
+import ai.elrond.presentation.EventsViewModel
+import ai.elrond.data.CalendarEvent
+import ai.elrond.data.CalendarNotAuthenticatedException
+import ai.elrond.data.CalendarProviderType
+import ai.elrond.data.DateRange
+import ai.elrond.data.OutlookAuthProvider
+import ai.elrond.data.OutlookAuthState
 import android.app.Activity
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers

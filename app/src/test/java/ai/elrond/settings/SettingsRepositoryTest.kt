@@ -1,7 +1,9 @@
 package ai.elrond.settings
 
-import ai.elrond.ai.TriggerMode
-import ai.elrond.calendar.CalendarProviderType
+import ai.elrond.domain.ToolSelectedTreatment
+import ai.elrond.data.SettingsRepository
+import ai.elrond.domain.TriggerMode
+import ai.elrond.data.CalendarProviderType
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first

@@ -1,6 +1,7 @@
 package ai.elrond.canvas
 
-import ai.elrond.canvas.CanvasStroke
+import ai.elrond.presentation.CanvasViewModel
+import ai.elrond.domain.CanvasStroke
 import ai.elrond.data.NoteRepository
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
@@ -82,7 +83,7 @@ class CanvasViewModelPersistenceTest {
 
     @Test
     fun `saved AI response notes are restored when the note opens`() = runTest(dispatcher) {
-        val note = ai.elrond.ai.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
+        val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
         coEvery { repository.loadStrokes("page-1") } returns emptyList()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
 
@@ -94,7 +95,7 @@ class CanvasViewModelPersistenceTest {
 
     @Test
     fun `moving an AI note auto-saves the updated notes`() = runTest(dispatcher) {
-        val note = ai.elrond.ai.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
+        val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
         coEvery { repository.loadStrokes("page-1") } returns emptyList()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
         val viewModel = viewModel()
@@ -108,7 +109,7 @@ class CanvasViewModelPersistenceTest {
 
     @Test
     fun `resizing an AI note auto-saves the new width and height`() = runTest(dispatcher) {
-        val note = ai.elrond.ai.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
+        val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
         coEvery { repository.loadStrokes("page-1") } returns emptyList()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
         val viewModel = viewModel()
@@ -117,10 +118,10 @@ class CanvasViewModelPersistenceTest {
         viewModel.resizeAiNote("n1", dWidth = 50f, dHeight = 40f)
         advanceUntilIdle()
 
-        val slot = slot<List<ai.elrond.ai.AiInkNote>>()
+        val slot = slot<List<ai.elrond.domain.AiInkNote>>()
         coVerify { repository.replaceAiNotes(eq("page-1"), capture(slot)) }
         assertEquals(350f, slot.captured.single().widthPx)
-        assertEquals(ai.elrond.ai.AiInkNote.MIN_HEIGHT_PX + 40f, slot.captured.single().heightPx)
+        assertEquals(ai.elrond.domain.AiInkNote.MIN_HEIGHT_PX + 40f, slot.captured.single().heightPx)
     }
 
     @Test

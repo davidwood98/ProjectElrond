@@ -1,8 +1,8 @@
 package ai.elrond.ui
 
 import ai.elrond.R
-import ai.elrond.ai.AiInkNote
-import ai.elrond.ai.MathDetector
+import ai.elrond.domain.AiInkNote
+import ai.elrond.domain.MathDetector
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border

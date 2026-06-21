@@ -1,6 +1,6 @@
 package ai.elrond.data
 
-import ai.elrond.todo.TodoPriority
+import ai.elrond.domain.TodoPriority
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk

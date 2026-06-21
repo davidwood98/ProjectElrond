@@ -1,5 +1,7 @@
 package ai.elrond.settings
 
+import ai.elrond.data.SettingsRepository
+import ai.elrond.presentation.SettingsViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

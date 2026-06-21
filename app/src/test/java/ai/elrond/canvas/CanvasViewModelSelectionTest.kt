@@ -1,14 +1,17 @@
 package ai.elrond.canvas
 
-import ai.elrond.ai.GestureTriggerDetector
-import ai.elrond.ai.HandwritingRecognizer
-import ai.elrond.ai.NotePosition
+import ai.elrond.domain.SelectionBounds
+import ai.elrond.domain.LiveTransform
+import ai.elrond.presentation.CanvasViewModel
+import ai.elrond.domain.GestureTriggerDetector
+import ai.elrond.data.HandwritingRecognizer
+import ai.elrond.domain.NotePosition
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
 import ai.elrond.aibackend.AIResponse
 import ai.elrond.data.NoteRepository
-import ai.elrond.settings.SettingsRepository
+import ai.elrond.data.SettingsRepository
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
 import io.mockk.mockk

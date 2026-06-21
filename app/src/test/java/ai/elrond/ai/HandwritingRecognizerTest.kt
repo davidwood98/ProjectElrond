@@ -1,5 +1,7 @@
 package ai.elrond.ai
 
+import ai.elrond.data.RecognitionCandidate
+import ai.elrond.data.HandwritingRecognizer
 import androidx.ink.strokes.Stroke
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest

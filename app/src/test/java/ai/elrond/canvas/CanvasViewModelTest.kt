@@ -1,5 +1,7 @@
 package ai.elrond.canvas
 
+import ai.elrond.domain.CanvasTool
+import ai.elrond.presentation.CanvasViewModel
 import androidx.ink.strokes.Stroke
 import io.mockk.mockk
 import org.junit.Assert.assertEquals

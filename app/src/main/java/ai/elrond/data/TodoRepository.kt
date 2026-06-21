@@ -1,7 +1,7 @@
 package ai.elrond.data
 
-import ai.elrond.todo.TodoItem
-import ai.elrond.todo.TodoPriority
+import ai.elrond.domain.TodoItem
+import ai.elrond.domain.TodoPriority
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map

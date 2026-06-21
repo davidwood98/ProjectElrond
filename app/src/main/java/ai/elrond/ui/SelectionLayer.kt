@@ -1,12 +1,12 @@
 package ai.elrond.ui
 
-import ai.elrond.ai.GestureTriggerDetector
-import ai.elrond.canvas.CanvasViewModel
-import ai.elrond.canvas.Corner
-import ai.elrond.canvas.LiveTransform
-import ai.elrond.canvas.SelectionState
-import ai.elrond.canvas.StrokeSelection
-import ai.elrond.canvas.StrokeTransforms
+import ai.elrond.domain.GestureTriggerDetector
+import ai.elrond.presentation.CanvasViewModel
+import ai.elrond.domain.Corner
+import ai.elrond.domain.LiveTransform
+import ai.elrond.domain.SelectionState
+import ai.elrond.domain.StrokeSelection
+import ai.elrond.domain.StrokeTransforms
 import android.graphics.Matrix
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -73,7 +73,7 @@ private val SelectionColor = Color(0xFF1565C0)
  *    Group | Ungroup);
  *  - the clipboard banner pinned to the bottom while the clipboard holds anything.
  *
- * The actual ink moves/scales live in [ai.elrond.canvas.InkCanvas]'s selection layer (a render
+ * The actual ink moves/scales live in [ai.elrond.ui.InkCanvas]'s selection layer (a render
  * matrix); this overlay only draws the box/handles/toolbar and routes gestures to the ViewModel.
  */
 @Composable
@@ -379,7 +379,7 @@ private fun fadedGhostColor(original: Int): Int {
 /**
  * Draws the lasso-selected ink (FA-10): the [selected] strokes at the live move/scale [transform]
  * (full colour), and — while a transform is in progress — a faded [ghost] of them at their original
- * position. Rendered in the Compose overlay (not [ai.elrond.canvas.InkCanvas]) with the same
+ * position. Rendered in the Compose overlay (not [ai.elrond.ui.InkCanvas]) with the same
  * [CanvasStrokeRenderer]; ghost/selected copies are built once per selection by the caller.
  *
  * The live transform is applied as a **`graphicsLayer`**, NOT inside the draw lambda. Compose does

@@ -1,7 +1,7 @@
 package ai.elrond.ui
 
-import ai.elrond.canvas.LiveTransform
-import ai.elrond.canvas.StrokeTransforms
+import ai.elrond.domain.LiveTransform
+import ai.elrond.domain.StrokeTransforms
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue

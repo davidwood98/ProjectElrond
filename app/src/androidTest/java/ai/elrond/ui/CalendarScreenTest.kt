@@ -1,13 +1,13 @@
 package ai.elrond.ui
 
-import ai.elrond.calendar.CalendarEvent
-import ai.elrond.calendar.CalendarProviderType
-import ai.elrond.calendar.DateRange
-import ai.elrond.calendar.NoOpOutlookAuthProvider
+import ai.elrond.data.CalendarEvent
+import ai.elrond.data.CalendarProviderType
+import ai.elrond.data.DateRange
+import ai.elrond.data.NoOpOutlookAuthProvider
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NoteRepository
-import ai.elrond.notes.CalendarViewModel
-import ai.elrond.notes.EventsViewModel
+import ai.elrond.presentation.CalendarViewModel
+import ai.elrond.presentation.EventsViewModel
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule

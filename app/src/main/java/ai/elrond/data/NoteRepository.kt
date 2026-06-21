@@ -1,10 +1,10 @@
 package ai.elrond.data
 
-import ai.elrond.ai.AiInkNote
-import ai.elrond.canvas.CanvasStroke
-import ai.elrond.notes.NoteEditDay
-import ai.elrond.notes.Notebook
-import ai.elrond.notes.NotePage
+import ai.elrond.domain.AiInkNote
+import ai.elrond.domain.CanvasStroke
+import ai.elrond.domain.NoteEditDay
+import ai.elrond.domain.Notebook
+import ai.elrond.domain.NotePage
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId

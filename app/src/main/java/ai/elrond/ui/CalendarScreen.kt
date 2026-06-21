@@ -1,12 +1,12 @@
 package ai.elrond.ui
 
-import ai.elrond.calendar.CalendarEvent
-import ai.elrond.calendar.CalendarGrid
-import ai.elrond.calendar.DayActivity
-import ai.elrond.notes.CalendarViewModel
-import ai.elrond.notes.EventsUiState
-import ai.elrond.notes.EventsViewModel
-import ai.elrond.notes.NotePage
+import ai.elrond.data.CalendarEvent
+import ai.elrond.domain.CalendarGrid
+import ai.elrond.domain.DayActivity
+import ai.elrond.presentation.CalendarViewModel
+import ai.elrond.presentation.EventsUiState
+import ai.elrond.presentation.EventsViewModel
+import ai.elrond.domain.NotePage
 import android.app.Activity
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Spacer
@@ -438,7 +438,7 @@ private fun OutlookSignInPrompt(caption: String, onSignIn: () -> Unit) {
 @Composable
 private fun EventsList(state: EventsUiState.Events, onSignOut: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
-        if (state.providerType == ai.elrond.calendar.CalendarProviderType.OUTLOOK) {
+        if (state.providerType == ai.elrond.data.CalendarProviderType.OUTLOOK) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,

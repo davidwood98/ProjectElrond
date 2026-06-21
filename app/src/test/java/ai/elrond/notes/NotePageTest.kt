@@ -1,5 +1,6 @@
 package ai.elrond.notes
 
+import ai.elrond.domain.NotePage
 import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
 import org.junit.Test

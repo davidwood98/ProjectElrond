@@ -1,11 +1,10 @@
 package ai.elrond.data
 
-import ai.elrond.ai.AiInkNote
-import ai.elrond.calendar.CalendarEvent
-import ai.elrond.notes.Notebook
-import ai.elrond.notes.NotePage
-import ai.elrond.todo.TodoItem
-import ai.elrond.todo.TodoPriority
+import ai.elrond.domain.AiInkNote
+import ai.elrond.domain.Notebook
+import ai.elrond.domain.NotePage
+import ai.elrond.domain.TodoItem
+import ai.elrond.domain.TodoPriority
 
 fun NotebookEntity.toDomain(): Notebook = Notebook(
     id = id,

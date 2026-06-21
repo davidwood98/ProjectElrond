@@ -1,6 +1,6 @@
 package ai.elrond.data
 
-import ai.elrond.calendar.CalendarEvent
+import ai.elrond.data.CalendarEvent
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk

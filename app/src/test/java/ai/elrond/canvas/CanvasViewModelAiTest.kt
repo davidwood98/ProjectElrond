@@ -1,10 +1,11 @@
 package ai.elrond.canvas
 
-import ai.elrond.ai.AiUiState
-import ai.elrond.ai.GestureTriggerDetector
-import ai.elrond.ai.HandwritingRecognizer
-import ai.elrond.ai.RecognitionCandidate
-import ai.elrond.ai.TriggerMode
+import ai.elrond.presentation.CanvasViewModel
+import ai.elrond.presentation.AiUiState
+import ai.elrond.domain.GestureTriggerDetector
+import ai.elrond.data.HandwritingRecognizer
+import ai.elrond.data.RecognitionCandidate
+import ai.elrond.domain.TriggerMode
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
@@ -45,8 +46,8 @@ class CanvasViewModelAiTest {
     private val singleLine: (List<Stroke>) -> List<List<Stroke>> = { listOf(it) }
 
     /** Deterministic note placement for assertions. */
-    private val fixedPlacement: (List<Stroke>) -> ai.elrond.ai.NotePosition =
-        { ai.elrond.ai.NotePosition(10f, 20f) }
+    private val fixedPlacement: (List<Stroke>) -> ai.elrond.domain.NotePosition =
+        { ai.elrond.domain.NotePosition(10f, 20f) }
 
     private fun viewModel(
         recognizer: HandwritingRecognizer,
@@ -203,11 +204,11 @@ class CanvasViewModelAiTest {
         val widthBefore = viewModel.aiNotes.value.single().widthPx
         viewModel.resizeAiNote(id, dWidth = 40f, dHeight = 25f)
         assertEquals(widthBefore + 40f, viewModel.aiNotes.value.single().widthPx)
-        assertEquals(ai.elrond.ai.AiInkNote.MIN_HEIGHT_PX + 25f, viewModel.aiNotes.value.single().heightPx)
+        assertEquals(ai.elrond.domain.AiInkNote.MIN_HEIGHT_PX + 25f, viewModel.aiNotes.value.single().heightPx)
 
         // Width can't shrink below the minimum.
         viewModel.resizeAiNote(id, dWidth = -100000f, dHeight = 0f)
-        assertEquals(ai.elrond.ai.AiInkNote.MIN_WIDTH_PX, viewModel.aiNotes.value.single().widthPx)
+        assertEquals(ai.elrond.domain.AiInkNote.MIN_WIDTH_PX, viewModel.aiNotes.value.single().widthPx)
 
         viewModel.removeAiNote(id)
         assertTrue(viewModel.aiNotes.value.isEmpty())

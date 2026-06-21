@@ -1,13 +1,13 @@
 package ai.elrond.ui
 
-import ai.elrond.canvas.ThumbnailCache
+import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.TodoRepository
-import ai.elrond.notes.NoteListViewModel
-import ai.elrond.settings.SettingsRepository
-import ai.elrond.settings.SettingsViewModel
-import ai.elrond.todo.TodoViewModel
+import ai.elrond.presentation.NoteListViewModel
+import ai.elrond.data.SettingsRepository
+import ai.elrond.presentation.SettingsViewModel
+import ai.elrond.presentation.TodoViewModel
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.ui.test.assertIsDisplayed

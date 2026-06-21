@@ -4,7 +4,7 @@ import ai.elrond.data.CalendarRepository
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
-import ai.elrond.settings.SettingsRepository
+import ai.elrond.data.SettingsRepository
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest

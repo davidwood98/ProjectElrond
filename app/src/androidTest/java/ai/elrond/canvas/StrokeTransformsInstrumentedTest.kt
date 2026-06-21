@@ -1,5 +1,7 @@
 package ai.elrond.canvas
 
+import ai.elrond.domain.StrokeTransforms
+import ai.elrond.domain.LiveTransform
 import androidx.ink.brush.Brush
 import androidx.ink.brush.InputToolType
 import androidx.ink.brush.StockBrushes

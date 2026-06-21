@@ -207,7 +207,7 @@ data class PageEditEventEntity(
 data class PendingSuggestionEntity(
     @PrimaryKey val id: String,
     val pageId: String,
-    /** "TODO" or "EVENT" (see ai.elrond.extract.SuggestionType). */
+    /** "TODO" or "EVENT" (see ai.elrond.domain.SuggestionType). */
     val type: String,
     val content: String,
     val dueAtMillis: Long? = null,

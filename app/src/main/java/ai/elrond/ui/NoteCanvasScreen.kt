@@ -1,13 +1,12 @@
 package ai.elrond.ui
 
-import ai.elrond.ai.AiUiState
-import ai.elrond.canvas.CanvasTool
-import ai.elrond.canvas.CanvasViewModel
-import ai.elrond.canvas.InkCanvas
-import ai.elrond.extract.PendingSuggestion
-import ai.elrond.extract.SuggestionType
-import ai.elrond.settings.SettingsViewModel
-import ai.elrond.todo.TodoViewModel
+import ai.elrond.presentation.AiUiState
+import ai.elrond.domain.CanvasTool
+import ai.elrond.presentation.CanvasViewModel
+import ai.elrond.domain.PendingSuggestion
+import ai.elrond.domain.SuggestionType
+import ai.elrond.presentation.SettingsViewModel
+import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
