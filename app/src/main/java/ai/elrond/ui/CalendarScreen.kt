@@ -85,12 +85,18 @@ private val EditedDotColor = Color(0xFF616161)
 fun CalendarScreen(
     onOpenNote: (pageId: String) -> Unit,
     modifier: Modifier = Modifier,
+    showEvents: Boolean = true,
     viewModel: CalendarViewModel = hiltViewModel(),
     eventsViewModel: EventsViewModel = hiltViewModel(),
 ) {
     val activity by viewModel.activityByDay.collectAsStateWithLifecycle()
     val today = remember { LocalDate.now() }
 
+    // FA-14: the Library "Timeline" tab shows month/week note-activity only (the Events list lives
+    // under the Calendar nav). When [showEvents] is false the Events mode chip is hidden.
+    val modes = remember(showEvents) {
+        if (showEvents) CalendarMode.entries.toList() else listOf(CalendarMode.MONTH, CalendarMode.WEEK)
+    }
     var mode by rememberSaveable { mutableStateOf(CalendarMode.MONTH) }
     var anchor by rememberSaveable { mutableStateOf(today.toEpochDay()) }
     val anchorDate = LocalDate.ofEpochDay(anchor)
@@ -99,7 +105,7 @@ fun CalendarScreen(
     Column(modifier = modifier.fillMaxSize().padding(12.dp)) {
         // Mode switch
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CalendarMode.entries.forEach { m ->
+            modes.forEach { m ->
                 FilterChip(
                     selected = mode == m,
                     onClick = { mode = m },
@@ -372,7 +378,7 @@ private fun Legend(modifier: Modifier = Modifier) {
  * Graph/MSAL; everything comes from [EventsViewModel.uiState].
  */
 @Composable
-private fun EventsTab(viewModel: EventsViewModel) {
+internal fun EventsTab(viewModel: EventsViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = context as? Activity

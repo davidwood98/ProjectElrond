@@ -2,7 +2,7 @@ package ai.elrond
 
 import ai.elrond.data.SettingsRepository
 import ai.elrond.domain.AppAccent
-import ai.elrond.ui.HomeScreen
+import ai.elrond.ui.LibraryScreen
 import ai.elrond.ui.NoteCanvasScreen
 import ai.elrond.ui.SettingsScreen
 import ai.elrond.ui.theme.ElrondTheme
@@ -53,7 +53,7 @@ private fun ElrondNavHost() {
     // ViewModels are provided by Hilt (hiltViewModel()) inside each screen.
     NavHost(navController = navController, startDestination = ROUTE_NOTES) {
         composable(ROUTE_NOTES) {
-            HomeScreen(
+            LibraryScreen(
                 onOpenNote = { pageId -> navController.navigate("note/$pageId") },
                 onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
             )
