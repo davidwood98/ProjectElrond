@@ -146,6 +146,9 @@ data class TodoItemEntity(
     @PrimaryKey val id: String,
     val title: String,
     val isCompleted: Boolean = false,
+    /** FA-14 workflow status ordinal: 0 = to-do, 1 = in progress, 2 = done. Kept in sync with
+     *  [isCompleted] (done ⇔ isCompleted) at the repository boundary. */
+    val status: Int = 0,
     val dueAt: Long? = null,
     /** 0 = none, 1 = low, 2 = medium, 3 = high. */
     val priority: Int = 0,

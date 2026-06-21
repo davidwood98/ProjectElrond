@@ -2,6 +2,7 @@ package ai.elrond.presentation
 
 import ai.elrond.domain.TodoPriority
 import ai.elrond.domain.TodoItem
+import ai.elrond.domain.TodoStatus
 import ai.elrond.data.TodoRepository
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -32,6 +33,11 @@ class TodoViewModel @Inject constructor(
 
     fun setCompleted(id: String, completed: Boolean) {
         viewModelScope.launch { repository.setCompleted(id, completed) }
+    }
+
+    /** FA-14: move an item to a Kanban column (To-do / In progress / Done). */
+    fun setStatus(id: String, status: TodoStatus) {
+        viewModelScope.launch { repository.setStatus(id, status) }
     }
 
     fun edit(id: String, content: String, priority: TodoPriority, dueAt: Long?) {

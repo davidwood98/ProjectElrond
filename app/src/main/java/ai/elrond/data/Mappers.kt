@@ -5,6 +5,7 @@ import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.TodoItem
 import ai.elrond.domain.TodoPriority
+import ai.elrond.domain.TodoStatus
 
 fun NotebookEntity.toDomain(): Notebook = Notebook(
     id = id,
@@ -25,7 +26,9 @@ fun NotePageEntity.toDomain(): NotePage = NotePage(
 fun TodoItemEntity.toDomain(): TodoItem = TodoItem(
     id = id,
     content = title,
-    isCompleted = isCompleted,
+    // Legacy guard: a row marked completed is DONE regardless of the status column (pre-FA-14 rows
+    // default status=0); otherwise honour the stored workflow status.
+    status = if (isCompleted) TodoStatus.DONE else TodoStatus.fromInt(status),
     dueAt = dueAt,
     priority = priority.toPriority(),
     sourcePageId = sourcePageId,
@@ -38,7 +41,8 @@ fun TodoItemEntity.toDomain(): TodoItem = TodoItem(
 fun TodoItem.toEntity(): TodoItemEntity = TodoItemEntity(
     id = id,
     title = content,
-    isCompleted = isCompleted,
+    isCompleted = status.isDone, // kept in sync with status
+    status = status.ordinal,
     dueAt = dueAt,
     priority = priority.ordinal,
     sourcePageId = sourcePageId,

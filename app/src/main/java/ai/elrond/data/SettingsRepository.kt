@@ -1,5 +1,9 @@
 package ai.elrond.data
 
+import ai.elrond.domain.AppAccent
+import ai.elrond.domain.NoteTabsMode
+import ai.elrond.domain.PaperStyle
+import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.ToolSelectedTreatment
 import ai.elrond.domain.TriggerMode
 import android.content.Context
@@ -56,6 +60,40 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setToolSelectedTreatment(treatment: ToolSelectedTreatment) {
         context.settingsDataStore.edit { it[TOOL_TREATMENT_KEY] = treatment.name }
+    }
+
+    // --- Appearance tweaks (FA-14, from the Claude Design handoff) ---
+
+    /** Pen-family toolbar icon style: whole-tool [PenIconStyle.BODY] or writing-[PenIconStyle.TIP]. */
+    val penIconStyle: Flow<PenIconStyle> = context.settingsDataStore.data
+        .map { PenIconStyle.fromName(it[PEN_ICON_STYLE_KEY]) }
+
+    suspend fun setPenIconStyle(style: PenIconStyle) {
+        context.settingsDataStore.edit { it[PEN_ICON_STYLE_KEY] = style.name }
+    }
+
+    /** The app's accent colour (Blue / Navy / Green / Pink). Recolours the accent app-wide. */
+    val appAccent: Flow<AppAccent> = context.settingsDataStore.data
+        .map { AppAccent.fromName(it[APP_ACCENT_KEY]) }
+
+    suspend fun setAppAccent(accent: AppAccent) {
+        context.settingsDataStore.edit { it[APP_ACCENT_KEY] = accent.name }
+    }
+
+    /** The note-canvas paper background (Ruled / Plain / Dots). */
+    val paperStyle: Flow<PaperStyle> = context.settingsDataStore.data
+        .map { PaperStyle.fromName(it[PAPER_STYLE_KEY]) }
+
+    suspend fun setPaperStyle(style: PaperStyle) {
+        context.settingsDataStore.edit { it[PAPER_STYLE_KEY] = style.name }
+    }
+
+    /** Editor note-tab layout: tabs docked atop the tools (Attached) or above the title (Separate). */
+    val noteTabsMode: Flow<NoteTabsMode> = context.settingsDataStore.data
+        .map { NoteTabsMode.fromName(it[NOTE_TABS_MODE_KEY]) }
+
+    suspend fun setNoteTabsMode(mode: NoteTabsMode) {
+        context.settingsDataStore.edit { it[NOTE_TABS_MODE_KEY] = mode.name }
     }
 
     /** The user's preferred calendar backend (default DEVICE). */
@@ -167,6 +205,10 @@ class SettingsRepository(private val context: Context) {
         private val TRIGGER_MODE_KEY = stringPreferencesKey("trigger_mode")
         private val STYLUS_ONLY_KEY = booleanPreferencesKey("stylus_only")
         private val TOOL_TREATMENT_KEY = stringPreferencesKey("tool_selected_treatment")
+        private val PEN_ICON_STYLE_KEY = stringPreferencesKey("pen_icon_style")
+        private val APP_ACCENT_KEY = stringPreferencesKey("app_accent")
+        private val PAPER_STYLE_KEY = stringPreferencesKey("paper_style")
+        private val NOTE_TABS_MODE_KEY = stringPreferencesKey("note_tabs_mode")
         private val CALENDAR_PROVIDER_KEY = stringPreferencesKey("calendar_provider")
         private val AI_NOTE_SELECTED_ON_CREATE_KEY = booleanPreferencesKey("ai_note_selected_on_create")
         private val LASSO_SNAPBACK_THRESHOLD_KEY = floatPreferencesKey("lasso_snapback_threshold")

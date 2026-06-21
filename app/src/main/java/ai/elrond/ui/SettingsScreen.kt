@@ -1,12 +1,21 @@
 package ai.elrond.ui
 
+import ai.elrond.domain.AppAccent
+import ai.elrond.domain.NoteTabsMode
+import ai.elrond.domain.PaperStyle
+import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.TriggerMode
 import ai.elrond.data.CalendarProviderType
 import ai.elrond.data.SettingsRepository
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.domain.ToolSelectedTreatment
 import ai.elrond.ui.icons.ElrondIcons
+import ai.elrond.ui.theme.color
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,6 +87,10 @@ fun SettingsScreen(
     val snapBackEnabled by viewModel.lassoSnapBackEnabled.collectAsStateWithLifecycle()
     val snapBackThreshold by viewModel.lassoSnapBackThreshold.collectAsStateWithLifecycle()
     val calendarProvider by viewModel.calendarProvider.collectAsStateWithLifecycle()
+    val penIconStyle by viewModel.penIconStyle.collectAsStateWithLifecycle()
+    val appAccent by viewModel.appAccent.collectAsStateWithLifecycle()
+    val paperStyle by viewModel.paperStyle.collectAsStateWithLifecycle()
+    val noteTabsMode by viewModel.noteTabsMode.collectAsStateWithLifecycle()
 
     var draft by remember(trigger) { mutableStateOf(trigger) }
     // Local slider position, re-seeded whenever the persisted threshold changes (e.g. when toggling
@@ -213,6 +226,101 @@ fun SettingsScreen(
                     treatment = ToolSelectedTreatment.UNDERLINE,
                     current = toolTreatment,
                     onSelect = { viewModel.setToolSelectedTreatment(ToolSelectedTreatment.UNDERLINE) },
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text("Appearance", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Personalise how the app and your note pages look (from the Leap design tweaks).",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Text(
+                "Accent colour",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                AppAccent.entries.forEach { accent ->
+                    AccentSwatch(
+                        accent = accent,
+                        selected = appAccent == accent,
+                        onSelect = { viewModel.setAppAccent(accent) },
+                    )
+                }
+            }
+
+            Text(
+                "Pen icon style",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+            Text(
+                "Show pen, highlighter and pencil as the whole tool, or just its writing tip.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                PenStyleOption(
+                    label = "Body",
+                    style = PenIconStyle.BODY,
+                    current = penIconStyle,
+                    treatment = toolTreatment,
+                    onSelect = { viewModel.setPenIconStyle(PenIconStyle.BODY) },
+                )
+                PenStyleOption(
+                    label = "Tip",
+                    style = PenIconStyle.TIP,
+                    current = penIconStyle,
+                    treatment = toolTreatment,
+                    onSelect = { viewModel.setPenIconStyle(PenIconStyle.TIP) },
+                )
+            }
+
+            Text(
+                "Paper style",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PaperStyle.entries.forEach { style ->
+                    FilterChip(
+                        selected = paperStyle == style,
+                        onClick = { viewModel.setPaperStyle(style) },
+                        label = { Text(style.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                    )
+                }
+            }
+
+            Text(
+                "Note tabs",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+            Text(
+                "Where open-note tabs sit in the editor: docked on the toolbar, or floating above the title.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = noteTabsMode == NoteTabsMode.ATTACHED,
+                    onClick = { viewModel.setNoteTabsMode(NoteTabsMode.ATTACHED) },
+                    label = { Text("Attached") },
+                )
+                FilterChip(
+                    selected = noteTabsMode == NoteTabsMode.SEPARATE,
+                    onClick = { viewModel.setNoteTabsMode(NoteTabsMode.SEPARATE) },
+                    label = { Text("Separate") },
                 )
             }
 
@@ -362,6 +470,85 @@ private fun TreatmentOption(
         ToolbarButton(
             painter = painterResource(ElrondIcons.Pen),
             contentDescription = "$label preview",
+            onClick = onSelect,
+            selected = true,
+            treatment = treatment,
+        )
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (chosen) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+    }
+}
+
+/** A tappable accent-colour swatch (FA-14); a ring + bold label marks the chosen one. */
+@Composable
+private fun AccentSwatch(accent: AppAccent, selected: Boolean, onSelect: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onSelect)
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(accent.color)
+                .then(
+                    if (selected) {
+                        Modifier.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                    } else {
+                        Modifier
+                    },
+                ),
+        )
+        Text(
+            accent.name.lowercase().replaceFirstChar { it.uppercase() },
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+    }
+}
+
+/**
+ * A tappable preview of one pen-icon style (FA-14 Body/Tip). Renders the real [ToolbarButton] with
+ * the pen drawn that way (in the user's current selected-tool treatment) so the choice is literal.
+ */
+@Composable
+private fun PenStyleOption(
+    label: String,
+    style: PenIconStyle,
+    current: PenIconStyle,
+    treatment: ToolSelectedTreatment,
+    onSelect: () -> Unit,
+) {
+    val chosen = style == current
+    @DrawableRes val icon = if (style == PenIconStyle.TIP) ElrondIcons.PenTip else ElrondIcons.Pen
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onSelect)
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ToolbarButton(
+            painter = painterResource(icon),
+            contentDescription = "$label pen-icon preview",
             onClick = onSelect,
             selected = true,
             treatment = treatment,
