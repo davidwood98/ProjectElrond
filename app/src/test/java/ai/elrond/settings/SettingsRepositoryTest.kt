@@ -1,5 +1,9 @@
 package ai.elrond.settings
 
+import ai.elrond.domain.AppAccent
+import ai.elrond.domain.NoteTabsMode
+import ai.elrond.domain.PaperStyle
+import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.ToolSelectedTreatment
 import ai.elrond.data.SettingsRepository
 import ai.elrond.domain.TriggerMode
@@ -89,5 +93,21 @@ class SettingsRepositoryTest {
         assertEquals(ToolSelectedTreatment.FILLED, repo.toolSelectedTreatment.first())
         repo.setToolSelectedTreatment(ToolSelectedTreatment.UNDERLINE)
         assertEquals(ToolSelectedTreatment.UNDERLINE, repo.toolSelectedTreatment.first())
+
+        // FA-14 appearance tweaks: defaults, then round-trip.
+        assertEquals(PenIconStyle.BODY, repo.penIconStyle.first())
+        assertEquals(AppAccent.BLUE, repo.appAccent.first())
+        assertEquals(PaperStyle.DOTS, repo.paperStyle.first())
+        assertEquals(NoteTabsMode.SEPARATE, repo.noteTabsMode.first())
+
+        repo.setPenIconStyle(PenIconStyle.TIP)
+        repo.setAppAccent(AppAccent.PINK)
+        repo.setPaperStyle(PaperStyle.RULED)
+        repo.setNoteTabsMode(NoteTabsMode.ATTACHED)
+
+        assertEquals(PenIconStyle.TIP, repo.penIconStyle.first())
+        assertEquals(AppAccent.PINK, repo.appAccent.first())
+        assertEquals(PaperStyle.RULED, repo.paperStyle.first())
+        assertEquals(NoteTabsMode.ATTACHED, repo.noteTabsMode.first())
     }
 }
