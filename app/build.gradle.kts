@@ -133,6 +133,10 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    // Generic chrome icons (folder, search, calendar, checklist…) for the FA-14 redesign. Branded
+    // tool artwork stays bespoke in res/drawable (ElrondIcons); this covers everything else, per the
+    // CLAUDE.md convention of using Material icons for generic chrome.
+    implementation(libs.androidx.compose.material.icons.extended)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     // Ink (low-latency stylus rendering)

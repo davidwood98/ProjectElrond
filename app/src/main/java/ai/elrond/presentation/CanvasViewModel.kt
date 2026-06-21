@@ -49,6 +49,9 @@ import androidx.ink.geometry.ImmutableBox
 import androidx.ink.geometry.ImmutableVec
 import androidx.ink.strokes.Stroke
 import androidx.lifecycle.SavedStateHandle
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -336,12 +339,38 @@ class CanvasViewModel(
                     }
                 runCatching { repository.loadAiNotes(pageId) }
                     .onSuccess { loaded -> _aiNotes.value = loaded }
+                runCatching { repository.getPage(pageId) }.getOrNull()?.let { page ->
+                    _pageTitle.value = page.displayTitle()
+                    _pageDateLabel.value = formatPageDate(page.createdAt)
+                }
                 lastPersisted = _finishedStrokes.value
                 lastPersistedAiNotes = _aiNotes.value.filterNot { it.isError }
                 startAutoSave(repository, pageId)
             }
         }
     }
+
+    // ── Note title + date (FA-14 editor header) ──────────────────────────────────────────────
+    private val _pageTitle = MutableStateFlow("Note")
+    /** The open note's display title (custom name or timestamp), shown in the editor header. */
+    val pageTitle: StateFlow<String> = _pageTitle.asStateFlow()
+
+    private val _pageDateLabel = MutableStateFlow("")
+    /** The open note's creation date, e.g. "8 Feb 2026", shown beside the title. */
+    val pageDateLabel: StateFlow<String> = _pageDateLabel.asStateFlow()
+
+    /** Renames the open page; a blank title reverts to the auto-generated timestamp title. */
+    fun renamePage(newTitle: String) {
+        val repo = repository ?: return
+        val id = pageId ?: return
+        viewModelScope.launch {
+            repo.renamePage(id, newTitle.trim().ifBlank { null })
+            runCatching { repo.getPage(id) }.getOrNull()?.let { _pageTitle.value = it.displayTitle() }
+        }
+    }
+
+    private fun formatPageDate(createdAt: Long): String =
+        DATE_LABEL_FORMATTER.format(Instant.ofEpochMilli(createdAt).atZone(ZoneId.systemDefault()))
 
     /**
      * Reports the live canvas size. Width sizes new full-line AI boxes; both dimensions normalise
@@ -1216,6 +1245,9 @@ class CanvasViewModel(
     }
 
     companion object {
+        /** Date label shown in the editor header (FA-14), e.g. "8 Feb 2026". */
+        private val DATE_LABEL_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM yyyy")
+
         /** Dark ink for user strokes; AI note ink uses a distinct colour (see ui). */
         const val USER_INK_COLOR: Int = 0xFF1A237E.toInt()
         const val DEFAULT_BRUSH_SIZE: Float = 4f

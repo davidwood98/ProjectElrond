@@ -3,11 +3,14 @@ package ai.elrond.ui
 import ai.elrond.presentation.AiUiState
 import ai.elrond.domain.CanvasTool
 import ai.elrond.presentation.CanvasViewModel
+import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.domain.PendingSuggestion
 import ai.elrond.domain.SuggestionType
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -78,6 +81,7 @@ fun NoteCanvasScreen(
     viewModel: CanvasViewModel = hiltViewModel(),
     todoViewModel: TodoViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel(),
+    noteListViewModel: NoteListViewModel = hiltViewModel(),
 ) {
     val tool by viewModel.tool.collectAsStateWithLifecycle()
     val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
@@ -94,6 +98,15 @@ fun NoteCanvasScreen(
     // The active-tool highlight style (A soft tile / B filled / C underline), from Settings.
     val toolTreatment by settingsViewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
     var showMoreMenu by remember { mutableStateOf(false) }
+    // FA-14 appearance tweaks + editor header state.
+    val paperStyle by settingsViewModel.paperStyle.collectAsStateWithLifecycle()
+    val penIconStyle by settingsViewModel.penIconStyle.collectAsStateWithLifecycle()
+    val noteTabsMode by settingsViewModel.noteTabsMode.collectAsStateWithLifecycle()
+    val pageTitle by viewModel.pageTitle.collectAsStateWithLifecycle()
+    val pageDateLabel by viewModel.pageDateLabel.collectAsStateWithLifecycle()
+    val libraryNotes by noteListViewModel.pages.collectAsStateWithLifecycle()
+    var showPages by remember { mutableStateOf(false) }
+    var showLibrary by remember { mutableStateOf(false) }
 
     // AI-box selection lives in the UI (not persisted). When the "edit mode on creation"
     // setting is on (default) a freshly created note starts selected; loaded notes always
@@ -113,6 +126,9 @@ fun NoteCanvasScreen(
             .fillMaxSize()
             .onSizeChanged { viewModel.setCanvasSize(it.width.toFloat(), it.height.toFloat()) },
     ) {
+        // Paper background (Ruled / Plain / Dots) behind the transparent ink layers.
+        PaperBackground(paper = paperStyle, modifier = Modifier.fillMaxSize())
+
         InkCanvas(
             viewModel = viewModel,
             modifier = Modifier.fillMaxSize(),
@@ -166,7 +182,7 @@ fun NoteCanvasScreen(
         }
 
         // ── Leap note toolbar (Claude Design "Note Tool Icons" handoff) ──────────────────────
-        // Left pod: exit the page.
+        // Left pod: exit the page, plus Pages + Library overlays (FA-14).
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -176,6 +192,21 @@ fun NoteCanvasScreen(
                 painter = painterResource(ElrondIcons.Close),
                 contentDescription = "Back to notes",
                 onClick = onBack,
+            )
+            ToolbarDivider()
+            ToolbarButton(
+                painter = rememberVectorPainter(Icons.Outlined.GridView),
+                contentDescription = "Pages",
+                onClick = { showPages = true },
+                selected = showPages,
+                treatment = toolTreatment,
+            )
+            ToolbarButton(
+                painter = rememberVectorPainter(Icons.Outlined.Folder),
+                contentDescription = "Library",
+                onClick = { showLibrary = true },
+                selected = showLibrary,
+                treatment = toolTreatment,
             )
         }
 
@@ -187,7 +218,9 @@ fun NoteCanvasScreen(
                 .padding(48.dp),
         ) {
             ToolbarButton(
-                painter = painterResource(ElrondIcons.Pen),
+                painter = painterResource(
+                    ElrondIcons.penToolIcon(ElrondIcons.Pen, ElrondIcons.PenTip, penIconStyle),
+                ),
                 contentDescription = "Pen",
                 onClick = { viewModel.selectTool(CanvasTool.PEN) },
                 selected = tool == CanvasTool.PEN,
@@ -195,14 +228,23 @@ fun NoteCanvasScreen(
             )
             // Visual placeholders (Highlighter / Pencil / Text) — NOT yet wired as tools. Present in
             // the handoff order so the full toolbar spacing/feel can be reviewed on-device; they
-            // render in the resting state and no-op on tap.
+            // render in the resting state and no-op on tap. The pen-family icons honour the FA-14
+            // Body/Tip setting.
             ToolbarButton(
-                painter = painterResource(ElrondIcons.Highlighter),
+                painter = painterResource(
+                    ElrondIcons.penToolIcon(
+                        ElrondIcons.Highlighter,
+                        ElrondIcons.HighlighterTip,
+                        penIconStyle,
+                    ),
+                ),
                 contentDescription = "Highlighter (coming soon)",
                 onClick = {},
             )
             ToolbarButton(
-                painter = painterResource(ElrondIcons.Pencil),
+                painter = painterResource(
+                    ElrondIcons.penToolIcon(ElrondIcons.Pencil, ElrondIcons.PencilTip, penIconStyle),
+                ),
                 contentDescription = "Pencil (coming soon)",
                 onClick = {},
             )
@@ -225,13 +267,6 @@ fun NoteCanvasScreen(
                 selected = tool == CanvasTool.LASSO,
                 treatment = toolTreatment,
             )
-            ToolbarButton(
-                painter = painterResource(ElrondIcons.Hand),
-                contentDescription = "Finger drawing",
-                onClick = { viewModel.setStylusOnly(!stylusOnly) },
-                selected = !stylusOnly,
-                treatment = toolTreatment,
-            )
             ToolbarDivider()
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Undo),
@@ -244,6 +279,24 @@ fun NoteCanvasScreen(
                 contentDescription = "Redo",
                 onClick = viewModel::redo,
                 enabled = canRedo,
+            )
+            // Import + Record: visual placeholders (no backend yet); no-op on tap.
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Add),
+                contentDescription = "Import (coming soon)",
+                onClick = {},
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Record),
+                contentDescription = "Record (coming soon)",
+                onClick = {},
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Hand),
+                contentDescription = "Finger drawing",
+                onClick = { viewModel.setStylusOnly(!stylusOnly) },
+                selected = !stylusOnly,
+                treatment = toolTreatment,
             )
         }
 
@@ -289,8 +342,50 @@ fun NoteCanvasScreen(
                             viewModel.clearPage()
                         },
                     )
+                    // Handoff menu items not yet wired to a backend — shown disabled.
+                    DropdownMenuItem(
+                        text = { Text("Page style") },
+                        enabled = false,
+                        onClick = {},
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Export") },
+                        enabled = false,
+                        onClick = {},
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Favourite") },
+                        enabled = false,
+                        onClick = {},
+                    )
                 }
             }
+        }
+
+        // Note title + date, just below the floating toolbar (tap the title to rename).
+        EditorHeader(
+            title = pageTitle,
+            dateLabel = pageDateLabel,
+            tabsMode = noteTabsMode,
+            onRename = viewModel::renamePage,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .padding(start = 56.dp, end = 56.dp, top = 118.dp),
+        )
+
+        if (showPages) {
+            PagesOverlay(currentTitle = pageTitle, onDismiss = { showPages = false })
+        }
+        if (showLibrary) {
+            LibraryOverlay(
+                notes = libraryNotes,
+                onOpenNote = { id ->
+                    showLibrary = false
+                    if (id != pageId) onOpenNote(id)
+                },
+                onDismiss = { showLibrary = false },
+            )
         }
 
         if (showTodoPanel) {

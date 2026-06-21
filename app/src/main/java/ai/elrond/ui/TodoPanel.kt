@@ -2,6 +2,7 @@ package ai.elrond.ui
 
 import ai.elrond.domain.TodoItem
 import ai.elrond.domain.TodoPriority
+import ai.elrond.domain.TodoStatus
 import ai.elrond.presentation.TodoViewModel
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -66,6 +67,13 @@ private val PriorityColors = mapOf(
 
 private val DUE_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM")
 
+/** FA-14 workflow-status label + dot colour (matches the Kanban / handoff status pill). */
+private val StatusMeta = mapOf(
+    TodoStatus.TODO to ("To-do" to Color(0xFFA9ABAC)),
+    TodoStatus.IN_PROGRESS to ("In progress" to Color(0xFF4652A3)),
+    TodoStatus.DONE to ("Done" to Color(0xFF3CB078)),
+)
+
 /**
  * Floating TODO drawer anchored to the right edge, dismissed by tapping the scrim.
  * Active tasks sit at the top; completed tasks drop into a separate section below;
@@ -129,6 +137,7 @@ fun TodoPanel(
                                 onOpenSource = { item.sourcePageId?.let(onOpenSource) },
                                 onEditDue = { editingDueFor = item },
                                 onSetPriority = { p -> viewModel.edit(item.id, item.content, p, item.dueAt) },
+                                onSetStatus = { s -> viewModel.setStatus(item.id, s) },
                             )
                         }
                         if (done.isNotEmpty()) {
@@ -148,6 +157,7 @@ fun TodoPanel(
                                     onOpenSource = { item.sourcePageId?.let(onOpenSource) },
                                     onEditDue = { editingDueFor = item },
                                     onSetPriority = { p -> viewModel.edit(item.id, item.content, p, item.dueAt) },
+                                    onSetStatus = { s -> viewModel.setStatus(item.id, s) },
                                 )
                             }
                         }
@@ -226,8 +236,10 @@ private fun TodoRow(
     onOpenSource: () -> Unit,
     onEditDue: () -> Unit,
     onSetPriority: (TodoPriority) -> Unit,
+    onSetStatus: (TodoStatus) -> Unit,
 ) {
     var priorityMenuOpen by remember { mutableStateOf(false) }
+    var statusMenuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -293,6 +305,33 @@ private fun TodoRow(
                         Modifier
                     },
                 )
+            }
+            // Workflow status (FA-14): a chip + dropdown to move between To-do / In progress / Done.
+            Box {
+                val (statusLabel, statusColor) = StatusMeta.getValue(item.status)
+                AssistChip(
+                    onClick = { statusMenuOpen = true },
+                    label = { Text(statusLabel) },
+                    leadingIcon = {
+                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(statusColor))
+                    },
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+                DropdownMenu(expanded = statusMenuOpen, onDismissRequest = { statusMenuOpen = false }) {
+                    TodoStatus.entries.forEach { s ->
+                        val (label, color) = StatusMeta.getValue(s)
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            leadingIcon = {
+                                Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(color))
+                            },
+                            onClick = {
+                                onSetStatus(s)
+                                statusMenuOpen = false
+                            },
+                        )
+                    }
+                }
             }
             // Dedicated due-date section: a chip that opens the date editor.
             AssistChip(
