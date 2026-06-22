@@ -1,5 +1,9 @@
 package ai.elrond.presentation
 
+import ai.elrond.domain.AppAccent
+import ai.elrond.domain.NoteTabsMode
+import ai.elrond.domain.PaperStyle
+import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.ToolSelectedTreatment
 import ai.elrond.data.SettingsRepository
 import ai.elrond.domain.TriggerMode
@@ -66,6 +70,40 @@ class SettingsViewModel @Inject constructor(
 
     fun setCalendarProvider(type: CalendarProviderType) {
         viewModelScope.launch { repository.setCalendarProvider(type) }
+    }
+
+    // --- Appearance tweaks (FA-14) ---
+
+    /** Pen-family toolbar icon style (whole-tool Body vs writing-Tip). */
+    val penIconStyle: StateFlow<PenIconStyle> = repository.penIconStyle
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PenIconStyle.DEFAULT)
+
+    fun setPenIconStyle(style: PenIconStyle) {
+        viewModelScope.launch { repository.setPenIconStyle(style) }
+    }
+
+    /** App-wide accent colour (Blue / Navy / Green / Pink). */
+    val appAccent: StateFlow<AppAccent> = repository.appAccent
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppAccent.DEFAULT)
+
+    fun setAppAccent(accent: AppAccent) {
+        viewModelScope.launch { repository.setAppAccent(accent) }
+    }
+
+    /** Note-canvas paper background (Ruled / Plain / Dots). */
+    val paperStyle: StateFlow<PaperStyle> = repository.paperStyle
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PaperStyle.DEFAULT)
+
+    fun setPaperStyle(style: PaperStyle) {
+        viewModelScope.launch { repository.setPaperStyle(style) }
+    }
+
+    /** Editor note-tab layout (Attached vs Separate). */
+    val noteTabsMode: StateFlow<NoteTabsMode> = repository.noteTabsMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NoteTabsMode.DEFAULT)
+
+    fun setNoteTabsMode(mode: NoteTabsMode) {
+        viewModelScope.launch { repository.setNoteTabsMode(mode) }
     }
 
     fun setAiNoteSelectedOnCreate(enabled: Boolean) {

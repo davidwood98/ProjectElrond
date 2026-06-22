@@ -54,6 +54,10 @@ interface NotePageDao {
     @Query("UPDATE note_pages SET modifiedAt = :modifiedAt WHERE id = :id")
     suspend fun touch(id: String, modifiedAt: Long)
 
+    /** Record that a page was opened (FA-15) — drives the "Recent" 24h window + ordering. */
+    @Query("UPDATE note_pages SET lastOpenedAt = :openedAt WHERE id = :id")
+    suspend fun markOpened(id: String, openedAt: Long)
+
     @Query("UPDATE note_pages SET customTitle = :title, modifiedAt = :modifiedAt WHERE id = :id")
     suspend fun rename(id: String, title: String?, modifiedAt: Long)
 
@@ -195,8 +199,18 @@ interface TodoDao {
     @Query("SELECT * FROM todo_items WHERE id = :id")
     suspend fun getById(id: String): TodoItemEntity?
 
-    @Query("UPDATE todo_items SET isCompleted = :completed, completedAt = :completedAt WHERE id = :id")
-    suspend fun setCompleted(id: String, completed: Boolean, completedAt: Long?)
+    @Query(
+        "UPDATE todo_items SET isCompleted = :completed, status = :status, " +
+            "completedAt = :completedAt WHERE id = :id",
+    )
+    suspend fun setCompleted(id: String, completed: Boolean, status: Int, completedAt: Long?)
+
+    /** FA-14: move an item between Kanban columns; keeps the binary isCompleted flag in sync. */
+    @Query(
+        "UPDATE todo_items SET status = :status, isCompleted = :completed, " +
+            "completedAt = :completedAt WHERE id = :id",
+    )
+    suspend fun setStatus(id: String, status: Int, completed: Boolean, completedAt: Long?)
 
     /** Active items first by priority, then soonest due date (nulls last). */
     @Query(

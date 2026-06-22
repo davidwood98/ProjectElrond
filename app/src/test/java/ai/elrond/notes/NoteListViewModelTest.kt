@@ -41,12 +41,13 @@ class NoteListViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun page(id: String) = NotePage(
+    private fun page(id: String, lastOpenedAt: Long = 0L) = NotePage(
         id = id,
         notebookId = "nb-1",
         customTitle = null,
         createdAt = 1L,
         modifiedAt = 2L,
+        lastOpenedAt = lastOpenedAt,
     )
 
     @Test
@@ -58,6 +59,24 @@ class NoteListViewModelTest {
         advanceUntilIdle()
 
         assertEquals(listOf("p1", "p2"), viewModel.pages.value.map { it.id })
+    }
+
+    @Test
+    fun `recentNotes keeps only notes opened in the last 24h, most recent first`() = runTest(dispatcher) {
+        val now = System.currentTimeMillis()
+        val recentNew = page("recent-new", lastOpenedAt = now)
+        val recentOld = page("recent-old", lastOpenedAt = now - 60_000L) // a minute ago
+        val stale = page("stale", lastOpenedAt = now - 48L * 60 * 60 * 1000) // 2 days ago
+        val never = page("never", lastOpenedAt = 0L)
+        every { repository.observeTimeline() } returns
+            flowOf(listOf(recentOld, stale, recentNew, never))
+        val viewModel = NoteListViewModel(repository, thumbnailCache)
+
+        backgroundScope.launch { viewModel.recentNotes.collect { } }
+        advanceUntilIdle()
+
+        // Only the two within 24h, ordered most-recently-opened first; stale + never excluded.
+        assertEquals(listOf("recent-new", "recent-old"), viewModel.recentNotes.value.map { it.id })
     }
 
     @Test

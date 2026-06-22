@@ -21,6 +21,8 @@ data class NotePage(
     val customTitle: String?,
     val createdAt: Long,
     val modifiedAt: Long,
+    /** When the note was last opened in the editor — drives the "Recent" list / note tabs. */
+    val lastOpenedAt: Long = 0,
     val tags: List<String> = emptyList(),
     val contextSummary: String? = null,
 ) {

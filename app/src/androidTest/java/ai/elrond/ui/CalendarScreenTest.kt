@@ -6,8 +6,10 @@ import ai.elrond.data.DateRange
 import ai.elrond.data.NoOpOutlookAuthProvider
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NoteRepository
+import ai.elrond.data.ThumbnailCache
 import ai.elrond.presentation.CalendarViewModel
 import ai.elrond.presentation.EventsViewModel
+import ai.elrond.presentation.NoteListViewModel
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -24,8 +26,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Compose UI test for the calendar view: switching between Month / Week / Events modes, the Events
- * tab list/empty state, and the FA-11 Outlook sign-in prompt. Backed by a real in-memory Room db.
+ * Compose UI test for the FA-15 Timeline calendar: the Month/Week toggle + created/edited legend,
+ * and (separately) the EventsTab Outlook sign-in prompt now that Events lives under the Calendar nav.
+ * Backed by a real in-memory Room db.
  */
 @RunWith(AndroidJUnit4::class)
 class CalendarScreenTest {
@@ -35,6 +38,7 @@ class CalendarScreenTest {
 
     private lateinit var db: ElrondDatabase
     private lateinit var viewModel: CalendarViewModel
+    private lateinit var noteListViewModel: NoteListViewModel
 
     @Before
     fun setUp() {
@@ -42,14 +46,17 @@ class CalendarScreenTest {
         db = Room.inMemoryDatabaseBuilder(ctx, ElrondDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        viewModel = CalendarViewModel(
-            NoteRepository(
-                notebookDao = db.notebookDao(),
-                pageDao = db.notePageDao(),
-                strokeDao = db.strokeDao(),
-                aiNoteDao = db.aiNoteDao(),
-                editEventDao = db.pageEditEventDao(),
-            ),
+        val repository = NoteRepository(
+            notebookDao = db.notebookDao(),
+            pageDao = db.notePageDao(),
+            strokeDao = db.strokeDao(),
+            aiNoteDao = db.aiNoteDao(),
+            editEventDao = db.pageEditEventDao(),
+        )
+        viewModel = CalendarViewModel(repository)
+        noteListViewModel = NoteListViewModel(
+            repository,
+            ThumbnailCache(ctx.cacheDir.resolve("thumb-cal-${System.nanoTime()}")),
         )
     }
 
@@ -68,41 +75,34 @@ class CalendarScreenTest {
     )
 
     @Test
-    fun toggles_between_month_week_and_events_modes() {
+    fun toggles_between_month_and_week_modes_with_legend() {
         composeRule.setContent {
             CalendarScreen(
                 viewModel = viewModel,
                 eventsViewModel = events(CalendarProviderType.DEVICE),
+                noteListViewModel = noteListViewModel,
                 onOpenNote = {},
             )
         }
 
         composeRule.onNodeWithText("Month").assertIsDisplayed()
         composeRule.onNodeWithText("Week").assertIsDisplayed()
-        composeRule.onNodeWithText("Events").assertIsDisplayed()
 
-        // Events tab with the device calendar and no events → empty-state copy.
-        composeRule.onNodeWithText("Events").performClick()
-        composeRule.onNodeWithText("No upcoming events.").assertIsDisplayed()
+        // Created/Edited legend (dots + labels, no "both" entry).
+        composeRule.onNodeWithText("Created").assertIsDisplayed()
+        composeRule.onNodeWithText("Edited").assertIsDisplayed()
 
-        // Week mode shows the created/edited legend (dots + labels, no "both" entry any more).
+        // Week mode keeps the legend.
         composeRule.onNodeWithText("Week").performClick()
-        composeRule.onNodeWithText("created").assertIsDisplayed()
-        composeRule.onNodeWithText("edited").assertIsDisplayed()
+        composeRule.onNodeWithText("Created").assertIsDisplayed()
     }
 
     @Test
     fun events_tab_shows_microsoft_sign_in_when_outlook_not_connected() {
         composeRule.setContent {
-            CalendarScreen(
-                viewModel = viewModel,
-                // Outlook selected + NoOp auth (NotConfigured) → the sign-in prompt.
-                eventsViewModel = events(CalendarProviderType.OUTLOOK),
-                onOpenNote = {},
-            )
+            // Outlook selected + NoOp auth (NotConfigured) → the sign-in prompt.
+            EventsTab(events(CalendarProviderType.OUTLOOK))
         }
-
-        composeRule.onNodeWithText("Events").performClick()
         composeRule.onNodeWithText("Sign in with Microsoft").assertIsDisplayed()
     }
 }

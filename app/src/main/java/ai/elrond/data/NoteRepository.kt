@@ -63,9 +63,15 @@ class NoteRepository(
             customTitle = customTitle,
             createdAt = now,
             modifiedAt = now,
+            lastOpenedAt = now,
         )
         pageDao.insert(entity)
         return entity.toDomain()
+    }
+
+    /** Mark a page as opened now (FA-15) — feeds the "Recent" list / note tabs. */
+    suspend fun markOpened(pageId: String) {
+        pageDao.markOpened(pageId, clock())
     }
 
     suspend fun renamePage(pageId: String, title: String?) {

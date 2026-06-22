@@ -964,6 +964,204 @@ new functional tools) + app-wide recolour.
   recreated drawables. Future handoffs: drop new `ic_*` glyphs in `res/drawable` + register in
   `ElrondIcons`, and adjust `LeapTokens`/`Color.kt` for any palette change.
 
+## FA-14 — full Leap-design app re-shell (2026-06-21)
+
+The second, far larger Claude Design handoff (`Claude Design/Note app toolbar icons-handoff.zip`
+→ the `Canvas` / `Canvas-Portrait` / `Note Tool Icons` prototypes + the Leap design system) brought
+in as a **whole-app redesign**, on branch **`ui_upgrade`**. **DB is now v8** (`MIGRATION_7_8`).
+**264 app + 24 aibackend JVM/Robolectric tests pass** (0 failures; was 258+24); `:app:testDebugUnitTest`,
+`:aibackend:test`, `:app:assembleDebug` and `:app:assembleDebugAndroidTest` all build on the WSL Linux
+SDK. The Compose visuals (the new Library shell, editor overlays, Kanban) are **device/manual-verified**
+like the other Compose flows. Scope decisions were confirmed with the user up front (see the three
+clarifications below).
+
+**Three user-confirmed decisions** drove ambiguous parts: (1) the to-do Kanban gets a real 3-state
+**workflow status** (not a binary map); (2) **all four** design "tweaks" become settings (pen Body/Tip,
+accent colour, paper style, note-tab mode); (3) the new Calendar "connect" screen is **wired to the real**
+Device/Outlook provider integration, not a placeholder.
+
+- **New home — `LibraryScreen` (responsive).** Replaces the bottom-nav `HomeScreen` (deleted). A left
+  sidebar (Leap logo, **Notes / Files / Calendar / To-do** nav with counts, a **Subjects** placeholder
+  list, a "synced" footer, Settings) that is a **persistent rail in landscape and a slide-out
+  `ModalNavigationDrawer` in portrait** (`BoxWithConstraints`, 720dp breakpoint). Main content
+  (`LibraryContent.kt`) routes by nav: **Notes** (search/import/avatar placeholders + All/Recents/
+  **Timeline**/Favorites/Unfiled tabs; a real card grid with long-press delete; Timeline embeds
+  `CalendarScreen(showEvents=false)`), **Files** (placeholder), **Calendar** (provider connect cards
+  wired to `SettingsRepository.calendarProvider` + the live `EventsTab`/Outlook sign-in), **To-do**
+  (**List + Kanban** by workflow status, with move-status menus). FAB creates a note. `MainActivity`'s
+  `notes` route now opens `LibraryScreen`.
+- **Editor restyle (`NoteCanvasScreen` + `EditorChrome.kt`).** Toolbar reordered to the handoff
+  (pen / highlighter / pencil / eraser / text / lasso │ undo / redo + **import + mic placeholders** +
+  hand); the **left pod adds Pages + Library** buttons; the **⋮ More menu** adds Page style / Export /
+  Favourite placeholders beside Clear page. New `EditorChrome.kt`: **PaperBackground** (Ruled/Plain/Dots,
+  drawn behind the transparent ink layers), **EditorHeader** (note title + date, **tap-to-rename** inline,
+  + a note-tab placeholder styled by `NoteTabsMode`), **PagesOverlay** (centred dialog) and
+  **LibraryOverlay** (left drawer; subjects placeholder + **live** note navigation). All existing
+  flows are untouched: AI `/Q` + circle-gesture + lasso-AI, the lasso selection toolbar, AI ink/error
+  notes, extraction sheets, autosave, thumbnails. `CanvasViewModel` gained `pageTitle`/`pageDateLabel`
+  + `renamePage`.
+- **To-do workflow status (Kanban backing).** New `TodoStatus { TODO, IN_PROGRESS, DONE }`. `TodoItem`
+  gains `status` and **derives `isCompleted` from it** (DONE ⇔ completed), so every binary call-site keeps
+  working; the data layer keeps the `todo_items.status` INTEGER column **in sync** with `isCompleted`
+  (`TodoRepository.setCompleted`/`setStatus`, `TodoDao`, the mappers' legacy guard). **`MIGRATION_7_8`**
+  adds the column and backfills completed rows to DONE. The to-do **panel** also gained a status chip
+  (`TodoViewModel.setStatus`); the **Kanban** groups by status with per-card move menus. Priority + due
+  date + AI source-link are all retained.
+- **Appearance settings (the "tweaks").** Four new DataStore prefs → `SettingsViewModel` → a new
+  **Appearance** section in `SettingsScreen`: **Pen icon Body/Tip** (live `ToolbarButton` preview;
+  `ElrondIcons.penToolIcon` swaps pen/highlighter/pencil ↔ their `*_tip` drawables), **Accent colour**
+  (Blue/Navy/Green/Pink swatches), **Paper style** (Ruled/Plain/Dots chips), **Note-tab mode**
+  (Attached/Separate chips). The accent is **app-wide**: `ElrondTheme(accent)` rebuilds the Material
+  `primary`/container roles + the `LeapTokens` accent from the chosen colour (readable on-accent
+  foreground via luminance), driven from `MainActivity` collecting `SettingsRepository.appAccent`.
+  Selected-tool style (SOFT_TILE/FILLED/UNDERLINE, FA-13) is unchanged.
+- **Domain enums stay Compose-free** (`PenIconStyle`, `AppAccent`, `PaperStyle`, `NoteTabsMode`,
+  `TodoStatus` in `ai.elrond.domain`); the `AppAccent → Color` bridge lives in `ui/theme/Theme.kt`,
+  honouring the by-layer rule.
+- **Icons.** 4 new bespoke drawables (`ic_pen_tip`/`ic_highlighter_tip`/`ic_pencil_tip` + the rounded
+  import box `ic_add`) + the `leap_mark.png` logo; registered in `ElrondIcons`. Everything else (folder,
+  search, calendar, checklist, chevrons…) uses the new **`material-icons-extended`** dependency — generic
+  chrome per the CLAUDE.md convention; branded tool artwork stays bespoke.
+- **Placeholders (no backend, per scope):** Subjects, Files, the search field, the favourite star,
+  Pages (one page per note still), note tabs, and the highlighter/pencil/text/import(record) tools.
+  `NoteListScreen` is **superseded** by `LibraryScreen` but kept (its instrumented test still drives it);
+  its thumbnail helpers were extracted to the shared `NoteThumbnail.kt`.
+- New/updated tests: `TodoRepositoryTest` (setCompleted now 4-arg + a `setStatus` test),
+  `ElrondMigrationTest` (chain extended to **v8** + a v7→v8 status-backfill test), `SettingsRepositoryTest`
+  (+the four appearance round-trips), new `AppearanceEnumsTest` (defaults + `fromName`/`fromInt`), and a
+  new instrumented `LibraryScreenTest` (empty state / FAB-create / long-press-delete — it replaced the
+  deleted `NoteListScreenTest`). The new Compose screens (Library shell, editor overlays, Kanban) are
+  device-verified.
+- **Adversarial review pass (4 dimensions: bugs / Compose / architecture / fidelity) + fixes.** The
+  confirmed findings were applied: (1) the editor title is **no longer a wide clickable** over the
+  canvas (it swallowed S Pen strokes) — rename is now a small **edit-icon** button; (2) the inline
+  rename field gets a `FocusRequester` (auto-focus + keyboard) and **commits on focus-loss**, not only
+  on IME Done; (3) the unclear-request error pop-up is now a **tap-consuming scrim** so writing can't
+  fall through to the canvas behind the modal; the dead `NoteListScreen`/its test were removed (the
+  shared `NoteThumbnail.kt` is the only survivor) and the `TodoStatus → label/colour` map was hoisted
+  to a single `ui/TodoStatusStyle.kt`. **Accepted (low):** opening a note from the editor's Library
+  drawer pushes onto the nav back-stack without de-dup — back returns to the previous note, which is
+  acceptable; not changed to avoid altering back semantics.
+
+## FA-15 — Leap design fidelity pass (visual tweaks from device testing, 2026-06-22)
+
+Acts on a device-test feedback list against the FA-14 re-shell, plus a re-read of the handoff
+`Canvas.dc.html` / `Canvas-Portrait.dc.html` / `Note Tool Icons.dc.html` prototypes (exact px/hex
+extracted from the CSS). On branch **`ui_upgrade`**. **No schema change — DB stays v8.** All JVM/
+Robolectric tests pass and `:app:assembleDebug` + `:app:assembleDebugAndroidTest` build on the WSL
+Linux SDK. The Compose visuals are **device/manual-verified** like the other Compose flows.
+
+Key spec facts pulled from the prototypes (now the source of truth for these numbers): toolbar tile
+**46dp / 26dp icon / 4dp gap**, container radius 16 / border `#e4e5e6` / shadow `0 6px 18px`
+(already matched in `CanvasToolbar.kt` — unchanged); **portrait = the same toolbar at ~0.75 scale**;
+the side-menu pull-out is a **Library** feature (272dp drawer, `translateX -272` when closed, a
+30×76 rounded pull-tab + chevron toggle + scrim); home tabs use an **accent underline**
+(`inset 0 -2px acc`), not pills; the editor header is a grey band `rgba(38,38,38,0.045)` radius 13
+holding tabs + bold-Poppins title + **created** date; default tabs mode = **Separate**, paper = Dots,
+accent = Leap Blue.
+
+- **Home (`LibraryScreen` + `LibraryContent`).** Page titles removed (the redundant "Notes/Files/
+  Calendar/To-do" headers) — content pulls up under a shared **`LibraryActionBar`** (chevron sidebar
+  toggle in portrait · search · import · sort/view-options kebab · **DW avatar → Settings**), all
+  placeholders except the avatar. The **New-note FAB** (bespoke `ic_new_note` notepad+pen, soft-accent
+  rounded-square) now shows on **every** section, lower-right. Note cards restyled to white +
+  hairline border (no elevated Card). The Notes tabs (All Notes / Recents / Timeline / Favorites /
+  Unfiled) are now a `UnderlineTabRow` — bold label + accent underline when selected, no chip
+  fill/border — and the tab state is `rememberSaveable` so it **survives rotation** (the reported
+  "rotate → jumps to All Notes" bug). Sidebar: logo + "Leap Notes" → placeholder title **"Elrond"**;
+  the top-right gear → a minimal **sun** icon mapped to a dark-mode toggle (no-op placeholder); To-do
+  nav uses the bespoke `ic_checklist`. Portrait sidebar is now a **slide-out drawer** (offset
+  animation + pull-tab + scrim) per the handoff, not a `ModalNavigationDrawer`.
+- **Timeline (`CalendarScreen`).** Tightened: fixed-height day tiles (month 46dp / week 64dp), the
+  month/week **toggle + prev/next arrows are inline on one row**, and tapping a day now shows that
+  day's notes **inline at the bottom** as reduced home-style thumbnail cards with a created/edited dot
+  label — replacing the bottom-sheet pull-up. The dead **Events mode was removed from CalendarScreen**
+  (Events lives under the Calendar nav via `EventsTab`); `showEvents` is retained for source-compat.
+- **To-do (board + canvas overlay).** List + Kanban restyled to the handoff. A **priority dot sits
+  directly under the done tick box** (tap → priority menu); the **due date** now shows in both List
+  (right side) and Kanban (card footer), tappable to a date picker; status is a dot+label pill (tap →
+  move). Kanban keeps priority in the card **kebab** (plus move-status). The canvas `TodoPanel` rows
+  match the board. Shared `TodoPriorityDot` / `TodoStatusPill` / `TodoPriorityColors` / `todoDueLabel`
+  hoisted into `ui/TodoStatusStyle.kt` so panel and board render identically.
+- **Editor chrome (`NoteCanvasScreen` + `EditorChrome`).** The note title + tabs now live in a
+  distinct **grey header band** below the toolbar: title in **bolder Poppins** (`headlineSmall` +
+  ExtraBold), **created** date on the right (already `page.createdAt`), and a tab row styled by the
+  Attached/Separate setting (Attached = equal-width segmented row + underline divider; Separate =
+  individually-rounded floating pills) — recent notes appear as inactive tabs that navigate. In
+  **portrait** the three toolbar pods scale to ~0.78 via `graphicsLayer` (origin per pod: TL/TC/TR)
+  with tighter padding; landscape keeps full size. The editor **to-do button uses `ic_checklist`**
+  (matching the home sidebar), replacing the auto-mirrored List icon.
+- **Lasso selection (`SelectionLayer`).** The dotted lasso trace, the bounding box, and the resize
+  handles now use the **user's accent colour** (`LeapTheme.tokens.accent`) instead of a hardcoded
+  blue.
+- New bespoke drawables: `ic_checklist` (handoff `ic-checklist` path) and `ic_new_note` (notepad+pen),
+  registered in `ElrondIcons`. `CalendarScreenTest` updated (Month/Week toggle + legend; the Outlook
+  sign-in is now asserted by rendering `EventsTab` directly). No new unit tests — the changes are
+  Compose-visual and covered by the existing instrumented suite + device verification.
+
+## FA-15 — Leap design fidelity pass (device-feedback iterations, 2026-06-22)
+
+Iterative on-device polish of the FA-14 re-shell, on branch **`ui_upgrade`**. **DB is now v9**
+(`MIGRATION_8_9`). **266 app + 24 aibackend JVM/Robolectric tests pass** (0 failures);
+`:app:compileDebugKotlin`, `:app:testDebugUnitTest`, `:aibackend:test`, `:app:assembleDebug` and
+`:app:assembleDebugAndroidTest` all build on the WSL Linux SDK. The Compose visuals are
+device/manual-verified. The exact px/hex came from re-reading the handoff prototypes
+(`Canvas.dc.html` / `Canvas-Portrait.dc.html` / `Note Tool Icons.dc.html`); **the
+`Note Tool Icons.dc.html` spec sheet is the source of truth for the tool glyphs** (the canvas
+prototypes lag it). Two adversarial-review workflows (rotation fix; tabs+recent) backed the trickier
+changes; their confirmed findings were applied.
+
+- **Home (`LibraryScreen` / `LibraryContent`).** Page titles removed; a shared top action row
+  (search · **import (arrow-into-tray)** · DW avatar→**Settings**) replaces them. The **New-note FAB**
+  (bespoke `ic_new_note` notepad+pen, soft-accent) shows on every section. Note cards are white +
+  hairline border. The Notes tabs use a **bold label + accent underline** drawn with `drawBehind`
+  (a `fillMaxWidth` underline collapses to 0 inside the tabs' `horizontalScroll` row); the
+  **view-options/“sort by”** kebab sits at the right end of the tab row (not the search bar). Sidebar
+  shows **“Elrond”** (no logo) + a **sun/dark-mode placeholder** (top-right). **Portrait sidebar is a
+  slide-out drawer** — gated on **orientation** (`maxWidth > maxHeight`), NOT a width breakpoint (a
+  portrait tablet is still ~800dp wide), opened by the chevron next to the search bar **and a
+  right-swipe** on the page (no edge pull-tab).
+- **Rotation-safe tab/board state.** The Library content sits at different composition positions per
+  orientation and the Activity recreates on rotation, so auto-keyed `rememberSaveable` stored a
+  *separate* selection per orientation. Fixed with **explicit shared keys** (`library.notesTab`,
+  `library.todoKanban`, `calendar.mode|anchor|selectedDay`) so the current tab/mode persists across
+  rotation.
+- **Timeline (`CalendarScreen`).** Taller tiles (month **68dp**, week **94dp**); inline month/week
+  toggle + arrows; created/edited **dot + count** per day. Tapping a day shows its notes inline: in
+  **landscape month** one horizontal row that **fills the height to the screen bottom** (tiles run
+  behind the FAB, scroll off the right edge); in **week (either orientation) and portrait month** a
+  vertical-scrolling adaptive grid. `DayNoteThumb`'s thumbnail uses `weight(1f)` so tiles fill their
+  (bounded) height. The old Events mode was dropped from this screen (Events lives under the Calendar
+  nav via `EventsTab`).
+- **To-do.** Canvas to-do panel: the status pill was removed for a compact tile — **in-progress** gets
+  a light accent wash (cleared once done); a **priority dot sits under the checkbox**; the **due date
+  is inline with the source-note link**; the **title is single-line + ellipsised** so every tile is a
+  standard height; stronger tile border (`Neutral300`). The main To-do board keeps List + Kanban (with
+  the status pill) and gains a **manual add-task row pinned at the bottom** (shared `TodoAddRow`,
+  end-inset to clear the FAB). Priority-dot/status-pill/due-label hoisted to `ui/TodoStatusStyle.kt`.
+- **Editor chrome (`NoteCanvasScreen` / `EditorChrome`).** A distinct **grey header band** holds the
+  note **tabs** (top), a **bold-Poppins title** (`headlineSmall` ExtraBold), and the **created** date.
+  In **portrait** the three toolbar pods scale ~0.78 (`graphicsLayer`). The to-do button uses the
+  **checklist** glyph. The **lasso** trace + bounding box + handles use the **user accent colour**.
+- **Note tabs = “Recent”.** New `note_pages.lastOpenedAt` (DB **v9**, `MIGRATION_8_9`, backfilled from
+  `modifiedAt`); opening a note records it (`NoteRepository.markOpened` from `CanvasViewModel`).
+  `NoteListViewModel.recentNotes` = notes opened in the last **24h**, most-recently-opened first —
+  drives both the home Recents tab and the editor tabs. `NoteTabPills` **always renders the current
+  note first as the active tab** (independent of the DB round-trip), so the active tab is never
+  missing.
+- **Attached tab mode removed (pending redesign).** The Attached-in-toolbar rendering and its
+  Settings option were deleted at the user's request; the editor always shows tabs in the grey band.
+  The `NoteTabsMode` enum + `SettingsRepository`/`SettingsViewModel` plumbing are left **dormant** for
+  the planned redesign.
+- **Toolbar icons → latest handoff.** Tool glyphs are at the spec-sheet **1.2** stroke weight (lighter
+  than the canvas prototype's 2). `ic_highlighter` regenerated to the latest **chisel-marker** (the
+  one glyph still on the old diamond). Bespoke `ic_import` (tray), `ic_new_note` (notepad+pen),
+  `ic_checklist`, **`ic_pages`** (grid) + **`ic_folder`** (Library) — the last two replace the heavier
+  Material `GridView`/`Folder` so the left pod matches the 1.2 weight. Tile/icon **sizing already
+  matched** the spec (46dp tile / 26dp icon / 4dp gap / 12dp tile / 16dp container).
+- New/updated tests: `ElrondMigrationTest` (chain → **v9** + a v8→v9 `lastOpenedAt` backfill test),
+  `NoteListViewModelTest` (+`recentNotes` 24h window + descending order), `CalendarScreenTest` updated.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
@@ -1047,7 +1245,7 @@ discipline.)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v7** — most recently `strokes.groupId` was added in `MIGRATION_6_7` for FA-9 lasso-selection groups (and `pending_suggestions` in `MIGRATION_5_6` for FA-2 background extraction).
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v9** — most recently `note_pages.lastOpenedAt` was added in `MIGRATION_8_9` for the FA-15 "Recent"/note-tabs window (and `todo_items.status` in `MIGRATION_7_8` for the FA-14 Kanban status; `strokes.groupId` in `MIGRATION_6_7` for FA-9 lasso-selection groups).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
 - **Outlook Azure app registration — required final step before release.** FA-11's Outlook integration is fully coded but ships **inert** until an Azure app is registered and `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` are set (see *Outlook / Microsoft Graph OAuth setup*). This is intentionally deferred to a final pre-release task; until done, Outlook stays NotConfigured and the calendar falls back to the device provider (not a bug). Pairs with the Anthropic-key release blocker above.

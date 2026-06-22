@@ -31,6 +31,8 @@ data class NotePageEntity(
     val customTitle: String?,
     val createdAt: Long,
     val modifiedAt: Long,
+    /** When the note was last opened (FA-15) — backs the "Recent" list / note tabs. */
+    val lastOpenedAt: Long = 0,
     val tags: List<String> = emptyList(),
     /** AI-generated summary of the page used for organisation and topic detection. */
     val contextSummary: String? = null,
@@ -146,6 +148,9 @@ data class TodoItemEntity(
     @PrimaryKey val id: String,
     val title: String,
     val isCompleted: Boolean = false,
+    /** FA-14 workflow status ordinal: 0 = to-do, 1 = in progress, 2 = done. Kept in sync with
+     *  [isCompleted] (done ⇔ isCompleted) at the repository boundary. */
+    val status: Int = 0,
     val dueAt: Long? = null,
     /** 0 = none, 1 = low, 2 = medium, 3 = high. */
     val priority: Int = 0,

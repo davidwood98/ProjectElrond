@@ -10,6 +10,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -22,6 +23,18 @@ class NoteListViewModel @Inject constructor(
 
     /** All pages, most recently edited first. */
     val pages: StateFlow<List<NotePage>> = repository.observeTimeline()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * "Recent" notes (FA-15): only those opened within the last 24h, most-recently-opened first.
+     * Backs the home Recents tab and the editor note tabs. Re-evaluated on each DB change (and an
+     * open updates `lastOpenedAt`, which triggers one), so it stays fresh as notes are visited.
+     */
+    val recentNotes: StateFlow<List<NotePage>> = repository.observeTimeline()
+        .map { pages ->
+            val cutoff = System.currentTimeMillis() - RECENT_WINDOW_MS
+            pages.filter { it.lastOpenedAt >= cutoff }.sortedByDescending { it.lastOpenedAt }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** Creates a page in the default notebook and reports its id for navigation. */
@@ -46,4 +59,8 @@ class NoteListViewModel @Inject constructor(
     /** Normalized stroke polylines — the fallback thumbnail when no cached bitmap exists yet. */
     suspend fun preview(pageId: String): List<List<Pair<Float, Float>>> =
         runCatching { repository.loadStrokePreview(pageId) }.getOrDefault(emptyList())
+
+    private companion object {
+        const val RECENT_WINDOW_MS = 24L * 60 * 60 * 1000 // 24 hours
+    }
 }

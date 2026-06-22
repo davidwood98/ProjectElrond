@@ -1,24 +1,22 @@
-<!-- Leap note tool · Eraser (angled block). From the Claude Design handoff. -->
+<!-- Leap action · Import (rounded square + plus). From the Claude Design handoff "Note Tool Icons". -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
-        android:pathData="M3.8 14.9l7.4,-7.4a1.7 1.7 0 0 1 2.4 0l3.5 3.5a1.7 1.7 0 0 1 0 2.4l-4.7 4.7H6.5z"
+        android:pathData="M8 4h8a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-8a4 4 0 0 1 -4 -4v-8a4 4 0 0 1 4 -4z"
         android:fillColor="#00000000"
         android:strokeColor="#FF000000"
         android:strokeWidth="1.2"
-        android:strokeLineCap="round"
         android:strokeLineJoin="round" />
     <path
-        android:pathData="M9.1 9.6l6 6"
+        android:pathData="M12 8.8v6.4"
         android:strokeColor="#FF000000"
         android:strokeWidth="1.2"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
+        android:strokeLineCap="round" />
     <path
-        android:pathData="M13 21.3H21"
+        android:pathData="M8.8 12h6.4"
         android:strokeColor="#FF000000"
         android:strokeWidth="1.2"
         android:strokeLineCap="round" />

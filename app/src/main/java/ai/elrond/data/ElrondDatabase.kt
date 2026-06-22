@@ -19,7 +19,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PageEditEventEntity::class,
         PendingSuggestionEntity::class,
     ],
-    version = 7,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -167,6 +167,28 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v8 adds the FA-14 workflow status column to todo_items (0 = to-do, 1 = in progress,
+         * 2 = done) for the Kanban board, and backfills already-completed items to DONE.
+         */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE todo_items ADD COLUMN status INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE todo_items SET status = 2 WHERE isCompleted = 1")
+            }
+        }
+
+        /**
+         * v9 adds note_pages.lastOpenedAt (FA-15) for the "Recent" list / note tabs, backfilled to
+         * each page's last-edit time so existing notes still order sensibly.
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE note_pages ADD COLUMN lastOpenedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE note_pages SET lastOpenedAt = modifiedAt")
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -178,7 +200,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                     DB_NAME,
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-                    MIGRATION_6_7,
+                    MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                 ).build().also { instance = it }
             }
     }

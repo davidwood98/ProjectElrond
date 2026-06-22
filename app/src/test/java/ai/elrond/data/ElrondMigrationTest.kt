@@ -32,6 +32,8 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_4_5,
         ElrondDatabase.MIGRATION_5_6,
         ElrondDatabase.MIGRATION_6_7,
+        ElrondDatabase.MIGRATION_7_8,
+        ElrondDatabase.MIGRATION_8_9,
     )
 
     /**
@@ -55,10 +57,29 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v7_and_validates_final_schema() {
+    fun migrates_v1_to_v9_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v7 schema (incl. strokes.groupId).
-        helper.runMigrationsAndValidate(TEST_DB, 7, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v9 schema (incl. note_pages.lastOpenedAt).
+        helper.runMigrationsAndValidate(TEST_DB, 9, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_8_to_9_adds_lastOpenedAt_backfilled_from_modifiedAt() {
+        helper.createDatabase(TEST_DB, 8).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt) VALUES ('nb1', 'N', 0)")
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, tags, contextSummary) " +
+                    "VALUES ('p1', 'nb1', NULL, 1000, 7777, '', NULL)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 9, true, *allMigrations)
+        var lastOpenedAt = -1L
+        db.query("SELECT lastOpenedAt FROM note_pages WHERE id = 'p1'").use { c ->
+            if (c.moveToNext()) lastOpenedAt = c.getLong(0)
+        }
+        db.close()
+        assertEquals(7777L, lastOpenedAt) // backfilled from modifiedAt
     }
 
     @Test
@@ -72,6 +93,32 @@ class ElrondMigrationTest {
         }
         db.close()
         assertTrue("strokes.groupId should exist after v6→v7", "groupId" in columns)
+    }
+
+    @Test
+    fun migration_7_to_8_adds_status_and_backfills_completed_items_to_done() {
+        helper.createDatabase(TEST_DB, 7).apply {
+            // A completed item (→ should backfill status=2 DONE) and an open one (→ stays status=0).
+            execSQL(
+                "INSERT INTO todo_items (id, title, isCompleted, dueAt, priority, sourcePageId, " +
+                    "sourcePageTitle, isAiExtracted, createdAt, completedAt) " +
+                    "VALUES ('done1', 'Done task', 1, NULL, 0, NULL, NULL, 0, 0, 10)",
+            )
+            execSQL(
+                "INSERT INTO todo_items (id, title, isCompleted, dueAt, priority, sourcePageId, " +
+                    "sourcePageTitle, isAiExtracted, createdAt, completedAt) " +
+                    "VALUES ('open1', 'Open task', 0, NULL, 0, NULL, NULL, 0, 0, NULL)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 8, true, *allMigrations)
+        val statusById = mutableMapOf<String, Int>()
+        db.query("SELECT id, status FROM todo_items").use { c ->
+            while (c.moveToNext()) statusById[c.getString(0)] = c.getInt(1)
+        }
+        db.close()
+        assertEquals(2, statusById["done1"]) // DONE
+        assertEquals(0, statusById["open1"]) // TODO
     }
 
     @Test

@@ -2,6 +2,7 @@ package ai.elrond.data
 
 import ai.elrond.domain.TodoItem
 import ai.elrond.domain.TodoPriority
+import ai.elrond.domain.TodoStatus
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -73,7 +74,22 @@ class TodoRepository(
     }
 
     suspend fun setCompleted(id: String, completed: Boolean) {
-        todoDao.setCompleted(id, completed, completedAt = if (completed) clock() else null)
+        todoDao.setCompleted(
+            id = id,
+            completed = completed,
+            status = (if (completed) TodoStatus.DONE else TodoStatus.TODO).ordinal,
+            completedAt = if (completed) clock() else null,
+        )
+    }
+
+    /** FA-14: set the workflow status (To-do / In progress / Done) for the Kanban board. */
+    suspend fun setStatus(id: String, status: TodoStatus) {
+        todoDao.setStatus(
+            id = id,
+            status = status.ordinal,
+            completed = status.isDone,
+            completedAt = if (status.isDone) clock() else null,
+        )
     }
 
     suspend fun editContent(id: String, content: String, priority: TodoPriority, dueAt: Long?) {

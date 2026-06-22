@@ -3,6 +3,7 @@ package ai.elrond.ui
 import ai.elrond.presentation.AiUiState
 import ai.elrond.domain.CanvasTool
 import ai.elrond.presentation.CanvasViewModel
+import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.domain.PendingSuggestion
 import ai.elrond.domain.SuggestionType
 import ai.elrond.presentation.SettingsViewModel
@@ -18,8 +19,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -28,7 +31,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Checkbox
@@ -56,7 +58,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -78,6 +82,7 @@ fun NoteCanvasScreen(
     viewModel: CanvasViewModel = hiltViewModel(),
     todoViewModel: TodoViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel(),
+    noteListViewModel: NoteListViewModel = hiltViewModel(),
 ) {
     val tool by viewModel.tool.collectAsStateWithLifecycle()
     val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
@@ -94,6 +99,17 @@ fun NoteCanvasScreen(
     // The active-tool highlight style (A soft tile / B filled / C underline), from Settings.
     val toolTreatment by settingsViewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
     var showMoreMenu by remember { mutableStateOf(false) }
+    // FA-14 appearance tweaks + editor header state.
+    val paperStyle by settingsViewModel.paperStyle.collectAsStateWithLifecycle()
+    val penIconStyle by settingsViewModel.penIconStyle.collectAsStateWithLifecycle()
+    val pageTitle by viewModel.pageTitle.collectAsStateWithLifecycle()
+    val pageDateLabel by viewModel.pageDateLabel.collectAsStateWithLifecycle()
+    val libraryNotes by noteListViewModel.pages.collectAsStateWithLifecycle()
+    // The note tabs show "Recent" notes (opened in the last 24h, last-opened first); the Library
+    // overlay still lists every note.
+    val recentNotes by noteListViewModel.recentNotes.collectAsStateWithLifecycle()
+    var showPages by remember { mutableStateOf(false) }
+    var showLibrary by remember { mutableStateOf(false) }
 
     // AI-box selection lives in the UI (not persisted). When the "edit mode on creation"
     // setting is on (default) a freshly created note starts selected; loaded notes always
@@ -108,11 +124,24 @@ fun NoteCanvasScreen(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .onSizeChanged { viewModel.setCanvasSize(it.width.toFloat(), it.height.toFloat()) },
     ) {
+        // Portrait shrinks the floating toolbar to the handoff's 0.75-ish scale; landscape keeps the
+        // full-size pods (device-verified).
+        val portrait = maxHeight > maxWidth
+        val toolbarScale = if (portrait) 0.78f else 1f
+        val sidePad = if (portrait) 16.dp else 48.dp
+        val tabsTop = if (portrait) 14.dp else 28.dp
+        // Note tabs live in the grey header band, just above the title (the old Attached-in-toolbar
+        // mode + its setting were removed pending a redesign). The grey band sits below the toolbar.
+        val headerTop = tabsTop + 62.dp * toolbarScale + 6.dp
+
+        // Paper background (Ruled / Plain / Dots) behind the transparent ink layers.
+        PaperBackground(paper = paperStyle, modifier = Modifier.fillMaxSize())
+
         InkCanvas(
             viewModel = viewModel,
             modifier = Modifier.fillMaxSize(),
@@ -166,28 +195,45 @@ fun NoteCanvasScreen(
         }
 
         // ── Leap note toolbar (Claude Design "Note Tool Icons" handoff) ──────────────────────
-        // Left pod: exit the page.
+        // Left pod: exit the page, plus Pages + Library overlays (FA-14).
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(48.dp),
+                .padding(start = sidePad, top = tabsTop)
+                .graphicsLayer {
+                    scaleX = toolbarScale; scaleY = toolbarScale
+                    transformOrigin = TransformOrigin(0f, 0f)
+                },
         ) {
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Close),
                 contentDescription = "Back to notes",
                 onClick = onBack,
             )
+            ToolbarDivider()
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Pages),
+                contentDescription = "Pages",
+                onClick = { showPages = true },
+                selected = showPages,
+                treatment = toolTreatment,
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Folder),
+                contentDescription = "Library",
+                onClick = { showLibrary = true },
+                selected = showLibrary,
+                treatment = toolTreatment,
+            )
         }
 
         // Centre pod: drawing tools + undo/redo. The active tool uses the user's chosen highlight
         // style (A soft tile / B filled / C underline). Undo/Redo are actions — greyed when unavailable.
-        LeapToolbarContainer(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(48.dp),
-        ) {
+        val centreTools: @Composable RowScope.() -> Unit = {
             ToolbarButton(
-                painter = painterResource(ElrondIcons.Pen),
+                painter = painterResource(
+                    ElrondIcons.penToolIcon(ElrondIcons.Pen, ElrondIcons.PenTip, penIconStyle),
+                ),
                 contentDescription = "Pen",
                 onClick = { viewModel.selectTool(CanvasTool.PEN) },
                 selected = tool == CanvasTool.PEN,
@@ -195,14 +241,23 @@ fun NoteCanvasScreen(
             )
             // Visual placeholders (Highlighter / Pencil / Text) — NOT yet wired as tools. Present in
             // the handoff order so the full toolbar spacing/feel can be reviewed on-device; they
-            // render in the resting state and no-op on tap.
+            // render in the resting state and no-op on tap. The pen-family icons honour the FA-14
+            // Body/Tip setting.
             ToolbarButton(
-                painter = painterResource(ElrondIcons.Highlighter),
+                painter = painterResource(
+                    ElrondIcons.penToolIcon(
+                        ElrondIcons.Highlighter,
+                        ElrondIcons.HighlighterTip,
+                        penIconStyle,
+                    ),
+                ),
                 contentDescription = "Highlighter (coming soon)",
                 onClick = {},
             )
             ToolbarButton(
-                painter = painterResource(ElrondIcons.Pencil),
+                painter = painterResource(
+                    ElrondIcons.penToolIcon(ElrondIcons.Pencil, ElrondIcons.PencilTip, penIconStyle),
+                ),
                 contentDescription = "Pencil (coming soon)",
                 onClick = {},
             )
@@ -225,13 +280,6 @@ fun NoteCanvasScreen(
                 selected = tool == CanvasTool.LASSO,
                 treatment = toolTreatment,
             )
-            ToolbarButton(
-                painter = painterResource(ElrondIcons.Hand),
-                contentDescription = "Finger drawing",
-                onClick = { viewModel.setStylusOnly(!stylusOnly) },
-                selected = !stylusOnly,
-                treatment = toolTreatment,
-            )
             ToolbarDivider()
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Undo),
@@ -245,13 +293,44 @@ fun NoteCanvasScreen(
                 onClick = viewModel::redo,
                 enabled = canRedo,
             )
+            // Import + Record: visual placeholders (no backend yet); no-op on tap.
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Add),
+                contentDescription = "Import (coming soon)",
+                onClick = {},
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Record),
+                contentDescription = "Record (coming soon)",
+                onClick = {},
+            )
+            ToolbarButton(
+                painter = painterResource(ElrondIcons.Hand),
+                contentDescription = "Finger drawing",
+                onClick = { viewModel.setStylusOnly(!stylusOnly) },
+                selected = !stylusOnly,
+                treatment = toolTreatment,
+            )
         }
+        val centreModifier = Modifier
+            .align(Alignment.TopCenter)
+            .padding(top = tabsTop)
+            .graphicsLayer {
+                scaleX = toolbarScale; scaleY = toolbarScale
+                transformOrigin = TransformOrigin(0.5f, 0f)
+            }
+        // Plain centre toolbar — the note tabs live in the grey header band (see EditorHeader).
+        LeapToolbarContainer(modifier = centreModifier) { centreTools() }
 
         // Right pod: the to-do list (with its outstanding-count badge) + a More menu (Clear page).
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(48.dp),
+                .padding(end = sidePad, top = tabsTop)
+                .graphicsLayer {
+                    scaleX = toolbarScale; scaleY = toolbarScale
+                    transformOrigin = TransformOrigin(1f, 0f)
+                },
         ) {
             val todoBadge: (@Composable () -> Unit)? = when {
                 hasNewExtractedItems -> {
@@ -263,7 +342,7 @@ fun NoteCanvasScreen(
                 else -> null
             }
             ToolbarButton(
-                painter = rememberVectorPainter(Icons.AutoMirrored.Filled.List),
+                painter = painterResource(ElrondIcons.Checklist),
                 contentDescription = "To-do list",
                 onClick = {
                     showTodoPanel = true
@@ -289,8 +368,59 @@ fun NoteCanvasScreen(
                             viewModel.clearPage()
                         },
                     )
+                    // Handoff menu items not yet wired to a backend — shown disabled.
+                    DropdownMenuItem(
+                        text = { Text("Page style") },
+                        enabled = false,
+                        onClick = {},
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Export") },
+                        enabled = false,
+                        onClick = {},
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Favourite") },
+                        enabled = false,
+                        onClick = {},
+                    )
                 }
             }
+        }
+
+        // Note title + created date in the grey header band, below the toolbar. The note tabs sit at
+        // the top of the band, just above the title (active tab keeps its accent fill).
+        EditorHeader(
+            title = pageTitle,
+            dateLabel = pageDateLabel,
+            onRename = viewModel::renamePage,
+            tabs = {
+                NoteTabPills(
+                    tabs = recentNotes,
+                    currentPageId = pageId,
+                    currentTitle = pageTitle,
+                    onSelectTab = { id -> if (id != pageId) onOpenNote(id) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = 14.dp, top = headerTop),
+        )
+
+        if (showPages) {
+            PagesOverlay(currentTitle = pageTitle, onDismiss = { showPages = false })
+        }
+        if (showLibrary) {
+            LibraryOverlay(
+                notes = libraryNotes,
+                onOpenNote = { id ->
+                    showLibrary = false
+                    if (id != pageId) onOpenNote(id)
+                },
+                onDismiss = { showLibrary = false },
+            )
         }
 
         if (showTodoPanel) {
@@ -347,6 +477,10 @@ fun NoteCanvasScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    // Scrim that consumes taps so the user can't draw on the canvas behind a modal
+                    // clarify prompt (the note has its own Okay / Edit controls).
+                    .background(Color(0x33262626))
+                    .pointerInput(Unit) { detectTapGestures {} }
                     .padding(24.dp),
                 contentAlignment = Alignment.Center,
             ) {

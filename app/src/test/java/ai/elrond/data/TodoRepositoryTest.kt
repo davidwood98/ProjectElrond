@@ -66,12 +66,24 @@ class TodoRepositoryTest {
     }
 
     @Test
-    fun `setCompleted records completion time, clears it when reopened`() = runTest {
+    fun `setCompleted records completion time + status, clears them when reopened`() = runTest {
+        // status 2 = DONE, 0 = TODO (TodoStatus ordinals)
         repository.setCompleted("id-1", completed = true)
-        coVerify { todoDao.setCompleted("id-1", true, FIXED_TIME) }
+        coVerify { todoDao.setCompleted("id-1", true, 2, FIXED_TIME) }
 
         repository.setCompleted("id-1", completed = false)
-        coVerify { todoDao.setCompleted("id-1", false, null) }
+        coVerify { todoDao.setCompleted("id-1", false, 0, null) }
+    }
+
+    @Test
+    fun `setStatus syncs the workflow status with the completed flag and time`() = runTest {
+        // IN_PROGRESS (1) is not done: completed=false, no completion time.
+        repository.setStatus("id-1", ai.elrond.domain.TodoStatus.IN_PROGRESS)
+        coVerify { todoDao.setStatus("id-1", 1, false, null) }
+
+        // DONE (2) is completed: completed=true, completion time stamped.
+        repository.setStatus("id-1", ai.elrond.domain.TodoStatus.DONE)
+        coVerify { todoDao.setStatus("id-1", 2, true, FIXED_TIME) }
     }
 
     @Test
