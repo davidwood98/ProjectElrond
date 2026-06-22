@@ -1099,6 +1099,69 @@ accent = Leap Blue.
   sign-in is now asserted by rendering `EventsTab` directly). No new unit tests — the changes are
   Compose-visual and covered by the existing instrumented suite + device verification.
 
+## FA-15 — Leap design fidelity pass (device-feedback iterations, 2026-06-22)
+
+Iterative on-device polish of the FA-14 re-shell, on branch **`ui_upgrade`**. **DB is now v9**
+(`MIGRATION_8_9`). **266 app + 24 aibackend JVM/Robolectric tests pass** (0 failures);
+`:app:compileDebugKotlin`, `:app:testDebugUnitTest`, `:aibackend:test`, `:app:assembleDebug` and
+`:app:assembleDebugAndroidTest` all build on the WSL Linux SDK. The Compose visuals are
+device/manual-verified. The exact px/hex came from re-reading the handoff prototypes
+(`Canvas.dc.html` / `Canvas-Portrait.dc.html` / `Note Tool Icons.dc.html`); **the
+`Note Tool Icons.dc.html` spec sheet is the source of truth for the tool glyphs** (the canvas
+prototypes lag it). Two adversarial-review workflows (rotation fix; tabs+recent) backed the trickier
+changes; their confirmed findings were applied.
+
+- **Home (`LibraryScreen` / `LibraryContent`).** Page titles removed; a shared top action row
+  (search · **import (arrow-into-tray)** · DW avatar→**Settings**) replaces them. The **New-note FAB**
+  (bespoke `ic_new_note` notepad+pen, soft-accent) shows on every section. Note cards are white +
+  hairline border. The Notes tabs use a **bold label + accent underline** drawn with `drawBehind`
+  (a `fillMaxWidth` underline collapses to 0 inside the tabs' `horizontalScroll` row); the
+  **view-options/“sort by”** kebab sits at the right end of the tab row (not the search bar). Sidebar
+  shows **“Elrond”** (no logo) + a **sun/dark-mode placeholder** (top-right). **Portrait sidebar is a
+  slide-out drawer** — gated on **orientation** (`maxWidth > maxHeight`), NOT a width breakpoint (a
+  portrait tablet is still ~800dp wide), opened by the chevron next to the search bar **and a
+  right-swipe** on the page (no edge pull-tab).
+- **Rotation-safe tab/board state.** The Library content sits at different composition positions per
+  orientation and the Activity recreates on rotation, so auto-keyed `rememberSaveable` stored a
+  *separate* selection per orientation. Fixed with **explicit shared keys** (`library.notesTab`,
+  `library.todoKanban`, `calendar.mode|anchor|selectedDay`) so the current tab/mode persists across
+  rotation.
+- **Timeline (`CalendarScreen`).** Taller tiles (month **68dp**, week **94dp**); inline month/week
+  toggle + arrows; created/edited **dot + count** per day. Tapping a day shows its notes inline: in
+  **landscape month** one horizontal row that **fills the height to the screen bottom** (tiles run
+  behind the FAB, scroll off the right edge); in **week (either orientation) and portrait month** a
+  vertical-scrolling adaptive grid. `DayNoteThumb`'s thumbnail uses `weight(1f)` so tiles fill their
+  (bounded) height. The old Events mode was dropped from this screen (Events lives under the Calendar
+  nav via `EventsTab`).
+- **To-do.** Canvas to-do panel: the status pill was removed for a compact tile — **in-progress** gets
+  a light accent wash (cleared once done); a **priority dot sits under the checkbox**; the **due date
+  is inline with the source-note link**; the **title is single-line + ellipsised** so every tile is a
+  standard height; stronger tile border (`Neutral300`). The main To-do board keeps List + Kanban (with
+  the status pill) and gains a **manual add-task row pinned at the bottom** (shared `TodoAddRow`,
+  end-inset to clear the FAB). Priority-dot/status-pill/due-label hoisted to `ui/TodoStatusStyle.kt`.
+- **Editor chrome (`NoteCanvasScreen` / `EditorChrome`).** A distinct **grey header band** holds the
+  note **tabs** (top), a **bold-Poppins title** (`headlineSmall` ExtraBold), and the **created** date.
+  In **portrait** the three toolbar pods scale ~0.78 (`graphicsLayer`). The to-do button uses the
+  **checklist** glyph. The **lasso** trace + bounding box + handles use the **user accent colour**.
+- **Note tabs = “Recent”.** New `note_pages.lastOpenedAt` (DB **v9**, `MIGRATION_8_9`, backfilled from
+  `modifiedAt`); opening a note records it (`NoteRepository.markOpened` from `CanvasViewModel`).
+  `NoteListViewModel.recentNotes` = notes opened in the last **24h**, most-recently-opened first —
+  drives both the home Recents tab and the editor tabs. `NoteTabPills` **always renders the current
+  note first as the active tab** (independent of the DB round-trip), so the active tab is never
+  missing.
+- **Attached tab mode removed (pending redesign).** The Attached-in-toolbar rendering and its
+  Settings option were deleted at the user's request; the editor always shows tabs in the grey band.
+  The `NoteTabsMode` enum + `SettingsRepository`/`SettingsViewModel` plumbing are left **dormant** for
+  the planned redesign.
+- **Toolbar icons → latest handoff.** Tool glyphs are at the spec-sheet **1.2** stroke weight (lighter
+  than the canvas prototype's 2). `ic_highlighter` regenerated to the latest **chisel-marker** (the
+  one glyph still on the old diamond). Bespoke `ic_import` (tray), `ic_new_note` (notepad+pen),
+  `ic_checklist`, **`ic_pages`** (grid) + **`ic_folder`** (Library) — the last two replace the heavier
+  Material `GridView`/`Folder` so the left pod matches the 1.2 weight. Tile/icon **sizing already
+  matched** the spec (46dp tile / 26dp icon / 4dp gap / 12dp tile / 16dp container).
+- New/updated tests: `ElrondMigrationTest` (chain → **v9** + a v8→v9 `lastOpenedAt` backfill test),
+  `NoteListViewModelTest` (+`recentNotes` 24h window + descending order), `CalendarScreenTest` updated.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
@@ -1182,7 +1245,7 @@ discipline.)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v8** — most recently `todo_items.status` was added in `MIGRATION_7_8` for the FA-14 Kanban workflow status (and `strokes.groupId` in `MIGRATION_6_7` for FA-9 lasso-selection groups).
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v9** — most recently `note_pages.lastOpenedAt` was added in `MIGRATION_8_9` for the FA-15 "Recent"/note-tabs window (and `todo_items.status` in `MIGRATION_7_8` for the FA-14 Kanban status; `strokes.groupId` in `MIGRATION_6_7` for FA-9 lasso-selection groups).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
 - **Outlook Azure app registration — required final step before release.** FA-11's Outlook integration is fully coded but ships **inert** until an Azure app is registered and `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` are set (see *Outlook / Microsoft Graph OAuth setup*). This is intentionally deferred to a final pre-release task; until done, Outlook stays NotConfigured and the calendar falls back to the device provider (not a bug). Pairs with the Anthropic-key release blocker above.
