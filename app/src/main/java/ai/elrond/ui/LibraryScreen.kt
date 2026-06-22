@@ -67,8 +67,6 @@ enum class LibraryNav(val label: String, val icon: ImageVector) {
     TODO("To-do", Icons.Outlined.Description), // To-do uses the bespoke checklist glyph (see NavRow)
 }
 
-/** Breakpoint: at/above this width the sidebar is a persistent rail (landscape); below it slides out. */
-private val SIDEBAR_BREAKPOINT = 720.dp
 private val SIDEBAR_WIDTH = 272.dp
 
 /**
@@ -106,8 +104,11 @@ fun LibraryScreen(
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val wide = maxWidth >= SIDEBAR_BREAKPOINT
-        if (wide) {
+        // Orientation-driven, NOT width-driven: a tablet in portrait is still wide (~800dp), so a
+        // width breakpoint kept the fixed rail in portrait. Landscape = persistent rail; portrait =
+        // a slide-out drawer (pull-tab + chevron toggle), per Canvas-Portrait.dc.html.
+        val landscape = maxWidth > maxHeight
+        if (landscape) {
             Row(modifier = Modifier.fillMaxSize()) {
                 Surface(
                     modifier = Modifier.width(SIDEBAR_WIDTH).fillMaxHeight(),
