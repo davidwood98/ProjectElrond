@@ -45,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -191,17 +192,21 @@ private fun TodoRow(
         border = BorderStroke(1.dp, Neutral300),
         color = tileColor,
     ) {
-        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             // Checkbox with the priority dot directly beneath it (FA-15).
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Checkbox(checked = item.isCompleted, onCheckedChange = onToggle)
                 TodoPriorityDot(item.priority, onSetPriority)
             }
-            Column(modifier = Modifier.weight(1f).padding(start = 8.dp, top = 10.dp)) {
+            // Title fills the space up to the bin; single line, ellipsised — so every tile is the same
+            // height regardless of title length. The source link + due date sit inline below it.
+            Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
                 Text(
                     text = item.content,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     textDecoration = if (item.isCompleted) TextDecoration.LineThrough else null,
                     color = if (item.isCompleted) {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -209,24 +214,29 @@ private fun TodoRow(
                         MaterialTheme.colorScheme.onSurface
                     },
                 )
-                if (item.isAiExtracted && item.hasSourceLink) {
-                    // "from [note]" link, tappable while the source note still exists.
+                Row(
+                    modifier = Modifier.padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (item.isAiExtracted && item.hasSourceLink) {
+                        Text(
+                            text = item.sourcePageTitle?.let { "🔗 $it" } ?: "AI",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false).clickable(onClick = onOpenSource),
+                        )
+                    }
                     Text(
-                        text = item.sourcePageTitle?.let { "🔗 $it" } ?: "AI",
+                        text = item.dueAt?.let { todoDueLabel(it) } ?: "Set date",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 4.dp).clickable(onClick = onOpenSource),
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                        color = if (item.dueAt != null) MaterialTheme.colorScheme.onSurfaceVariant else Neutral500,
+                        modifier = Modifier.clickable(onClick = onEditDue),
                     )
                 }
-            }
-            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(top = 8.dp)) {
-                Text(
-                    text = item.dueAt?.let { todoDueLabel(it) } ?: "Set date",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                    color = if (item.dueAt != null) MaterialTheme.colorScheme.onSurfaceVariant else Neutral500,
-                    modifier = Modifier.clickable(onClick = onEditDue),
-                )
             }
             IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
                 Icon(
