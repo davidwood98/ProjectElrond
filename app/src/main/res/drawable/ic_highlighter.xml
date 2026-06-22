@@ -1,31 +1,43 @@
-<!-- Leap note tool · Highlighter (chisel marker). From the Claude Design handoff. -->
+<!-- Leap note tool · Highlighter (chisel marker). Exact geometry from the latest Note Tool Icons
+     handoff (ic-highlighter): a 45°-rotated barrel + band + tip trapezoid + nib, plus a flat swash
+     underline (un-rotated). Single-colour line art, tinted at the call site. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
+    <group
+        android:name="rot"
+        android:pivotX="12"
+        android:pivotY="12"
+        android:rotation="45">
+        <path
+            android:pathData="M9.5 3h5a1.6 1.6 0 0 1 1.6 1.6V12H7.9V4.6A1.6 1.6 0 0 1 9.5 3z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="1.2"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M7.9 6.3h8.2"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="1.2"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M7.9 12h8.2l-2.1 3H10z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="1.2"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M10 15h4l-0.8 2.8 -1.5 1.7 -1.2 -1.9z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="1.2"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
     <path
-        android:pathData="M14.8 3.6l5.6 5.6,-6.5 6.5,-5.6,-5.6z"
-        android:fillColor="#00000000"
-        android:strokeColor="#FF000000"
-        android:strokeWidth="1.2"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
-    <path
-        android:pathData="M12.3 6.1l5.6 5.6"
-        android:strokeColor="#FF000000"
-        android:strokeWidth="1.2"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
-    <path
-        android:pathData="M7.9 11.1l5 5,-2.4 2.4a1.1 1.1 0 0 1,-1.6 0l-3.4,-3.4a1.1 1.1 0 0 1 0,-1.6z"
-        android:fillColor="#00000000"
-        android:strokeColor="#FF000000"
-        android:strokeWidth="1.2"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
-    <path
-        android:pathData="M4.3 20.6h3.6"
+        android:pathData="M3.6 20.4h3.8"
         android:strokeColor="#FF000000"
         android:strokeWidth="1.7"
         android:strokeLineCap="round" />

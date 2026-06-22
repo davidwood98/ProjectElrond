@@ -9,8 +9,6 @@ import ai.elrond.domain.SuggestionType
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -63,7 +61,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -215,14 +212,14 @@ fun NoteCanvasScreen(
             )
             ToolbarDivider()
             ToolbarButton(
-                painter = rememberVectorPainter(Icons.Outlined.GridView),
+                painter = painterResource(ElrondIcons.Pages),
                 contentDescription = "Pages",
                 onClick = { showPages = true },
                 selected = showPages,
                 treatment = toolTreatment,
             )
             ToolbarButton(
-                painter = rememberVectorPainter(Icons.Outlined.Folder),
+                painter = painterResource(ElrondIcons.Folder),
                 contentDescription = "Library",
                 onClick = { showLibrary = true },
                 selected = showLibrary,
