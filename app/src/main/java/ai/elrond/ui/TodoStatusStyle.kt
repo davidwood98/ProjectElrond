@@ -7,14 +7,21 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -114,6 +121,31 @@ internal fun TodoStatusPill(current: TodoStatus, onSetStatus: (TodoStatus) -> Un
                     onClick = { onSetStatus(s); open = false },
                 )
             }
+        }
+    }
+}
+
+/**
+ * Manual add-task row (text field + add button) — shared by the canvas to-do panel and the main
+ * to-do menu so adding a task looks/behaves identically in both. Adds with no priority.
+ */
+@Composable
+internal fun TodoAddRow(onAdd: (String, TodoPriority) -> Unit, modifier: Modifier = Modifier) {
+    var text by remember { mutableStateOf("") }
+    fun submit() {
+        if (text.isNotBlank()) { onAdd(text, TodoPriority.NONE); text = "" }
+    }
+    Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            placeholder = { Text("Add a task") },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            keyboardActions = KeyboardActions(onDone = { submit() }),
+        )
+        IconButton(onClick = { submit() }, enabled = text.isNotBlank()) {
+            Icon(Icons.Filled.Add, contentDescription = "Add task")
         }
     }
 }

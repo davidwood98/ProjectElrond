@@ -14,6 +14,7 @@ import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGreen
 import ai.elrond.ui.theme.LeapGrey
 import ai.elrond.ui.theme.LeapPink
+import ai.elrond.ui.theme.Neutral300
 import ai.elrond.ui.theme.Neutral500
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -545,33 +546,43 @@ fun TodoBoardSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (items.isEmpty()) {
-            PlaceholderState("No tasks yet", "Write notes and use /Q, or add tasks from a note's to-do panel.")
-        } else if (kanban) {
-            KanbanBoard(
-                items = items,
-                onSetStatus = todoViewModel::setStatus,
-                onSetPriority = { id, p, item -> todoViewModel.edit(id, item.content, p, item.dueAt) },
-                onEditDue = { editingDueFor = it },
-                onOpenNote = onOpenNote,
-            )
-        } else {
-            Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
-                items.forEach { item ->
-                    TodoListRow(
-                        item = item,
-                        onToggle = { todoViewModel.setCompleted(item.id, it) },
-                        onSetStatus = { todoViewModel.setStatus(item.id, it) },
-                        onSetPriority = { todoViewModel.edit(item.id, item.content, it, item.dueAt) },
-                        onEditDue = { editingDueFor = item },
-                        onDelete = { todoViewModel.delete(item.id) },
-                        onOpenNote = { item.sourcePageId?.let(onOpenNote) },
-                    )
-                    Spacer(Modifier.height(10.dp))
+        // Content fills the space above the pinned add-task row.
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (items.isEmpty()) {
+                PlaceholderState("No tasks yet", "Write notes and use /Q, add a task below, or add tasks from a note's to-do panel.")
+            } else if (kanban) {
+                KanbanBoard(
+                    items = items,
+                    onSetStatus = todoViewModel::setStatus,
+                    onSetPriority = { id, p, item -> todoViewModel.edit(id, item.content, p, item.dueAt) },
+                    onEditDue = { editingDueFor = it },
+                    onOpenNote = onOpenNote,
+                )
+            } else {
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
+                    items.forEach { item ->
+                        TodoListRow(
+                            item = item,
+                            onToggle = { todoViewModel.setCompleted(item.id, it) },
+                            onSetStatus = { todoViewModel.setStatus(item.id, it) },
+                            onSetPriority = { todoViewModel.edit(item.id, item.content, it, item.dueAt) },
+                            onEditDue = { editingDueFor = item },
+                            onDelete = { todoViewModel.delete(item.id) },
+                            onOpenNote = { item.sourcePageId?.let(onOpenNote) },
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
-                Spacer(Modifier.height(80.dp)) // clear the FAB
             }
         }
+        // Manual add-task row pinned at the bottom (like the canvas to-do menu). The end inset clears
+        // the lower-right New-note FAB.
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp))
+        TodoAddRow(
+            onAdd = todoViewModel::add,
+            modifier = Modifier.padding(start = 20.dp, end = 76.dp, top = 8.dp, bottom = 16.dp),
+        )
     }
 
     editingDueFor?.let { item ->
@@ -621,7 +632,7 @@ private fun TodoListRow(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        border = BorderStroke(1.dp, Neutral300),
         color = MaterialTheme.colorScheme.surface,
     ) {
         Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
@@ -721,7 +732,7 @@ private fun KanbanCard(
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        border = BorderStroke(1.dp, Neutral300),
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth(),
     ) {
