@@ -191,8 +191,11 @@ fun NotesSection(
     eventsViewModel: EventsViewModel,
 ) {
     val notes by noteListViewModel.pages.collectAsStateWithLifecycle()
-    // rememberSaveable so the selected tab survives an orientation change (FA-15 rotation fix).
-    var tab by rememberSaveable { mutableStateOf(NotesTab.ALL) }
+    // Explicit shared key (NOT the auto code-position key): the portrait and landscape layouts place
+    // this section at different composition positions, so an auto-keyed rememberSaveable would store a
+    // separate tab per orientation (the Activity recreates on rotation). A fixed key makes both
+    // orientations read/write the one slot, so the current tab persists across rotation.
+    var tab by rememberSaveable(key = "library.notesTab") { mutableStateOf(NotesTab.ALL) }
     var deleteCandidate by remember { mutableStateOf<NotePage?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -494,7 +497,8 @@ fun TodoBoardSection(
     onOpenNote: (String) -> Unit,
 ) {
     val items by todoViewModel.items.collectAsStateWithLifecycle()
-    var kanban by rememberSaveable { mutableStateOf(false) }
+    // Shared key so the List/Kanban choice persists across rotation (see NotesSection's note).
+    var kanban by rememberSaveable(key = "library.todoKanban") { mutableStateOf(false) }
     var editingDueFor by remember { mutableStateOf<TodoItem?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {

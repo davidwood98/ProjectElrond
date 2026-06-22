@@ -98,10 +98,12 @@ fun CalendarScreen(
     val activity by viewModel.activityByDay.collectAsStateWithLifecycle()
     val today = remember { LocalDate.now() }
 
-    var mode by rememberSaveable { mutableStateOf(CalendarMode.MONTH) }
-    var anchor by rememberSaveable { mutableStateOf(today.toEpochDay()) }
+    // Explicit shared keys so Month/Week, the anchor period, and the selected day persist across an
+    // orientation change (the Timeline lives in the orientation-branched Library; see NotesSection).
+    var mode by rememberSaveable(key = "calendar.mode") { mutableStateOf(CalendarMode.MONTH) }
+    var anchor by rememberSaveable(key = "calendar.anchor") { mutableStateOf(today.toEpochDay()) }
     val anchorDate = LocalDate.ofEpochDay(anchor)
-    var selectedDay by rememberSaveable { mutableStateOf(today.toEpochDay()) }
+    var selectedDay by rememberSaveable(key = "calendar.selectedDay") { mutableStateOf(today.toEpochDay()) }
     val selected = LocalDate.ofEpochDay(selectedDay)
 
     Column(
