@@ -16,6 +16,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -113,22 +114,43 @@ fun PaperBackground(paper: PaperStyle, modifier: Modifier = Modifier) {
     }
 }
 
+/** The grey header-band tint (handoff: `rgba(38,38,38,0.045)`). */
+private val HeaderBandColor = Color(0xFF262626).copy(alpha = 0.045f)
+
 /**
- * The editor header: the open note's title (Poppins, tap to rename inline) and creation date, with
- * a note-tab pill above it. The tab is a placeholder for future multi-note tabs — only the open note
- * exists, shown as the active tab; [tabsMode] styles it (Separate = floating pill, Attached = docked).
+ * The editor header (FA-15): a distinct light-grey band holding the note tabs, the open note's title
+ * (bold Poppins, tap the edit icon to rename inline), and the **created** date on the right.
+ *
+ * The tabs are styled by [tabsMode] (Canvas-Portrait handoff): **Separate** = individually-rounded
+ * floating pills; **Attached** = an equal-width segmented row docked to the toolbar with an underline
+ * divider. Only the open note is editable; other recent notes appear as inactive tabs that navigate
+ * (a lightweight stand-in until real multi-note tabs exist).
  */
 @Composable
 fun EditorHeader(
     title: String,
     dateLabel: String,
     tabsMode: NoteTabsMode,
+    tabs: List<NotePage>,
+    currentPageId: String,
     onRename: (String) -> Unit,
+    onSelectTab: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var editing by remember { mutableStateOf(false) }
-    Column(modifier = modifier) {
-        NoteTabChip(title = title, mode = tabsMode)
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(13.dp))
+            .background(HeaderBandColor)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        NoteTabsRow(
+            tabs = tabs,
+            currentPageId = currentPageId,
+            currentTitle = title,
+            mode = tabsMode,
+            onSelectTab = onSelectTab,
+        )
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             if (editing) {
@@ -152,8 +174,9 @@ fun EditorHeader(
                 // The title is NOT clickable: a wide clickable here sits over the canvas and would
                 // swallow S Pen strokes that start in the header band. Rename is via the edit icon.
                 Text(
+                    // headlineSmall is Poppins; bump to ExtraBold for the bolder display look.
                     text = title,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.ExtraBold,
                     color = LeapGrey,
                     maxLines = 1,
@@ -179,22 +202,71 @@ fun EditorHeader(
     }
 }
 
+/** The note-tab row: active note + recent notes, styled by [mode] (Separate pills vs Attached row). */
 @Composable
-private fun NoteTabChip(title: String, mode: NoteTabsMode) {
-    val tokens = LeapTheme.tokens
-    val shape = if (mode == NoteTabsMode.ATTACHED) {
-        RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
-    } else {
-        RoundedCornerShape(8.dp)
+private fun NoteTabsRow(
+    tabs: List<NotePage>,
+    currentPageId: String,
+    currentTitle: String,
+    mode: NoteTabsMode,
+    onSelectTab: (String) -> Unit,
+) {
+    // Active note first, then a few recents — a placeholder for real multi-note tabs.
+    val ordered = remember(tabs, currentPageId) {
+        val current = tabs.filter { it.id == currentPageId }
+        (current + tabs.filter { it.id != currentPageId }).take(6)
     }
-    Surface(color = tokens.accentSoft, shape = shape) {
+    if (mode == NoteTabsMode.ATTACHED) {
+        Column {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                ordered.forEach { page ->
+                    val active = page.id == currentPageId
+                    TabPill(
+                        label = if (active) currentTitle else page.displayTitle(),
+                        active = active,
+                        onClick = { if (!active) onSelectTab(page.id) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            androidx.compose.material3.HorizontalDivider(color = Neutral200)
+        }
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            ordered.forEach { page ->
+                val active = page.id == currentPageId
+                TabPill(
+                    label = if (active) currentTitle else page.displayTitle(),
+                    active = active,
+                    onClick = { if (!active) onSelectTab(page.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabPill(label: String, active: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val tokens = LeapTheme.tokens
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (active) tokens.accentSoft else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         Text(
-            text = title,
-            color = tokens.accentStrong,
-            style = MaterialTheme.typography.labelLarge,
+            text = label,
+            color = if (active) tokens.accentStrong else Neutral500,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = 220.dp).padding(horizontal = 12.dp, vertical = 5.dp),
         )
     }
 }

@@ -1,0 +1,22 @@
+<!-- Leap · Checklist (two ticks + two lines). From the Claude Design handoff "Note Tool Icons"
+     (ic-checklist) — the to-do button glyph used in the sidebar and the editor toolbar. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M4 6.2l1.6 1.6 3.2 -3.2"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M4 16.2l1.6 1.6 3.2 -3.2"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path android:pathData="M12 6.5h8" android:strokeColor="#FF000000" android:strokeWidth="2" android:strokeLineCap="round" />
+    <path android:pathData="M12 17h8" android:strokeColor="#FF000000" android:strokeWidth="2" android:strokeLineCap="round" />
+</vector>

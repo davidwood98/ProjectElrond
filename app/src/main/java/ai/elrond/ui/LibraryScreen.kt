@@ -5,12 +5,12 @@ import ai.elrond.presentation.EventsViewModel
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.TodoViewModel
+import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGrey
 import ai.elrond.ui.theme.LeapPink
-import androidx.compose.foundation.Image
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -19,68 +19,67 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.outlined.CalendarMonth
-import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberDrawerState
-import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.launch
 
 /** Left-nav destinations of the Library (FA-14). Files is a placeholder; the rest are live. */
 enum class LibraryNav(val label: String, val icon: ImageVector) {
     NOTES("Notes", Icons.Outlined.Description),
     FILES("Files", Icons.Outlined.Folder),
     CALENDAR("Calendar", Icons.Outlined.CalendarMonth),
-    TODO("To-do", Icons.Outlined.Checklist),
+    TODO("To-do", Icons.Outlined.Description), // To-do uses the bespoke checklist glyph (see NavRow)
 }
 
-/** Breakpoint: at/above this width the sidebar is persistent (landscape); below it collapses. */
+/** Breakpoint: at/above this width the sidebar is a persistent rail (landscape); below it slides out. */
 private val SIDEBAR_BREAKPOINT = 720.dp
+private val SIDEBAR_WIDTH = 272.dp
 
 /**
- * The Library home (FA-14 "Canvas" handoff): a left sidebar (Notes / Files / Calendar / To-do +
- * Subjects + Settings) and a main content area. Responsive — the sidebar is a fixed rail in
- * landscape and a slide-out drawer in portrait. Replaces the old bottom-nav `HomeScreen`.
+ * The Library home (FA-15 redesign to the Claude Design "Canvas"/portrait handoff): a left sidebar
+ * (Elrond · Notes / Files / Calendar / To-do + Subjects + Settings) and a main content area.
+ *
+ * Responsive: in landscape the sidebar is a fixed rail; in portrait it is a slide-out drawer that
+ * pushes off-screen to the left, leaving a rounded **pull-tab** handle peeking at the edge, toggled
+ * by a chevron button in the content's top action row (per Canvas-Portrait.dc.html). Replaces the
+ * old bottom-nav `HomeScreen`.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     onOpenNote: (pageId: String) -> Unit,
@@ -111,15 +110,15 @@ fun LibraryScreen(
         if (wide) {
             Row(modifier = Modifier.fillMaxSize()) {
                 Surface(
-                    modifier = Modifier.width(272.dp).fillMaxHeight(),
+                    modifier = Modifier.width(SIDEBAR_WIDTH).fillMaxHeight(),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                 ) { sidebar {} }
                 Box(modifier = Modifier.weight(1f).fillMaxSize()) {
                     LibraryMain(
                         nav = nav,
-                        showMenu = false,
-                        onMenu = {},
+                        onToggleSidebar = null,
                         onOpenNote = onOpenNote,
+                        onOpenSettings = onOpenSettings,
                         noteListViewModel = noteListViewModel,
                         todoViewModel = todoViewModel,
                         settingsViewModel = settingsViewModel,
@@ -129,40 +128,91 @@ fun LibraryScreen(
                 }
             }
         } else {
-            val drawerState = rememberDrawerState(DrawerValue.Closed)
-            val scope = rememberCoroutineScope()
-            ModalNavigationDrawer(
-                drawerState = drawerState,
-                drawerContent = {
-                    ModalDrawerSheet(modifier = Modifier.width(272.dp)) {
-                        sidebar { scope.launch { drawerState.close() } }
-                    }
-                },
-            ) {
+            var sidebarOpen by rememberSaveable { mutableStateOf(false) }
+            Box(modifier = Modifier.fillMaxSize()) {
                 LibraryMain(
                     nav = nav,
-                    showMenu = true,
-                    onMenu = { scope.launch { drawerState.open() } },
+                    onToggleSidebar = { sidebarOpen = !sidebarOpen },
                     onOpenNote = onOpenNote,
+                    onOpenSettings = onOpenSettings,
                     noteListViewModel = noteListViewModel,
                     todoViewModel = todoViewModel,
                     settingsViewModel = settingsViewModel,
                     calendarViewModel = calendarViewModel,
                     eventsViewModel = eventsViewModel,
                 )
+                SlideOutSidebar(
+                    open = sidebarOpen,
+                    onToggle = { sidebarOpen = !sidebarOpen },
+                    onScrimTap = { sidebarOpen = false },
+                ) { sidebar { sidebarOpen = false } }
             }
         }
     }
 }
 
-/** The main content area: a top bar (with the portrait menu button), the section, and the FAB. */
+/**
+ * Portrait sidebar: an off-canvas drawer that translates `-SIDEBAR_WIDTH` when closed (leaving the
+ * 30dp rounded pull-tab peeking) and to 0 when open, with a tap-to-close scrim. The chevron flips
+ * direction with state — matching the Canvas-Portrait handoff's pull-tab behaviour.
+ */
+@Composable
+private fun SlideOutSidebar(
+    open: Boolean,
+    onToggle: () -> Unit,
+    onScrimTap: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    if (open) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0x47262626))
+                .clickable(onClick = onScrimTap),
+        )
+    }
+    val offsetX by animateDpAsState(if (open) 0.dp else -SIDEBAR_WIDTH, label = "sidebar-offset")
+    Row(
+        modifier = Modifier
+            .fillMaxHeight()
+            .offset(x = offsetX),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            modifier = Modifier.width(SIDEBAR_WIDTH).fillMaxHeight(),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shadowElevation = if (open) 8.dp else 0.dp,
+        ) { content() }
+        // Pull-tab handle (peeks at the screen edge when the drawer is closed).
+        Surface(
+            modifier = Modifier
+                .width(30.dp)
+                .height(76.dp)
+                .clickable(onClick = onToggle),
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(topEnd = 13.dp, bottomEnd = 13.dp),
+            shadowElevation = 6.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    if (open) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight,
+                    contentDescription = if (open) "Close menu" else "Open menu",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+    }
+}
+
+/** The main content area: the section (with its own top action row) + the New-note FAB. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LibraryMain(
     nav: LibraryNav,
-    showMenu: Boolean,
-    onMenu: () -> Unit,
+    onToggleSidebar: (() -> Unit)?,
     onOpenNote: (String) -> Unit,
+    onOpenSettings: () -> Unit,
     noteListViewModel: NoteListViewModel,
     todoViewModel: TodoViewModel,
     settingsViewModel: SettingsViewModel,
@@ -170,40 +220,45 @@ private fun LibraryMain(
     eventsViewModel: EventsViewModel,
 ) {
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(nav.label) },
-                navigationIcon = {
-                    if (showMenu) {
-                        IconButton(onClick = onMenu) {
-                            Icon(Icons.Filled.Menu, contentDescription = "Menu")
-                        }
-                    }
-                },
-            )
-        },
+        // New note is always reachable from the lower-right, on every section (FA-15).
         floatingActionButton = {
-            if (nav == LibraryNav.NOTES) {
-                FloatingActionButton(onClick = { noteListViewModel.createNote(onOpenNote) }) {
-                    Icon(Icons.Filled.Add, contentDescription = "New note")
-                }
+            FloatingActionButton(
+                onClick = { noteListViewModel.createNote(onOpenNote) },
+                shape = RoundedCornerShape(18.dp),
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ) {
+                Icon(
+                    painterResource(ElrondIcons.NewNote),
+                    contentDescription = "New note",
+                    modifier = Modifier.size(28.dp),
+                )
             }
         },
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
             when (nav) {
                 LibraryNav.NOTES -> NotesSection(
+                    onToggleSidebar = onToggleSidebar,
+                    onOpenSettings = onOpenSettings,
                     onOpenNote = onOpenNote,
                     noteListViewModel = noteListViewModel,
                     calendarViewModel = calendarViewModel,
                     eventsViewModel = eventsViewModel,
                 )
-                LibraryNav.FILES -> FilesSection()
+                LibraryNav.FILES -> FilesSection(
+                    onToggleSidebar = onToggleSidebar,
+                    onOpenSettings = onOpenSettings,
+                )
                 LibraryNav.CALENDAR -> CalendarConnectSection(
+                    onToggleSidebar = onToggleSidebar,
+                    onOpenSettings = onOpenSettings,
                     settingsViewModel = settingsViewModel,
                     eventsViewModel = eventsViewModel,
                 )
                 LibraryNav.TODO -> TodoBoardSection(
+                    onToggleSidebar = onToggleSidebar,
+                    onOpenSettings = onOpenSettings,
                     todoViewModel = todoViewModel,
                     onOpenNote = onOpenNote,
                 )
@@ -225,21 +280,21 @@ private fun LibrarySidebar(
             modifier = Modifier.fillMaxWidth().padding(start = 6.dp, bottom = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Image(
-                painter = painterResource(ai.elrond.R.drawable.leap_mark),
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-            )
-            Spacer(Modifier.width(9.dp))
+            // Placeholder project title (the Leap mark/wordmark is intentionally not shown yet).
             Text(
-                "Leap Notes",
-                style = MaterialTheme.typography.titleMedium,
+                "Elrond",
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.ExtraBold,
                 color = LeapGrey,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Outlined.Settings, contentDescription = "Settings")
+            // Dark-mode toggle placeholder (a minimal sun) — no-op for now.
+            IconButton(onClick = { /* TODO: dark mode */ }) {
+                Icon(
+                    Icons.Outlined.LightMode,
+                    contentDescription = "Toggle dark mode",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
@@ -315,7 +370,11 @@ private fun NavRow(item: LibraryNav, selected: Boolean, count: Int?, onClick: ()
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(item.icon, contentDescription = null, tint = fg)
+        if (item == LibraryNav.TODO) {
+            Icon(painterResource(ElrondIcons.Checklist), contentDescription = null, tint = fg, modifier = Modifier.size(24.dp))
+        } else {
+            Icon(item.icon, contentDescription = null, tint = fg)
+        }
         Spacer(Modifier.width(12.dp))
         Text(item.label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = fg, modifier = Modifier.weight(1f))
         if (count != null && count > 0) {

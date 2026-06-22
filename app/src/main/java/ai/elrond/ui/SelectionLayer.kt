@@ -7,6 +7,7 @@ import ai.elrond.domain.LiveTransform
 import ai.elrond.domain.SelectionState
 import ai.elrond.domain.StrokeSelection
 import ai.elrond.domain.StrokeTransforms
+import ai.elrond.ui.theme.LeapTheme
 import android.graphics.Matrix
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -39,7 +40,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.TransformOrigin
@@ -58,9 +58,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
-
-/** Lasso-selection accent — a blue distinct from user navy ink and AI violet. */
-private val SelectionColor = Color(0xFF1565C0)
 
 /**
  * The lasso selection overlay (FA-9), shown above the ink canvas while the lasso tool is active. It
@@ -134,6 +131,7 @@ private fun LassoCatcher(
     onLasso: (List<GestureTriggerDetector.Point>) -> Unit,
     onTap: (Float, Float) -> Unit,
 ) {
+    val accent = LeapTheme.tokens.accent
     val path = remember { mutableStateOf<List<Offset>>(emptyList()) }
     Box(
         Modifier
@@ -179,7 +177,7 @@ private fun LassoCatcher(
                 }
                 drawPath(
                     path = outline,
-                    color = SelectionColor,
+                    color = accent,
                     style = Stroke(
                         width = 3.dp.toPx(),
                         pathEffect = PathEffect.dashPathEffect(floatArrayOf(18f, 12f)),
@@ -194,6 +192,7 @@ private fun LassoCatcher(
 @Composable
 private fun SelectionBox(sel: SelectionState, viewModel: CanvasViewModel, layerSize: IntSize) {
     val density = LocalDensity.current
+    val accent = LeapTheme.tokens.accent
     val box = sel.displayBounds
 
     with(density) {
@@ -203,7 +202,7 @@ private fun SelectionBox(sel: SelectionState, viewModel: CanvasViewModel, layerS
                 .size(width = box.width.coerceAtLeast(1f).toDp(), height = box.height.coerceAtLeast(1f).toDp())
                 .border(
                     width = 1.5.dp,
-                    color = SelectionColor,
+                    color = accent,
                     shape = RoundedCornerShape(4.dp),
                 )
                 // Drag the box body to move the selection.
@@ -240,10 +239,11 @@ private fun ScaleHandle(
     viewModel: CanvasViewModel,
     modifier: Modifier,
 ) {
+    val accent = LeapTheme.tokens.accent
     Box(
         modifier
             .size(HANDLE_SIZE.dp)
-            .background(SelectionColor, CircleShape)
+            .background(accent, CircleShape)
             .pointerInput(sel.ids, corner, sel.lockRatio) {
                 var dx = 0f
                 var dy = 0f

@@ -4,12 +4,14 @@ import ai.elrond.domain.TodoItem
 import ai.elrond.domain.TodoPriority
 import ai.elrond.domain.TodoStatus
 import ai.elrond.presentation.TodoViewModel
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,19 +20,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -48,24 +45,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-
-private val PriorityColors = mapOf(
-    TodoPriority.HIGH to Color(0xFFD32F2F),
-    TodoPriority.MEDIUM to Color(0xFFF57C00),
-    TodoPriority.LOW to Color(0xFF388E3C),
-    TodoPriority.NONE to Color(0xFFBDBDBD),
-)
-
-private val DUE_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM")
 
 /**
  * Floating TODO drawer anchored to the right edge, dismissed by tapping the scrim.
@@ -220,7 +203,6 @@ private fun AddRow(onAdd: (String, TodoPriority) -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TodoRow(
     item: TodoItem,
@@ -231,128 +213,58 @@ private fun TodoRow(
     onSetPriority: (TodoPriority) -> Unit,
     onSetStatus: (TodoStatus) -> Unit,
 ) {
-    var priorityMenuOpen by remember { mutableStateOf(false) }
-    var statusMenuOpen by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        color = MaterialTheme.colorScheme.surface,
     ) {
-        Checkbox(checked = item.isCompleted, onCheckedChange = onToggle)
-        // Priority dot — tap to change priority (settable, like the due date).
-        Box {
-            Box(
-                modifier = Modifier
-                    .size(14.dp)
-                    .clip(CircleShape)
-                    .background(PriorityColors[item.priority] ?: PriorityColors.getValue(TodoPriority.NONE))
-                    .clickable { priorityMenuOpen = true },
-            )
-            DropdownMenu(expanded = priorityMenuOpen, onDismissRequest = { priorityMenuOpen = false }) {
-                TodoPriority.entries.forEach { p ->
-                    DropdownMenuItem(
-                        text = { Text(p.name.lowercase().replaceFirstChar { it.uppercase() }) },
-                        leadingIcon = {
-                            Box(
-                                modifier = Modifier
-                                    .size(12.dp)
-                                    .clip(CircleShape)
-                                    .background(PriorityColors.getValue(p)),
-                            )
-                        },
-                        onClick = {
-                            onSetPriority(p)
-                            priorityMenuOpen = false
-                        },
-                    )
-                }
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+            // Checkbox with the priority dot directly beneath it (FA-15).
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Checkbox(checked = item.isCompleted, onCheckedChange = onToggle)
+                TodoPriorityDot(item.priority, onSetPriority)
             }
-        }
-        Column(modifier = Modifier.weight(1f).padding(start = 10.dp)) {
-            Text(
-                text = item.content,
-                style = MaterialTheme.typography.bodyLarge,
-                textDecoration = if (item.isCompleted) TextDecoration.LineThrough else null,
-                color = if (item.isCompleted) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-            )
-            if (item.isAiExtracted) {
-                // AI-extracted items are identified by the AI colour (no ✨ marker). The "from
-                // [note]" link is shown and tappable only while the source note still exists
-                // (sourcePageId set). Once the note is deleted the FK nulls sourcePageId, so we
-                // fall back to a plain "AI" label instead of a dead, non-tappable link.
+            Column(modifier = Modifier.weight(1f).padding(start = 8.dp, top = 10.dp)) {
                 Text(
-                    text = if (item.hasSourceLink) {
-                        item.sourcePageTitle?.let { "from $it ↗" } ?: "AI"
+                    text = item.content,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    textDecoration = if (item.isCompleted) TextDecoration.LineThrough else null,
+                    color = if (item.isCompleted) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
                     } else {
-                        "AI"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    fontStyle = FontStyle.Italic,
-                    color = AiInkColor,
-                    modifier = if (item.hasSourceLink) {
-                        Modifier.clickable(onClick = onOpenSource)
-                    } else {
-                        Modifier
+                        MaterialTheme.colorScheme.onSurface
                     },
                 )
-            }
-            // Workflow status (FA-14): a chip + dropdown to move between To-do / In progress / Done.
-            Box {
-                val (statusLabel, statusColor) = TodoStatusStyle.getValue(item.status)
-                AssistChip(
-                    onClick = { statusMenuOpen = true },
-                    label = { Text(statusLabel) },
-                    leadingIcon = {
-                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(statusColor))
-                    },
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-                DropdownMenu(expanded = statusMenuOpen, onDismissRequest = { statusMenuOpen = false }) {
-                    TodoStatus.entries.forEach { s ->
-                        val (label, color) = TodoStatusStyle.getValue(s)
-                        DropdownMenuItem(
-                            text = { Text(label) },
-                            leadingIcon = {
-                                Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(color))
-                            },
-                            onClick = {
-                                onSetStatus(s)
-                                statusMenuOpen = false
-                            },
-                        )
-                    }
+                if (item.isAiExtracted && item.hasSourceLink) {
+                    // "from [note]" link, tappable while the source note still exists.
+                    Text(
+                        text = item.sourcePageTitle?.let { "🔗 $it" } ?: "AI",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp).clickable(onClick = onOpenSource),
+                    )
                 }
             }
-            // Dedicated due-date section: a chip that opens the date editor.
-            AssistChip(
-                onClick = onEditDue,
-                label = {
-                    Text(
-                        item.dueAt?.let {
-                            "Due " + DUE_FORMATTER.format(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()))
-                        } ?: "Set due date",
-                    )
-                },
-                leadingIcon = {
-                    Icon(Icons.Filled.DateRange, contentDescription = null, modifier = Modifier.size(16.dp))
-                },
-                colors = if (item.dueAt != null) {
-                    AssistChipDefaults.assistChipColors(labelColor = MaterialTheme.colorScheme.primary)
-                } else {
-                    AssistChipDefaults.assistChipColors()
-                },
-                modifier = Modifier.padding(top = 2.dp),
-            )
-        }
-        IconButton(onClick = onDelete) {
-            Icon(
-                Icons.Filled.Delete,
-                contentDescription = "Delete task",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(top = 8.dp)) {
+                TodoStatusPill(item.status, onSetStatus)
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = item.dueAt?.let { todoDueLabel(it) } ?: "Set date",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (item.dueAt != null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.clickable(onClick = onEditDue),
+                )
+            }
+            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "Delete task",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
     }
 }

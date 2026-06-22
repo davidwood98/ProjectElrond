@@ -21,6 +21,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.absoluteOffset
@@ -31,7 +32,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Checkbox
@@ -60,6 +60,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -122,11 +124,18 @@ fun NoteCanvasScreen(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .onSizeChanged { viewModel.setCanvasSize(it.width.toFloat(), it.height.toFloat()) },
     ) {
+        // Portrait shrinks the floating toolbar to the handoff's 0.75-ish scale and tightens the
+        // header offset; landscape keeps the full-size pods (device-verified).
+        val portrait = maxHeight > maxWidth
+        val toolbarScale = if (portrait) 0.78f else 1f
+        val podPadding = if (portrait) 16.dp else 48.dp
+        val headerTop = if (portrait) 84.dp else 122.dp
+
         // Paper background (Ruled / Plain / Dots) behind the transparent ink layers.
         PaperBackground(paper = paperStyle, modifier = Modifier.fillMaxSize())
 
@@ -187,7 +196,11 @@ fun NoteCanvasScreen(
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(48.dp),
+                .padding(podPadding)
+                .graphicsLayer {
+                    scaleX = toolbarScale; scaleY = toolbarScale
+                    transformOrigin = TransformOrigin(0f, 0f)
+                },
         ) {
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Close),
@@ -216,7 +229,11 @@ fun NoteCanvasScreen(
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(48.dp),
+                .padding(podPadding)
+                .graphicsLayer {
+                    scaleX = toolbarScale; scaleY = toolbarScale
+                    transformOrigin = TransformOrigin(0.5f, 0f)
+                },
         ) {
             ToolbarButton(
                 painter = painterResource(
@@ -305,7 +322,11 @@ fun NoteCanvasScreen(
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(48.dp),
+                .padding(podPadding)
+                .graphicsLayer {
+                    scaleX = toolbarScale; scaleY = toolbarScale
+                    transformOrigin = TransformOrigin(1f, 0f)
+                },
         ) {
             val todoBadge: (@Composable () -> Unit)? = when {
                 hasNewExtractedItems -> {
@@ -317,7 +338,7 @@ fun NoteCanvasScreen(
                 else -> null
             }
             ToolbarButton(
-                painter = rememberVectorPainter(Icons.AutoMirrored.Filled.List),
+                painter = painterResource(ElrondIcons.Checklist),
                 contentDescription = "To-do list",
                 onClick = {
                     showTodoPanel = true
@@ -363,16 +384,19 @@ fun NoteCanvasScreen(
             }
         }
 
-        // Note title + date, just below the floating toolbar (tap the title to rename).
+        // Note title + tabs + created date in the grey header band, just below the floating toolbar.
         EditorHeader(
             title = pageTitle,
             dateLabel = pageDateLabel,
             tabsMode = noteTabsMode,
+            tabs = libraryNotes,
+            currentPageId = pageId,
             onRename = viewModel::renamePage,
+            onSelectTab = { id -> if (id != pageId) onOpenNote(id) },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
-                .padding(start = 56.dp, end = 56.dp, top = 118.dp),
+                .padding(start = 14.dp, end = 14.dp, top = headerTop),
         )
 
         if (showPages) {

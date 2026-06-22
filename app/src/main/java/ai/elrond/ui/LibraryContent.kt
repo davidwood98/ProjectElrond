@@ -3,17 +3,20 @@ package ai.elrond.ui
 import ai.elrond.data.CalendarProviderType
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.TodoItem
+import ai.elrond.domain.TodoPriority
 import ai.elrond.domain.TodoStatus
 import ai.elrond.presentation.CalendarViewModel
 import ai.elrond.presentation.EventsViewModel
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.TodoViewModel
+import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGreen
 import ai.elrond.ui.theme.LeapGrey
 import ai.elrond.ui.theme.LeapPink
+import ai.elrond.ui.theme.Neutral500
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -38,20 +41,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -59,10 +62,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,67 +90,120 @@ private enum class NotesTab(val label: String) {
 
 private const val RECENTS_COUNT = 6
 private val NOTE_DATE = DateTimeFormatter.ofPattern("d MMM yyyy")
-private val TODO_DUE = DateTimeFormatter.ofPattern("d MMM")
 
 internal const val LIBRARY_EMPTY_TAG = "library-empty"
 internal const val LIBRARY_NOTE_CARD_TAG = "library-note-card"
+
+// ─────────────────────────────── shared top action row ───────────────────────────────
+
+/**
+ * The Library top action row (FA-15): an optional sidebar-toggle chevron (portrait only), a search
+ * field, an import button, a "sort by" / view-options button, and the account avatar — which maps to
+ * Settings for now. Search / import / sort are visual placeholders (no backend yet). Replaces the
+ * old page-title app bar; content sits directly beneath it.
+ */
+@Composable
+private fun LibraryActionBar(
+    onToggleSidebar: (() -> Unit)?,
+    onOpenSettings: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (onToggleSidebar != null) {
+            Surface(
+                modifier = Modifier.size(42.dp).clip(RoundedCornerShape(11.dp)).clickable(onClick = onToggleSidebar),
+                shape = RoundedCornerShape(11.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.ChevronRight, contentDescription = "Open menu", tint = LeapGrey, modifier = Modifier.size(22.dp))
+                }
+            }
+        }
+        Surface(
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Search, contentDescription = null, tint = Neutral500, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("Search notes", color = Neutral500)
+            }
+        }
+        // Import (placeholder) — soft-accent tile, matching the handoff.
+        Surface(
+            modifier = Modifier.size(42.dp),
+            shape = RoundedCornerShape(11.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    painter = androidx.compose.ui.res.painterResource(ElrondIcons.Import),
+                    contentDescription = "Import (coming soon)",
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        // Sort / view options (placeholder).
+        Surface(
+            modifier = Modifier.size(40.dp),
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    painter = androidx.compose.ui.res.painterResource(ElrondIcons.MoreVert),
+                    contentDescription = "Sort by (coming soon)",
+                    tint = LeapGrey,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+        Box(
+            modifier = Modifier.size(38.dp).clip(CircleShape).background(LeapPink).clickable(onClick = onOpenSettings),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("DW", color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+        }
+    }
+}
 
 // ─────────────────────────────────── Notes ───────────────────────────────────
 
 @Composable
 fun NotesSection(
+    onToggleSidebar: (() -> Unit)?,
+    onOpenSettings: () -> Unit,
     onOpenNote: (String) -> Unit,
     noteListViewModel: NoteListViewModel,
     calendarViewModel: CalendarViewModel,
     eventsViewModel: EventsViewModel,
 ) {
     val notes by noteListViewModel.pages.collectAsStateWithLifecycle()
-    var tab by remember { mutableStateOf(NotesTab.ALL) }
+    // rememberSaveable so the selected tab survives an orientation change (FA-15 rotation fix).
+    var tab by rememberSaveable { mutableStateOf(NotesTab.ALL) }
     var deleteCandidate by remember { mutableStateOf<NotePage?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Search + import + account row (search/import are placeholders).
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Surface(
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                color = MaterialTheme.colorScheme.surface,
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Outlined.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(10.dp))
-                    Text("Search notes", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            Box(
-                modifier = Modifier.size(38.dp).clip(CircleShape).background(LeapPink),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("DW", color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-            }
-        }
+        LibraryActionBar(onToggleSidebar = onToggleSidebar, onOpenSettings = onOpenSettings)
 
-        // Tabs
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            NotesTab.entries.forEach { t ->
-                FilterChip(selected = tab == t, onClick = { tab = t }, label = { Text(t.label) })
-            }
-        }
-        HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+        UnderlineTabRow(
+            tabs = NotesTab.entries,
+            selected = tab,
+            label = { it.label },
+            onSelect = { tab = it },
+        )
 
         when (tab) {
             NotesTab.TIMELINE -> CalendarScreen(
@@ -153,6 +211,7 @@ fun NotesSection(
                 showEvents = false,
                 viewModel = calendarViewModel,
                 eventsViewModel = eventsViewModel,
+                noteListViewModel = noteListViewModel,
             )
             NotesTab.FAVORITES -> PlaceholderState(
                 "Favourites are coming soon",
@@ -166,18 +225,10 @@ fun NotesSection(
                 if (shown.isEmpty()) {
                     PlaceholderState(
                         "No notes yet",
-                        "Tap + to create your first note. Write with your S Pen, and /Q to ask the AI.",
+                        "Tap the new-note button to start. Write with your S Pen, and /Q to ask the AI.",
                         modifier = Modifier.testTag(LIBRARY_EMPTY_TAG),
                     )
                 } else {
-                    if (tab == NotesTab.UNFILED) {
-                        Text(
-                            "All notes are unfiled until subjects are available.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 20.dp, top = 8.dp),
-                        )
-                    }
                     NotesGrid(
                         notes = shown,
                         noteListViewModel = noteListViewModel,
@@ -205,6 +256,51 @@ fun NotesSection(
     }
 }
 
+/** Underline tab row (FA-15): bold label + accent underline when selected, no chip border/fill. */
+@Composable
+private fun <T> UnderlineTabRow(
+    tabs: Iterable<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(start = 20.dp, end = 20.dp, top = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(26.dp),
+    ) {
+        tabs.forEach { t ->
+            val isSelected = t == selected
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                    onClick = { onSelect(t) },
+                ),
+            ) {
+                Text(
+                    label(t),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else Neutral500,
+                )
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .height(2.5.dp)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent),
+                )
+            }
+        }
+    }
+    HorizontalDivider()
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NotesGrid(
@@ -221,43 +317,69 @@ private fun NotesGrid(
         modifier = Modifier.fillMaxSize(),
     ) {
         items(notes, key = { it.id }) { page ->
-            Card(
-                modifier = Modifier
-                    .testTag(LIBRARY_NOTE_CARD_TAG)
-                    .combinedClickable(
-                        onClick = { onOpenNote(page.id) },
-                        onLongClick = { onLongPress(page) },
-                    ),
-            ) {
-                Box {
-                    NoteThumbnail(
-                        page = page,
-                        viewModel = noteListViewModel,
-                        modifier = Modifier.fillMaxWidth().height(150.dp),
-                    )
-                    // Favourite star — placeholder (no backend yet).
-                    Icon(
-                        Icons.Outlined.StarBorder,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.align(Alignment.TopEnd).padding(10.dp).size(20.dp),
-                    )
-                }
-                Column(modifier = Modifier.padding(13.dp)) {
-                    Text(
-                        page.displayTitle(),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        NOTE_DATE.format(Instant.ofEpochMilli(page.modifiedAt).atZone(ZoneId.systemDefault())),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
+            NoteCardItem(
+                page = page,
+                noteListViewModel = noteListViewModel,
+                onOpenNote = onOpenNote,
+                onLongPress = onLongPress,
+            )
+        }
+    }
+}
+
+/** A single note card — white surface, hairline border, thumbnail, title + date (FA-15 restyle). */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun NoteCardItem(
+    page: NotePage,
+    noteListViewModel: NoteListViewModel,
+    onOpenNote: (String) -> Unit,
+    onLongPress: (NotePage) -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier
+            .testTag(LIBRARY_NOTE_CARD_TAG)
+            .combinedClickable(
+                onClick = { onOpenNote(page.id) },
+                onLongClick = { onLongPress(page) },
+            ),
+    ) {
+        Column {
+            Box {
+                NoteThumbnail(
+                    page = page,
+                    viewModel = noteListViewModel,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(150.dp)
+                        .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+                )
+                // Favourite star — placeholder (no backend yet).
+                Icon(
+                    Icons.Outlined.StarBorder,
+                    contentDescription = null,
+                    tint = Neutral500,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(10.dp).size(20.dp),
+                )
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Column(modifier = Modifier.padding(13.dp)) {
+                Text(
+                    page.displayTitle(),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    NOTE_DATE.format(Instant.ofEpochMilli(page.modifiedAt).atZone(ZoneId.systemDefault())),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Neutral500,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
             }
         }
     }
@@ -266,11 +388,17 @@ private fun NotesGrid(
 // ─────────────────────────────────── Files ───────────────────────────────────
 
 @Composable
-fun FilesSection() {
-    PlaceholderState(
-        "Files are coming soon",
-        "Import PDFs and reference documents alongside your notes. Not available yet.",
-    )
+fun FilesSection(
+    onToggleSidebar: (() -> Unit)?,
+    onOpenSettings: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        LibraryActionBar(onToggleSidebar = onToggleSidebar, onOpenSettings = onOpenSettings)
+        PlaceholderState(
+            "Files are coming soon",
+            "Import PDFs and reference documents alongside your notes. Not available yet.",
+        )
+    }
 }
 
 // ─────────────────────────────────── Calendar ───────────────────────────────────
@@ -279,38 +407,42 @@ private data class ProviderMeta(val title: String, val desc: String, val icon: a
 
 @Composable
 fun CalendarConnectSection(
+    onToggleSidebar: (() -> Unit)?,
+    onOpenSettings: () -> Unit,
     settingsViewModel: SettingsViewModel,
     eventsViewModel: EventsViewModel,
 ) {
     val selected by settingsViewModel.calendarProvider.collectAsStateWithLifecycle()
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Text(
-            "Connect a calendar so meetings and deadlines appear here. This reads your account only " +
-                "— it never changes your notes.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        val meta = mapOf(
-            CalendarProviderType.DEVICE to ProviderMeta("Device calendar", "This tablet's calendar", Icons.Outlined.PhoneAndroid),
-            CalendarProviderType.GOOGLE to ProviderMeta("Google Calendar", "Not yet available", Icons.Outlined.Email),
-            CalendarProviderType.OUTLOOK to ProviderMeta("Microsoft Outlook", "Office 365 calendar", Icons.Outlined.Email),
-        )
-        CalendarProviderType.entries.forEach { type ->
-            val m = meta.getValue(type)
-            ProviderCard(
-                meta = m,
-                selected = selected == type,
-                onSelect = { settingsViewModel.setCalendarProvider(type) },
+    Column(modifier = Modifier.fillMaxSize()) {
+        LibraryActionBar(onToggleSidebar = onToggleSidebar, onOpenSettings = onOpenSettings)
+        Column(
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                "Connect a calendar so meetings and deadlines appear here. This reads your account only " +
+                    "— it never changes your notes.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-        Text("Upcoming", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = LeapGrey)
-        // The real events list + Outlook sign-in (reused from the calendar screen).
-        Box(modifier = Modifier.fillMaxWidth().height(360.dp)) {
-            EventsTab(eventsViewModel)
+            val meta = mapOf(
+                CalendarProviderType.DEVICE to ProviderMeta("Device calendar", "This tablet's calendar", Icons.Outlined.PhoneAndroid),
+                CalendarProviderType.GOOGLE to ProviderMeta("Google Calendar", "Not yet available", Icons.Outlined.Email),
+                CalendarProviderType.OUTLOOK to ProviderMeta("Microsoft Outlook", "Office 365 calendar", Icons.Outlined.Email),
+            )
+            CalendarProviderType.entries.forEach { type ->
+                val m = meta.getValue(type)
+                ProviderCard(
+                    meta = m,
+                    selected = selected == type,
+                    onSelect = { settingsViewModel.setCalendarProvider(type) },
+                )
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            Text("Upcoming", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = LeapGrey)
+            Box(modifier = Modifier.fillMaxWidth().height(360.dp)) {
+                EventsTab(eventsViewModel)
+            }
         }
     }
 }
@@ -319,7 +451,7 @@ fun CalendarConnectSection(
 private fun ProviderCard(meta: ProviderMeta, selected: Boolean, onSelect: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -356,23 +488,28 @@ private fun ProviderCard(meta: ProviderMeta, selected: Boolean, onSelect: () -> 
 
 @Composable
 fun TodoBoardSection(
+    onToggleSidebar: (() -> Unit)?,
+    onOpenSettings: () -> Unit,
     todoViewModel: TodoViewModel,
     onOpenNote: (String) -> Unit,
 ) {
     val items by todoViewModel.items.collectAsStateWithLifecycle()
-    var kanban by remember { mutableStateOf(false) }
+    var kanban by rememberSaveable { mutableStateOf(false) }
+    var editingDueFor by remember { mutableStateOf<TodoItem?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        LibraryActionBar(onToggleSidebar = onToggleSidebar, onOpenSettings = onOpenSettings)
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            FilterChip(selected = !kanban, onClick = { kanban = false }, label = { Text("List") })
-            FilterChip(selected = kanban, onClick = { kanban = true }, label = { Text("Kanban") })
-            Spacer(Modifier.weight(1f))
+            SegmentedToggle(
+                options = listOf("List" to !kanban, "Kanban" to kanban),
+                onSelect = { kanban = it == "Kanban" },
+            )
             Text(
-                "Tasks from your notes",
+                "Tasks added from your note canvas",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -380,16 +517,59 @@ fun TodoBoardSection(
         if (items.isEmpty()) {
             PlaceholderState("No tasks yet", "Write notes and use /Q, or add tasks from a note's to-do panel.")
         } else if (kanban) {
-            KanbanBoard(items = items, onSetStatus = todoViewModel::setStatus, onOpenNote = onOpenNote)
+            KanbanBoard(
+                items = items,
+                onSetStatus = todoViewModel::setStatus,
+                onSetPriority = { id, p, item -> todoViewModel.edit(id, item.content, p, item.dueAt) },
+                onEditDue = { editingDueFor = it },
+                onOpenNote = onOpenNote,
+            )
         } else {
-            Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+            Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
                 items.forEach { item ->
                     TodoListRow(
                         item = item,
                         onToggle = { todoViewModel.setCompleted(item.id, it) },
                         onSetStatus = { todoViewModel.setStatus(item.id, it) },
+                        onSetPriority = { todoViewModel.edit(item.id, item.content, it, item.dueAt) },
+                        onEditDue = { editingDueFor = item },
                         onDelete = { todoViewModel.delete(item.id) },
                         onOpenNote = { item.sourcePageId?.let(onOpenNote) },
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+                Spacer(Modifier.height(80.dp)) // clear the FAB
+            }
+        }
+    }
+
+    editingDueFor?.let { item ->
+        DueDatePicker(
+            item = item,
+            onSet = { millis -> todoViewModel.edit(item.id, item.content, item.priority, millis); editingDueFor = null },
+            onDismiss = { editingDueFor = null },
+        )
+    }
+}
+
+/** List / Kanban segmented toggle — a pill track with the active option in a white pill. */
+@Composable
+private fun SegmentedToggle(options: List<Pair<String, Boolean>>, onSelect: (String) -> Unit) {
+    Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+        Row(modifier = Modifier.padding(3.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            options.forEach { (label, active) ->
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (active) MaterialTheme.colorScheme.surface else Color.Transparent,
+                    shadowElevation = if (active) 1.dp else 0.dp,
+                    modifier = Modifier.clip(RoundedCornerShape(999.dp)).clickable { onSelect(label) },
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = if (active) MaterialTheme.colorScheme.primary else Neutral500,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 7.dp),
                     )
                 }
             }
@@ -402,50 +582,54 @@ private fun TodoListRow(
     item: TodoItem,
     onToggle: (Boolean) -> Unit,
     onSetStatus: (TodoStatus) -> Unit,
+    onSetPriority: (TodoPriority) -> Unit,
+    onEditDue: () -> Unit,
     onDelete: () -> Unit,
     onOpenNote: () -> Unit,
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-        shape = RoundedCornerShape(13.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         color = MaterialTheme.colorScheme.surface,
     ) {
-        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = item.isCompleted, onCheckedChange = onToggle)
-            Column(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+            // Checkbox with the priority dot directly beneath it (FA-15).
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Checkbox(checked = item.isCompleted, onCheckedChange = onToggle)
+                TodoPriorityDot(item.priority, onSetPriority)
+            }
+            Column(modifier = Modifier.weight(1f).padding(start = 8.dp, top = 10.dp)) {
                 Text(
                     item.content,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.SemiBold,
                     textDecoration = if (item.isCompleted) TextDecoration.LineThrough else null,
-                    color = if (item.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                    color = if (item.isCompleted) Neutral500 else MaterialTheme.colorScheme.onSurface,
                 )
-                Row(
-                    modifier = Modifier.padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    StatusPill(item.status, onSetStatus)
-                    if (item.isAiExtracted && item.hasSourceLink) {
-                        Text(
-                            item.sourcePageTitle?.let { "from $it ↗" } ?: "AI",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = LeapPink,
-                            modifier = Modifier.clickable(onClick = onOpenNote),
-                        )
-                    }
-                    item.dueAt?.let {
-                        Text(
-                            "Due " + TODO_DUE.format(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault())),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                if (item.isAiExtracted && item.hasSourceLink) {
+                    Text(
+                        item.sourcePageTitle?.let { "🔗 $it" } ?: "AI",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 4.dp).clickable(onClick = onOpenNote),
+                    )
                 }
             }
-            androidx.compose.material3.IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Delete, contentDescription = "Delete task", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(top = 8.dp)) {
+                TodoStatusPill(item.status, onSetStatus)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = item.dueAt?.let { todoDueLabel(it) } ?: "Set date",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (item.dueAt != null) MaterialTheme.colorScheme.onSurfaceVariant else Neutral500,
+                    modifier = Modifier.clickable(onClick = onEditDue),
+                )
+            }
+            androidx.compose.material3.IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Filled.Delete, contentDescription = "Delete task", tint = Neutral500, modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -455,6 +639,8 @@ private fun TodoListRow(
 private fun KanbanBoard(
     items: List<TodoItem>,
     onSetStatus: (String, TodoStatus) -> Unit,
+    onSetPriority: (String, TodoPriority, TodoItem) -> Unit,
+    onEditDue: (TodoItem) -> Unit,
     onOpenNote: (String) -> Unit,
 ) {
     Row(
@@ -480,7 +666,13 @@ private fun KanbanBoard(
                     Text(colItems.size.toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 colItems.forEach { item ->
-                    KanbanCard(item = item, onSetStatus = { onSetStatus(item.id, it) }, onOpenNote = { item.sourcePageId?.let(onOpenNote) })
+                    KanbanCard(
+                        item = item,
+                        onSetStatus = { onSetStatus(item.id, it) },
+                        onSetPriority = { onSetPriority(item.id, it, item) },
+                        onEditDue = { onEditDue(item) },
+                        onOpenNote = { item.sourcePageId?.let(onOpenNote) },
+                    )
                     Spacer(Modifier.height(10.dp))
                 }
             }
@@ -489,15 +681,32 @@ private fun KanbanBoard(
 }
 
 @Composable
-private fun KanbanCard(item: TodoItem, onSetStatus: (TodoStatus) -> Unit, onOpenNote: () -> Unit) {
+private fun KanbanCard(
+    item: TodoItem,
+    onSetStatus: (TodoStatus) -> Unit,
+    onSetPriority: (TodoPriority) -> Unit,
+    onEditDue: () -> Unit,
+    onOpenNote: () -> Unit,
+) {
     Surface(
         shape = RoundedCornerShape(12.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(13.dp)) {
-            Text(item.content, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.Top) {
+                Text(
+                    item.content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    textDecoration = if (item.isCompleted) TextDecoration.LineThrough else null,
+                    color = if (item.isCompleted) Neutral500 else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                // Kebab: move status + set priority (kanban keeps priority in the menu per spec).
+                KanbanMenu(current = item.status, currentPriority = item.priority, onSetStatus = onSetStatus, onSetPriority = onSetPriority)
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -505,9 +714,9 @@ private fun KanbanCard(item: TodoItem, onSetStatus: (TodoStatus) -> Unit, onOpen
             ) {
                 if (item.isAiExtracted && item.hasSourceLink) {
                     Text(
-                        item.sourcePageTitle?.let { "from $it ↗" } ?: "AI",
+                        item.sourcePageTitle?.let { "🔗 $it" } ?: "AI",
                         style = MaterialTheme.typography.labelSmall,
-                        color = LeapPink,
+                        color = MaterialTheme.colorScheme.primary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false).clickable(onClick = onOpenNote),
@@ -515,50 +724,68 @@ private fun KanbanCard(item: TodoItem, onSetStatus: (TodoStatus) -> Unit, onOpen
                 } else {
                     Spacer(Modifier.width(1.dp))
                 }
-                MoveMenu(current = item.status, onSetStatus = onSetStatus)
+                Text(
+                    text = item.dueAt?.let { todoDueLabel(it) } ?: "Set date",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (item.dueAt != null) MaterialTheme.colorScheme.onSurfaceVariant else Neutral500,
+                    modifier = Modifier.clickable(onClick = onEditDue),
+                )
             }
         }
     }
 }
 
-/** A status pill (chip + dropdown) — sets the workflow status (To-do / In progress / Done). */
 @Composable
-private fun StatusPill(current: TodoStatus, onSetStatus: (TodoStatus) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    val (label, color) = TodoStatusStyle.getValue(current)
-    Box {
-        AssistChip(
-            onClick = { open = true },
-            label = { Text(label) },
-            leadingIcon = { Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(color)) },
-        )
-        StatusDropdown(open = open, onDismiss = { open = false }, onSetStatus = onSetStatus)
-    }
-}
-
-@Composable
-private fun MoveMenu(current: TodoStatus, onSetStatus: (TodoStatus) -> Unit) {
+private fun KanbanMenu(
+    current: TodoStatus,
+    currentPriority: TodoPriority,
+    onSetStatus: (TodoStatus) -> Unit,
+    onSetPriority: (TodoPriority) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
     Box {
         androidx.compose.material3.IconButton(onClick = { open = true }, modifier = Modifier.size(28.dp)) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "Move", modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.MoreVert, contentDescription = "Move / priority", modifier = Modifier.size(18.dp))
         }
-        StatusDropdown(open = open, onDismiss = { open = false }, onSetStatus = onSetStatus)
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Text("Move to", style = MaterialTheme.typography.labelSmall, color = Neutral500, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+            TodoStatus.entries.forEach { s ->
+                val (label, color) = TodoStatusStyle.getValue(s)
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    leadingIcon = { Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(color)) },
+                    onClick = { onSetStatus(s); open = false },
+                )
+            }
+            HorizontalDivider()
+            Text("Priority", style = MaterialTheme.typography.labelSmall, color = Neutral500, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+            TodoPriority.entries.forEach { p ->
+                DropdownMenuItem(
+                    text = { Text(p.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                    leadingIcon = { Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(TodoPriorityColors.getValue(p))) },
+                    onClick = { onSetPriority(p); open = false },
+                )
+            }
+        }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun StatusDropdown(open: Boolean, onDismiss: () -> Unit, onSetStatus: (TodoStatus) -> Unit) {
-    DropdownMenu(expanded = open, onDismissRequest = onDismiss) {
-        TodoStatus.entries.forEach { s ->
-            val (label, color) = TodoStatusStyle.getValue(s)
-            DropdownMenuItem(
-                text = { Text(label) },
-                leadingIcon = { Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(color)) },
-                onClick = { onSetStatus(s); onDismiss() },
-            )
-        }
-    }
+private fun DueDatePicker(item: TodoItem, onSet: (Long?) -> Unit, onDismiss: () -> Unit) {
+    val state = rememberDatePickerState(initialSelectedDateMillis = item.dueAt)
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = { onSet(state.selectedDateMillis) }) { Text("Set") } },
+        dismissButton = {
+            Row {
+                if (item.dueAt != null) {
+                    TextButton(onClick = { onSet(null) }) { Text("Clear") }
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    ) { DatePicker(state = state) }
 }
 
 // ─────────────────────────────────── shared ───────────────────────────────────

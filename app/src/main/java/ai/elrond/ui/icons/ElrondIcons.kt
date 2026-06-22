@@ -28,6 +28,8 @@ object ElrondIcons {
     @DrawableRes val Add = R.drawable.ic_add
     @DrawableRes val Record = R.drawable.ic_record
     @DrawableRes val Hand = R.drawable.ic_hand
+    @DrawableRes val Checklist = R.drawable.ic_checklist
+    @DrawableRes val NewNote = R.drawable.ic_new_note
     @DrawableRes val Close = R.drawable.ic_close
     @DrawableRes val MoreVert = R.drawable.ic_more_vert
     @DrawableRes val Undo = R.drawable.ic_undo
