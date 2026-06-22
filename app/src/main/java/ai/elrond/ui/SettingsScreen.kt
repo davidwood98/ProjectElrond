@@ -1,7 +1,6 @@
 package ai.elrond.ui
 
 import ai.elrond.domain.AppAccent
-import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.TriggerMode
@@ -90,7 +89,6 @@ fun SettingsScreen(
     val penIconStyle by viewModel.penIconStyle.collectAsStateWithLifecycle()
     val appAccent by viewModel.appAccent.collectAsStateWithLifecycle()
     val paperStyle by viewModel.paperStyle.collectAsStateWithLifecycle()
-    val noteTabsMode by viewModel.noteTabsMode.collectAsStateWithLifecycle()
 
     var draft by remember(trigger) { mutableStateOf(trigger) }
     // Local slider position, re-seeded whenever the persisted threshold changes (e.g. when toggling
@@ -301,28 +299,8 @@ fun SettingsScreen(
                 }
             }
 
-            Text(
-                "Note tabs",
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(top = 16.dp),
-            )
-            Text(
-                "Where open-note tabs sit in the editor: docked on the toolbar, or floating above the title.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = noteTabsMode == NoteTabsMode.ATTACHED,
-                    onClick = { viewModel.setNoteTabsMode(NoteTabsMode.ATTACHED) },
-                    label = { Text("Attached") },
-                )
-                FilterChip(
-                    selected = noteTabsMode == NoteTabsMode.SEPARATE,
-                    onClick = { viewModel.setNoteTabsMode(NoteTabsMode.SEPARATE) },
-                    label = { Text("Separate") },
-                )
-            }
+            // Note-tab mode (Attached/Separate) setting removed pending a redesign — the editor
+            // currently always shows tabs in the grey header band above the title.
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
