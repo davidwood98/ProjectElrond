@@ -157,27 +157,31 @@ private fun LibraryActionBar(
                 )
             }
         }
-        // Sort / view options (placeholder).
-        Surface(
-            modifier = Modifier.size(40.dp),
-            shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            color = MaterialTheme.colorScheme.surface,
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    painter = androidx.compose.ui.res.painterResource(ElrondIcons.MoreVert),
-                    contentDescription = "Sort by (coming soon)",
-                    tint = LeapGrey,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
         Box(
             modifier = Modifier.size(38.dp).clip(CircleShape).background(LeapPink).clickable(onClick = onOpenSettings),
             contentAlignment = Alignment.Center,
         ) {
             Text("DW", color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/** Sort / view-options button (placeholder) — sits at the right end of the tab row, per the handoff. */
+@Composable
+private fun ViewOptionsButton() {
+    Surface(
+        modifier = Modifier.size(34.dp),
+        shape = RoundedCornerShape(9.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                painter = androidx.compose.ui.res.painterResource(ElrondIcons.MoreVert),
+                contentDescription = "Sort by (coming soon)",
+                tint = LeapGrey,
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 }
@@ -209,6 +213,7 @@ fun NotesSection(
             selected = tab,
             label = { it.label },
             onSelect = { tab = it },
+            trailing = { ViewOptionsButton() },
         )
 
         when (tab) {
@@ -262,53 +267,65 @@ fun NotesSection(
     }
 }
 
-/** Underline tab row (FA-15): bold label + accent underline when selected, no chip border/fill. */
+/**
+ * Underline tab row (FA-15): bold label + accent underline when selected, no chip border/fill.
+ * [trailing] (optional) is pinned to the right of the row, bottom-aligned with the tabs — used for
+ * the view-options / "sort by" button, per the handoff (right of the tab row, not the search bar).
+ */
 @Composable
 private fun <T> UnderlineTabRow(
     tabs: Iterable<T>,
     selected: T,
     label: (T) -> String,
     onSelect: (T) -> Unit,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
+    val accent = MaterialTheme.colorScheme.primary
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(start = 20.dp, end = 20.dp, top = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(26.dp),
+        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp),
+        verticalAlignment = Alignment.Bottom,
     ) {
-        val accent = MaterialTheme.colorScheme.primary
-        tabs.forEach { t ->
-            val isSelected = t == selected
-            // The underline is drawn with drawBehind (NOT a fillMaxWidth Box): in this horizontalScroll
-            // Row children get an unbounded width constraint, so fillMaxWidth collapses to 0 and the
-            // underline vanished. drawBehind paints a 2.5dp accent line spanning exactly the text width,
-            // 10dp below it — matching the handoff's `inset 0 -2px var(--acc)`.
-            Text(
-                label(t),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                color = if (isSelected) MaterialTheme.colorScheme.onSurface else Neutral500,
-                modifier = Modifier
-                    .clickable(
-                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                        indication = null,
-                        onClick = { onSelect(t) },
-                    )
-                    .padding(bottom = 10.dp)
-                    .drawBehind {
-                        if (isSelected) {
-                            val sw = 2.5.dp.toPx()
-                            drawLine(
-                                color = accent,
-                                start = Offset(0f, size.height - sw / 2f),
-                                end = Offset(size.width, size.height - sw / 2f),
-                                strokeWidth = sw,
-                                cap = StrokeCap.Round,
-                            )
-                        }
-                    },
-            )
+        Row(
+            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(26.dp),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            tabs.forEach { t ->
+                val isSelected = t == selected
+                // The underline is drawn with drawBehind (NOT a fillMaxWidth Box): in a horizontalScroll
+                // Row children get an unbounded width constraint, so fillMaxWidth collapses to 0 and the
+                // underline vanished. drawBehind paints a 2.5dp accent line spanning exactly the text
+                // width, 10dp below it — matching the handoff's `inset 0 -2px var(--acc)`.
+                Text(
+                    label(t),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else Neutral500,
+                    modifier = Modifier
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null,
+                            onClick = { onSelect(t) },
+                        )
+                        .padding(bottom = 10.dp)
+                        .drawBehind {
+                            if (isSelected) {
+                                val sw = 2.5.dp.toPx()
+                                drawLine(
+                                    color = accent,
+                                    start = Offset(0f, size.height - sw / 2f),
+                                    end = Offset(size.width, size.height - sw / 2f),
+                                    strokeWidth = sw,
+                                    cap = StrokeCap.Round,
+                                )
+                            }
+                        },
+                )
+            }
+        }
+        if (trailing != null) {
+            Spacer(Modifier.width(12.dp))
+            Box(modifier = Modifier.padding(bottom = 4.dp)) { trailing() }
         }
     }
     HorizontalDivider()
