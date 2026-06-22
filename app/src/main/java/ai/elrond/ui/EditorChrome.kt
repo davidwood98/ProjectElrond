@@ -118,8 +118,9 @@ private val HeaderBandColor = Color(0xFF262626).copy(alpha = 0.045f)
 
 /**
  * The editor header (FA-15): a distinct light-grey band holding the open note's title (bold Poppins,
- * tap the edit icon to rename inline) and the **created** date on the right. The note tabs are NOT
- * here — they sit above the toolbar (see [NoteTabPills], positioned by `NoteCanvasScreen`).
+ * tap the edit icon to rename inline) and the **created** date on the right. In **Separate** tab mode
+ * `NoteCanvasScreen` passes the note tabs via [tabs] and they render at the top of this band, just
+ * above the title; in **Attached** mode [tabs] is null (the tabs dock inside the toolbar card instead).
  */
 @Composable
 fun EditorHeader(
@@ -204,22 +205,17 @@ internal fun NoteTabPills(
     onSelectTab: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val ordered = remember(tabs, currentPageId) {
-        val current = tabs.filter { it.id == currentPageId }
-        (current + tabs.filter { it.id != currentPageId }).take(6)
-    }
+    // The current note is ALWAYS the first, active tab — even before it lands in the recent list from
+    // the DB (markOpened round-trip), so the active tab is never missing. Other recents follow.
+    val others = remember(tabs, currentPageId) { tabs.filter { it.id != currentPageId }.take(5) }
     Row(
         modifier = modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ordered.forEach { page ->
-            val active = page.id == currentPageId
-            TabPill(
-                label = if (active) currentTitle else page.displayTitle(),
-                active = active,
-                onClick = { if (!active) onSelectTab(page.id) },
-            )
+        TabPill(label = currentTitle, active = true, onClick = {})
+        others.forEach { page ->
+            TabPill(label = page.displayTitle(), active = false, onClick = { onSelectTab(page.id) })
         }
     }
 }

@@ -149,7 +149,11 @@ fun NoteCanvasScreen(
         // tools row. Separate: the toolbar is plain; the tabs move down into the grey header band,
         // just above the title. These offsets are scaled so things line up in both orientations.
         val toolbarHeight = 62.dp
-        val attachedTabBlock = 40.dp // tabs row + divider height inside the attached card
+        val density = LocalDensity.current
+        // Measured (not guessed) height of the attached tab card, so the side pods align with the
+        // tools row exactly regardless of font scale; 0 until first layout (then settles one frame).
+        var attachedTabHeightPx by remember { mutableStateOf(0) }
+        val attachedTabBlock = with(density) { attachedTabHeightPx.toDp() }
         val sidePodTop = if (separateTabs) tabsTop else tabsTop + attachedTabBlock * toolbarScale
         val headerTop = if (separateTabs) {
             tabsTop + toolbarHeight * toolbarScale + 6.dp
@@ -345,11 +349,12 @@ fun NoteCanvasScreen(
             // the toolbar (measured) so they're inline with its edges, scrolling if there are many.
             val tokens = LeapTheme.tokens
             var toolbarWidthPx by remember { mutableStateOf(0) }
-            val density = LocalDensity.current
             Column(modifier = centreModifier, horizontalAlignment = Alignment.CenterHorizontally) {
                 if (toolbarWidthPx > 0) {
                     Surface(
-                        modifier = Modifier.width(with(density) { toolbarWidthPx.toDp() }),
+                        modifier = Modifier
+                            .width(with(density) { toolbarWidthPx.toDp() })
+                            .onSizeChanged { attachedTabHeightPx = it.height },
                         shape = RoundedCornerShape(topStart = tokens.containerRadius, topEnd = tokens.containerRadius),
                         color = tokens.toolbarSurface,
                         border = androidx.compose.foundation.BorderStroke(1.dp, tokens.toolbarBorder),
