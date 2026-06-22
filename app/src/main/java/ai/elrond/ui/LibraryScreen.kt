@@ -228,7 +228,7 @@ private fun LibraryMain(
                 Icon(
                     painterResource(ElrondIcons.NewNote),
                     contentDescription = "New note",
-                    modifier = Modifier.size(28.dp),
+                    modifier = Modifier.size(30.dp),
                 )
             }
         },
