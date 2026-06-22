@@ -22,6 +22,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,10 +32,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -106,105 +109,130 @@ fun CalendarScreen(
     var selectedDay by rememberSaveable(key = "calendar.selectedDay") { mutableStateOf(today.toEpochDay()) }
     val selected = LocalDate.ofEpochDay(selectedDay)
 
-    Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        // Inline controls: prev/next arrows + period label on the left, Month/Week toggle on the right.
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = {
-                anchor = if (mode == CalendarMode.MONTH) anchorDate.minusMonths(1).toEpochDay()
-                else anchorDate.minusWeeks(1).toEpochDay()
-            }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous")
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val landscape = maxWidth > maxHeight
+        // Slightly taller tiles (≈+20%) so the grid doesn't look cramped.
+        val monthTileHeight = 56.dp
+        val weekTileHeight = 78.dp
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            // Inline controls: prev/next arrows + period label on the left, Month/Week toggle on the right.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = {
+                    anchor = if (mode == CalendarMode.MONTH) anchorDate.minusMonths(1).toEpochDay()
+                    else anchorDate.minusWeeks(1).toEpochDay()
+                }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous")
+                }
+                Text(
+                    text = periodLabel(mode, anchorDate),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 6.dp),
+                )
+                IconButton(onClick = {
+                    anchor = if (mode == CalendarMode.MONTH) anchorDate.plusMonths(1).toEpochDay()
+                    else anchorDate.plusWeeks(1).toEpochDay()
+                }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next")
+                }
+                Spacer(Modifier.weight(1f))
+                ModeToggle(mode = mode, onSelect = { mode = it })
             }
-            Text(
-                text = periodLabel(mode, anchorDate),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 6.dp),
-            )
-            IconButton(onClick = {
-                anchor = if (mode == CalendarMode.MONTH) anchorDate.plusMonths(1).toEpochDay()
-                else anchorDate.plusWeeks(1).toEpochDay()
-            }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next")
-            }
-            Spacer(Modifier.weight(1f))
-            ModeToggle(mode = mode, onSelect = { mode = it })
-        }
 
-        WeekdayHeader()
+            WeekdayHeader()
 
-        when (mode) {
-            CalendarMode.MONTH -> {
-                CalendarGrid.monthGrid(YearMonth.from(anchorDate)).chunked(7).forEach { week ->
+            when (mode) {
+                CalendarMode.MONTH -> {
+                    CalendarGrid.monthGrid(YearMonth.from(anchorDate)).chunked(7).forEach { week ->
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            week.forEach { date ->
+                                DayTile(
+                                    date = date,
+                                    inPeriod = YearMonth.from(date) == YearMonth.from(anchorDate),
+                                    isToday = date == today,
+                                    isSelected = date == selected,
+                                    activity = activity[date],
+                                    onClick = { selectedDay = it.toEpochDay() },
+                                    tileHeight = monthTileHeight,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+                CalendarMode.WEEK -> {
                     Row(modifier = Modifier.fillMaxWidth()) {
-                        week.forEach { date ->
+                        CalendarGrid.weekDays(anchorDate).forEach { date ->
                             DayTile(
                                 date = date,
-                                inPeriod = YearMonth.from(date) == YearMonth.from(anchorDate),
+                                inPeriod = true,
                                 isToday = date == today,
                                 isSelected = date == selected,
                                 activity = activity[date],
                                 onClick = { selectedDay = it.toEpochDay() },
-                                tileHeight = 46.dp,
+                                tileHeight = weekTileHeight,
                                 modifier = Modifier.weight(1f),
                             )
                         }
                     }
                 }
             }
-            CalendarMode.WEEK -> {
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    CalendarGrid.weekDays(anchorDate).forEach { date ->
-                        DayTile(
-                            date = date,
-                            inPeriod = true,
-                            isToday = date == today,
-                            isSelected = date == selected,
-                            activity = activity[date],
-                            onClick = { selectedDay = it.toEpochDay() },
-                            tileHeight = 64.dp,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-            }
-        }
 
-        Legend(modifier = Modifier.padding(top = 10.dp))
+            Legend(modifier = Modifier.padding(top = 10.dp))
 
-        // Selected-day notes, inline beneath the calendar (reduced thumbnails, created/edited labels).
-        val dayNotes = remember(selectedDay, activity) { viewModel.notesForDay(selected) }
-        Text(
-            selected.format(DAY_HEADER),
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
-        )
-        if (dayNotes.isEmpty()) {
+            // Selected-day notes (reduced home-style thumbnails, created/edited labels).
+            val dayNotes = remember(selectedDay, activity) { viewModel.notesForDay(selected) }
             Text(
-                "No notes on this day.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Neutral500,
-                modifier = Modifier.padding(bottom = 24.dp),
+                selected.format(DAY_HEADER),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
             )
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 24.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                dayNotes.forEach { note ->
-                    DayNoteThumb(
-                        note = note,
-                        date = selected,
-                        viewModel = noteListViewModel,
-                        onClick = { onOpenNote(note.id) },
+            // Notes fill the remaining space: a single horizontal row (landscape month — runs off the
+            // right edge), or a vertical grid (week in either orientation, and month in portrait).
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                if (dayNotes.isEmpty()) {
+                    Text(
+                        "No notes on this day.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Neutral500,
                     )
+                } else if (landscape && mode == CalendarMode.MONTH) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        dayNotes.forEach { note ->
+                            DayNoteThumb(
+                                note = note,
+                                date = selected,
+                                viewModel = noteListViewModel,
+                                onClick = { onOpenNote(note.id) },
+                                modifier = Modifier.width(160.dp),
+                            )
+                        }
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 150.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        gridItems(dayNotes, key = { it.id }) { note ->
+                            DayNoteThumb(
+                                note = note,
+                                date = selected,
+                                viewModel = noteListViewModel,
+                                onClick = { onOpenNote(note.id) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -298,24 +326,48 @@ private fun DayTile(
             )
             Spacer(Modifier.weight(1f))
             if (activity != null && inPeriod && hasActivity) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (activity.hasCreated) Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(CreatedDotColor))
-                    if (activity.hasEdited) Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(EditedDotColor))
+                // Dot + count per type: green = created, grey = edited (the "Nx" the user wants back).
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (activity.hasCreated) ActivityDot(CreatedDotColor, activity.created)
+                    if (activity.hasEdited) ActivityDot(EditedDotColor, activity.edited)
                 }
             }
         }
     }
 }
 
+/** A status dot with its note count beside it (e.g. green ● 3 = three notes created that day). */
+@Composable
+private fun ActivityDot(color: Color, count: Int) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(color))
+        if (count > 0) {
+            Spacer(Modifier.width(2.dp))
+            Text(
+                text = count.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 10.sp,
+                color = Neutral500,
+            )
+        }
+    }
+}
+
 /** A reduced note thumbnail for the selected day (home-card style) with a created/edited label. */
 @Composable
-private fun DayNoteThumb(note: NotePage, date: LocalDate, viewModel: NoteListViewModel, onClick: () -> Unit) {
+private fun DayNoteThumb(
+    note: NotePage,
+    date: LocalDate,
+    viewModel: NoteListViewModel,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val zone = java.time.ZoneId.systemDefault()
     val createdThisDay = java.time.Instant.ofEpochMilli(note.createdAt).atZone(zone).toLocalDate() == date
     val verb = if (createdThisDay) "Created" else "Edited"
     val verbColor = if (createdThisDay) CreatedDotColor else EditedDotColor
     Surface(
-        modifier = Modifier.width(150.dp).clickable(onClick = onClick),
+        modifier = modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(14.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         color = MaterialTheme.colorScheme.surface,
