@@ -92,7 +92,6 @@ private enum class NotesTab(val label: String) {
     ALL("All Notes"), RECENTS("Recents"), TIMELINE("Timeline"), FAVORITES("Favorites"), UNFILED("Unfiled")
 }
 
-private const val RECENTS_COUNT = 6
 private val NOTE_DATE = DateTimeFormatter.ofPattern("d MMM yyyy")
 
 internal const val LIBRARY_EMPTY_TAG = "library-empty"
@@ -199,6 +198,7 @@ fun NotesSection(
     eventsViewModel: EventsViewModel,
 ) {
     val notes by noteListViewModel.pages.collectAsStateWithLifecycle()
+    val recents by noteListViewModel.recentNotes.collectAsStateWithLifecycle()
     // Explicit shared key (NOT the auto code-position key): the portrait and landscape layouts place
     // this section at different composition positions, so an auto-keyed rememberSaveable would store a
     // separate tab per orientation (the Activity recreates on rotation). A fixed key makes both
@@ -230,16 +230,21 @@ fun NotesSection(
                 "Star a note to pin it here — coming with the next update.",
             )
             else -> {
-                val shown = when (tab) {
-                    NotesTab.RECENTS -> notes.take(RECENTS_COUNT)
-                    else -> notes // ALL + UNFILED (everything is unfiled until subjects exist)
-                }
+                // RECENTS = notes opened in the last 24h (last-opened first); ALL/UNFILED = everything.
+                val shown = if (tab == NotesTab.RECENTS) recents else notes
                 if (shown.isEmpty()) {
-                    PlaceholderState(
-                        "No notes yet",
-                        "Tap the new-note button to start. Write with your S Pen, and /Q to ask the AI.",
-                        modifier = Modifier.testTag(LIBRARY_EMPTY_TAG),
-                    )
+                    if (tab == NotesTab.RECENTS) {
+                        PlaceholderState(
+                            "Nothing recent",
+                            "Notes you open show up here for 24 hours, most recent first.",
+                        )
+                    } else {
+                        PlaceholderState(
+                            "No notes yet",
+                            "Tap the new-note button to start. Write with your S Pen, and /Q to ask the AI.",
+                            modifier = Modifier.testTag(LIBRARY_EMPTY_TAG),
+                        )
+                    }
                 } else {
                     NotesGrid(
                         notes = shown,

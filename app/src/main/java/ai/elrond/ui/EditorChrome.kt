@@ -127,6 +127,7 @@ fun EditorHeader(
     dateLabel: String,
     onRename: (String) -> Unit,
     modifier: Modifier = Modifier,
+    tabs: (@Composable () -> Unit)? = null,
 ) {
     var editing by remember { mutableStateOf(false) }
     Column(
@@ -135,6 +136,11 @@ fun EditorHeader(
             .background(HeaderBandColor)
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
+        // Separate-mode note tabs sit at the top of the band, just above the title.
+        if (tabs != null) {
+            tabs()
+            Spacer(Modifier.height(6.dp))
+        }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             if (editing) {
                 val focusRequester = remember { FocusRequester() }

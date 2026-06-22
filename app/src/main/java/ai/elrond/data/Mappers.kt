@@ -19,6 +19,7 @@ fun NotePageEntity.toDomain(): NotePage = NotePage(
     customTitle = customTitle,
     createdAt = createdAt,
     modifiedAt = modifiedAt,
+    lastOpenedAt = lastOpenedAt,
     tags = tags,
     contextSummary = contextSummary,
 )

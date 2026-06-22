@@ -31,6 +31,8 @@ data class NotePageEntity(
     val customTitle: String?,
     val createdAt: Long,
     val modifiedAt: Long,
+    /** When the note was last opened (FA-15) — backs the "Recent" list / note tabs. */
+    val lastOpenedAt: Long = 0,
     val tags: List<String> = emptyList(),
     /** AI-generated summary of the page used for organisation and topic detection. */
     val contextSummary: String? = null,

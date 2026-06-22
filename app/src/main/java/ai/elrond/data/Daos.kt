@@ -54,6 +54,10 @@ interface NotePageDao {
     @Query("UPDATE note_pages SET modifiedAt = :modifiedAt WHERE id = :id")
     suspend fun touch(id: String, modifiedAt: Long)
 
+    /** Record that a page was opened (FA-15) — drives the "Recent" 24h window + ordering. */
+    @Query("UPDATE note_pages SET lastOpenedAt = :openedAt WHERE id = :id")
+    suspend fun markOpened(id: String, openedAt: Long)
+
     @Query("UPDATE note_pages SET customTitle = :title, modifiedAt = :modifiedAt WHERE id = :id")
     suspend fun rename(id: String, title: String?, modifiedAt: Long)
 

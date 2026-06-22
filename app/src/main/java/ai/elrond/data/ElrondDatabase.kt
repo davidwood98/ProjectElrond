@@ -19,7 +19,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PageEditEventEntity::class,
         PendingSuggestionEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -178,6 +178,17 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v9 adds note_pages.lastOpenedAt (FA-15) for the "Recent" list / note tabs, backfilled to
+         * each page's last-edit time so existing notes still order sensibly.
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE note_pages ADD COLUMN lastOpenedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE note_pages SET lastOpenedAt = modifiedAt")
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -189,7 +200,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                     DB_NAME,
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-                    MIGRATION_6_7, MIGRATION_7_8,
+                    MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                 ).build().also { instance = it }
             }
     }

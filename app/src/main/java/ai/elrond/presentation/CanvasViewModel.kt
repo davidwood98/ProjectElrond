@@ -343,6 +343,8 @@ class CanvasViewModel(
                     _pageTitle.value = page.displayTitle()
                     _pageDateLabel.value = formatPageDate(page.createdAt)
                 }
+                // Record the open so this note rises to the top of "Recent" / the note tabs (FA-15).
+                runCatching { repository.markOpened(pageId) }
                 lastPersisted = _finishedStrokes.value
                 lastPersistedAiNotes = _aiNotes.value.filterNot { it.isError }
                 startAutoSave(repository, pageId)

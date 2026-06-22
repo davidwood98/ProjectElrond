@@ -33,6 +33,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_5_6,
         ElrondDatabase.MIGRATION_6_7,
         ElrondDatabase.MIGRATION_7_8,
+        ElrondDatabase.MIGRATION_8_9,
     )
 
     /**
@@ -56,10 +57,29 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v8_and_validates_final_schema() {
+    fun migrates_v1_to_v9_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v8 schema (incl. todo_items.status).
-        helper.runMigrationsAndValidate(TEST_DB, 8, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v9 schema (incl. note_pages.lastOpenedAt).
+        helper.runMigrationsAndValidate(TEST_DB, 9, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_8_to_9_adds_lastOpenedAt_backfilled_from_modifiedAt() {
+        helper.createDatabase(TEST_DB, 8).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt) VALUES ('nb1', 'N', 0)")
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, tags, contextSummary) " +
+                    "VALUES ('p1', 'nb1', NULL, 1000, 7777, '', NULL)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 9, true, *allMigrations)
+        var lastOpenedAt = -1L
+        db.query("SELECT lastOpenedAt FROM note_pages WHERE id = 'p1'").use { c ->
+            if (c.moveToNext()) lastOpenedAt = c.getLong(0)
+        }
+        db.close()
+        assertEquals(7777L, lastOpenedAt) // backfilled from modifiedAt
     }
 
     @Test
