@@ -11,6 +11,7 @@ import ai.elrond.ui.theme.LeapPink
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -19,7 +20,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,8 +27,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.Description
@@ -53,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -131,20 +130,40 @@ fun LibraryScreen(
         } else {
             var sidebarOpen by rememberSaveable { mutableStateOf(false) }
             Box(modifier = Modifier.fillMaxSize()) {
-                LibraryMain(
-                    nav = nav,
-                    onToggleSidebar = { sidebarOpen = !sidebarOpen },
-                    onOpenNote = onOpenNote,
-                    onOpenSettings = onOpenSettings,
-                    noteListViewModel = noteListViewModel,
-                    todoViewModel = todoViewModel,
-                    settingsViewModel = settingsViewModel,
-                    calendarViewModel = calendarViewModel,
-                    eventsViewModel = eventsViewModel,
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        // Secondary affordance: a right-swipe on the home content opens the drawer
+                        // (the chevron beside the search bar is the primary button). Only active
+                        // while closed, so it never fights the open drawer / scrim.
+                        .pointerInput(sidebarOpen) {
+                            if (!sidebarOpen) {
+                                val threshold = 48.dp.toPx()
+                                var dragX = 0f
+                                detectHorizontalDragGestures(
+                                    onDragStart = { dragX = 0f },
+                                    onHorizontalDrag = { _, amount ->
+                                        dragX += amount
+                                        if (dragX > threshold) sidebarOpen = true
+                                    },
+                                )
+                            }
+                        },
+                ) {
+                    LibraryMain(
+                        nav = nav,
+                        onToggleSidebar = { sidebarOpen = !sidebarOpen },
+                        onOpenNote = onOpenNote,
+                        onOpenSettings = onOpenSettings,
+                        noteListViewModel = noteListViewModel,
+                        todoViewModel = todoViewModel,
+                        settingsViewModel = settingsViewModel,
+                        calendarViewModel = calendarViewModel,
+                        eventsViewModel = eventsViewModel,
+                    )
+                }
                 SlideOutSidebar(
                     open = sidebarOpen,
-                    onToggle = { sidebarOpen = !sidebarOpen },
                     onScrimTap = { sidebarOpen = false },
                 ) { sidebar { sidebarOpen = false } }
             }
@@ -153,14 +172,14 @@ fun LibraryScreen(
 }
 
 /**
- * Portrait sidebar: an off-canvas drawer that translates `-SIDEBAR_WIDTH` when closed (leaving the
- * 30dp rounded pull-tab peeking) and to 0 when open, with a tap-to-close scrim. The chevron flips
- * direction with state — matching the Canvas-Portrait handoff's pull-tab behaviour.
+ * Portrait sidebar: an off-canvas drawer that translates fully off-screen (`-SIDEBAR_WIDTH`) when
+ * closed and to 0 when open, with a tap-to-close scrim. There is **no** edge pull-tab — it is opened
+ * by the chevron next to the search bar (primary) or a right-swipe on the home content (secondary),
+ * matching the Canvas-Portrait handoff.
  */
 @Composable
 private fun SlideOutSidebar(
     open: Boolean,
-    onToggle: () -> Unit,
     onScrimTap: () -> Unit,
     content: @Composable () -> Unit,
 ) {
@@ -173,37 +192,14 @@ private fun SlideOutSidebar(
         )
     }
     val offsetX by animateDpAsState(if (open) 0.dp else -SIDEBAR_WIDTH, label = "sidebar-offset")
-    Row(
+    Surface(
         modifier = Modifier
             .fillMaxHeight()
+            .width(SIDEBAR_WIDTH)
             .offset(x = offsetX),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Surface(
-            modifier = Modifier.width(SIDEBAR_WIDTH).fillMaxHeight(),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shadowElevation = if (open) 8.dp else 0.dp,
-        ) { content() }
-        // Pull-tab handle (peeks at the screen edge when the drawer is closed).
-        Surface(
-            modifier = Modifier
-                .width(30.dp)
-                .height(76.dp)
-                .clickable(onClick = onToggle),
-            color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(topEnd = 13.dp, bottomEnd = 13.dp),
-            shadowElevation = 6.dp,
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    if (open) Icons.Filled.ChevronLeft else Icons.Filled.ChevronRight,
-                    contentDescription = if (open) "Close menu" else "Open menu",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
-    }
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shadowElevation = if (open) 8.dp else 0.dp,
+    ) { content() }
 }
 
 /** The main content area: the section (with its own top action row) + the New-note FAB. */
