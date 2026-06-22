@@ -72,7 +72,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -274,31 +277,38 @@ private fun <T> UnderlineTabRow(
             .padding(start = 20.dp, end = 20.dp, top = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(26.dp),
     ) {
+        val accent = MaterialTheme.colorScheme.primary
         tabs.forEach { t ->
             val isSelected = t == selected
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable(
-                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                    indication = null,
-                    onClick = { onSelect(t) },
-                ),
-            ) {
-                Text(
-                    label(t),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else Neutral500,
-                )
-                Spacer(Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .height(2.5.dp)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent),
-                )
-            }
+            // The underline is drawn with drawBehind (NOT a fillMaxWidth Box): in this horizontalScroll
+            // Row children get an unbounded width constraint, so fillMaxWidth collapses to 0 and the
+            // underline vanished. drawBehind paints a 2.5dp accent line spanning exactly the text width,
+            // 10dp below it — matching the handoff's `inset 0 -2px var(--acc)`.
+            Text(
+                label(t),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = if (isSelected) MaterialTheme.colorScheme.onSurface else Neutral500,
+                modifier = Modifier
+                    .clickable(
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        indication = null,
+                        onClick = { onSelect(t) },
+                    )
+                    .padding(bottom = 10.dp)
+                    .drawBehind {
+                        if (isSelected) {
+                            val sw = 2.5.dp.toPx()
+                            drawLine(
+                                color = accent,
+                                start = Offset(0f, size.height - sw / 2f),
+                                end = Offset(size.width, size.height - sw / 2f),
+                                strokeWidth = sw,
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                    },
+            )
         }
     }
     HorizontalDivider()
