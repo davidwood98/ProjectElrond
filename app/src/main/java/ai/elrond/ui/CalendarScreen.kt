@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -111,9 +112,9 @@ fun CalendarScreen(
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
-        // Slightly taller tiles (≈+20%) so the grid doesn't look cramped.
-        val monthTileHeight = 56.dp
-        val weekTileHeight = 78.dp
+        // Taller tiles so the grid isn't cramped (two +20% bumps over the original 46/64).
+        val monthTileHeight = 68.dp
+        val weekTileHeight = 94.dp
         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
             // Inline controls: prev/next arrows + period label on the left, Month/Week toggle on the right.
             Row(
@@ -202,8 +203,10 @@ fun CalendarScreen(
                         color = Neutral500,
                     )
                 } else if (landscape && mode == CalendarMode.MONTH) {
+                    // One row that fills the remaining height down to the screen bottom (tiles run
+                    // behind the New-note FAB) and scrolls horizontally off the right edge.
                     Row(
-                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        modifier = Modifier.fillMaxSize().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         dayNotes.forEach { note ->
@@ -212,7 +215,7 @@ fun CalendarScreen(
                                 date = selected,
                                 viewModel = noteListViewModel,
                                 onClick = { onOpenNote(note.id) },
-                                modifier = Modifier.width(160.dp),
+                                modifier = Modifier.fillMaxHeight().width(190.dp),
                             )
                         }
                     }
@@ -229,7 +232,7 @@ fun CalendarScreen(
                                 date = selected,
                                 viewModel = noteListViewModel,
                                 onClick = { onOpenNote(note.id) },
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.fillMaxWidth().height(150.dp),
                             )
                         }
                     }
@@ -372,11 +375,13 @@ private fun DayNoteThumb(
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         color = MaterialTheme.colorScheme.surface,
     ) {
-        Column {
+        // The tile is given a bounded height by the caller (grid: fixed; landscape-month row:
+        // fillMaxHeight), so the thumbnail takes the remaining height above the label.
+        Column(modifier = Modifier.fillMaxSize()) {
             NoteThumbnail(
                 page = note,
                 viewModel = viewModel,
-                modifier = Modifier.fillMaxWidth().height(86.dp).background(MaterialTheme.colorScheme.surfaceContainerLowest),
+                modifier = Modifier.fillMaxWidth().weight(1f).background(MaterialTheme.colorScheme.surfaceContainerLowest),
             )
             Column(modifier = Modifier.padding(10.dp)) {
                 Text(
