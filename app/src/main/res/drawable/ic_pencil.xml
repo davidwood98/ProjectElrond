@@ -13,19 +13,19 @@
             android:pathData="M9 3.5h6v10.5l-3 5.5,-3,-5.5z"
             android:fillColor="#00000000"
             android:strokeColor="#FF000000"
-            android:strokeWidth="2"
+            android:strokeWidth="1.2"
             android:strokeLineCap="round"
             android:strokeLineJoin="round" />
         <path
             android:pathData="M9 7.5h6"
             android:strokeColor="#FF000000"
-            android:strokeWidth="2"
+            android:strokeWidth="1.2"
             android:strokeLineCap="round"
             android:strokeLineJoin="round" />
         <path
             android:pathData="M9.4 13.5h5.2"
             android:strokeColor="#FF000000"
-            android:strokeWidth="2"
+            android:strokeWidth="1.2"
             android:strokeLineCap="round"
             android:strokeLineJoin="round" />
     </group>
