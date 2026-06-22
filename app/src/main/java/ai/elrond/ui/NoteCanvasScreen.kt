@@ -9,6 +9,7 @@ import ai.elrond.domain.SuggestionType
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
+import ai.elrond.ui.theme.LeapTheme
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.animation.core.RepeatMode
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -129,12 +131,19 @@ fun NoteCanvasScreen(
             .fillMaxSize()
             .onSizeChanged { viewModel.setCanvasSize(it.width.toFloat(), it.height.toFloat()) },
     ) {
-        // Portrait shrinks the floating toolbar to the handoff's 0.75-ish scale and tightens the
-        // header offset; landscape keeps the full-size pods (device-verified).
+        // Portrait shrinks the floating toolbar to the handoff's 0.75-ish scale; landscape keeps the
+        // full-size pods (device-verified).
         val portrait = maxHeight > maxWidth
         val toolbarScale = if (portrait) 0.78f else 1f
-        val podPadding = if (portrait) 16.dp else 48.dp
-        val headerTop = if (portrait) 84.dp else 122.dp
+        val sidePad = if (portrait) 16.dp else 48.dp
+        // The note tabs sit ABOVE the toolbar; the pods drop below them by the tab block (scaled, so
+        // they line up with the toolbar in both orientations). Attached = flush (tab card meets the
+        // toolbar); Separate = a detached card with a gap.
+        val tabsTop = if (portrait) 14.dp else 28.dp
+        val separateTabs = noteTabsMode == ai.elrond.domain.NoteTabsMode.SEPARATE
+        val tabBlock = if (separateTabs) 40.dp else 30.dp
+        val toolbarTop = tabsTop + tabBlock * toolbarScale
+        val headerTop = toolbarTop + 62.dp * toolbarScale + 6.dp
 
         // Paper background (Ruled / Plain / Dots) behind the transparent ink layers.
         PaperBackground(paper = paperStyle, modifier = Modifier.fillMaxSize())
@@ -196,7 +205,7 @@ fun NoteCanvasScreen(
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(podPadding)
+                .padding(start = sidePad, top = toolbarTop)
                 .graphicsLayer {
                     scaleX = toolbarScale; scaleY = toolbarScale
                     transformOrigin = TransformOrigin(0f, 0f)
@@ -229,7 +238,7 @@ fun NoteCanvasScreen(
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(podPadding)
+                .padding(top = toolbarTop)
                 .graphicsLayer {
                     scaleX = toolbarScale; scaleY = toolbarScale
                     transformOrigin = TransformOrigin(0.5f, 0f)
@@ -322,7 +331,7 @@ fun NoteCanvasScreen(
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(podPadding)
+                .padding(end = sidePad, top = toolbarTop)
                 .graphicsLayer {
                     scaleX = toolbarScale; scaleY = toolbarScale
                     transformOrigin = TransformOrigin(1f, 0f)
@@ -384,15 +393,37 @@ fun NoteCanvasScreen(
             }
         }
 
-        // Note title + tabs + created date in the grey header band, just below the floating toolbar.
+        // Note tabs ABOVE the toolbar, centred over it. The Attached/Separate setting drives the card:
+        // Attached = a flush card (rounded top only, no gap — it meets the toolbar); Separate = a
+        // detached rounded card floating above with a gap + shadow. Scales with portrait.
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = tabsTop)
+                .graphicsLayer {
+                    scaleX = toolbarScale; scaleY = toolbarScale
+                    transformOrigin = TransformOrigin(0.5f, 0f)
+                },
+            shape = if (separateTabs) RoundedCornerShape(12.dp)
+            else RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
+            color = LeapTheme.tokens.toolbarSurface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, LeapTheme.tokens.toolbarBorder),
+            shadowElevation = if (separateTabs) 4.dp else 0.dp,
+        ) {
+            NoteTabPills(
+                tabs = libraryNotes,
+                currentPageId = pageId,
+                currentTitle = pageTitle,
+                onSelectTab = { id -> if (id != pageId) onOpenNote(id) },
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+            )
+        }
+
+        // Note title + created date in the grey header band, below the toolbar.
         EditorHeader(
             title = pageTitle,
             dateLabel = pageDateLabel,
-            tabsMode = noteTabsMode,
-            tabs = libraryNotes,
-            currentPageId = pageId,
             onRename = viewModel::renamePage,
-            onSelectTab = { id -> if (id != pageId) onOpenNote(id) },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()

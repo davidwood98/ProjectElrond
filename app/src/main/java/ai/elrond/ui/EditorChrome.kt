@@ -1,7 +1,6 @@
 package ai.elrond.ui
 
 import ai.elrond.domain.NotePage
-import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PaperStyle
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGreen
@@ -118,23 +117,15 @@ fun PaperBackground(paper: PaperStyle, modifier: Modifier = Modifier) {
 private val HeaderBandColor = Color(0xFF262626).copy(alpha = 0.045f)
 
 /**
- * The editor header (FA-15): a distinct light-grey band holding the note tabs, the open note's title
- * (bold Poppins, tap the edit icon to rename inline), and the **created** date on the right.
- *
- * The tabs are styled by [tabsMode] (Canvas-Portrait handoff): **Separate** = individually-rounded
- * floating pills; **Attached** = an equal-width segmented row docked to the toolbar with an underline
- * divider. Only the open note is editable; other recent notes appear as inactive tabs that navigate
- * (a lightweight stand-in until real multi-note tabs exist).
+ * The editor header (FA-15): a distinct light-grey band holding the open note's title (bold Poppins,
+ * tap the edit icon to rename inline) and the **created** date on the right. The note tabs are NOT
+ * here — they sit above the toolbar (see [NoteTabPills], positioned by `NoteCanvasScreen`).
  */
 @Composable
 fun EditorHeader(
     title: String,
     dateLabel: String,
-    tabsMode: NoteTabsMode,
-    tabs: List<NotePage>,
-    currentPageId: String,
     onRename: (String) -> Unit,
-    onSelectTab: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var editing by remember { mutableStateOf(false) }
@@ -144,14 +135,6 @@ fun EditorHeader(
             .background(HeaderBandColor)
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
-        NoteTabsRow(
-            tabs = tabs,
-            currentPageId = currentPageId,
-            currentTitle = title,
-            mode = tabsMode,
-            onSelectTab = onSelectTab,
-        )
-        Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             if (editing) {
                 val focusRequester = remember { FocusRequester() }
@@ -202,49 +185,35 @@ fun EditorHeader(
     }
 }
 
-/** The note-tab row: active note + recent notes, styled by [mode] (Separate pills vs Attached row). */
+/**
+ * The note-tab pills: the open note first, then a few recents (a placeholder for real multi-note tabs;
+ * inactive tabs navigate). Rendered inside the tab card that sits above the toolbar — the card's
+ * shape/gap (flush vs detached) is what the Attached/Separate setting drives, in `NoteCanvasScreen`.
+ */
 @Composable
-private fun NoteTabsRow(
+internal fun NoteTabPills(
     tabs: List<NotePage>,
     currentPageId: String,
     currentTitle: String,
-    mode: NoteTabsMode,
     onSelectTab: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    // Active note first, then a few recents — a placeholder for real multi-note tabs.
     val ordered = remember(tabs, currentPageId) {
         val current = tabs.filter { it.id == currentPageId }
         (current + tabs.filter { it.id != currentPageId }).take(6)
     }
-    if (mode == NoteTabsMode.ATTACHED) {
-        Column {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                ordered.forEach { page ->
-                    val active = page.id == currentPageId
-                    TabPill(
-                        label = if (active) currentTitle else page.displayTitle(),
-                        active = active,
-                        onClick = { if (!active) onSelectTab(page.id) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            androidx.compose.material3.HorizontalDivider(color = Neutral200)
-        }
-    } else {
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            ordered.forEach { page ->
-                val active = page.id == currentPageId
-                TabPill(
-                    label = if (active) currentTitle else page.displayTitle(),
-                    active = active,
-                    onClick = { if (!active) onSelectTab(page.id) },
-                )
-            }
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ordered.forEach { page ->
+            val active = page.id == currentPageId
+            TabPill(
+                label = if (active) currentTitle else page.displayTitle(),
+                active = active,
+                onClick = { if (!active) onSelectTab(page.id) },
+            )
         }
     }
 }
