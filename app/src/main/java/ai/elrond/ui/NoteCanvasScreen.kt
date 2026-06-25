@@ -20,11 +20,17 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Badge
@@ -61,6 +67,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -133,15 +140,30 @@ fun NoteCanvasScreen(
             .fillMaxSize()
             .onSizeChanged { viewModel.setCanvasSize(it.width.toFloat(), it.height.toFloat()) },
     ) {
-        // Portrait shrinks the floating toolbar to the handoff's 0.75-ish scale; landscape keeps the
-        // full-size pods (device-verified).
-        val portrait = maxHeight > maxWidth
-        val toolbarScale = if (portrait) 0.78f else 1f
-        val sidePad = if (portrait) 16.dp else 48.dp
-        val tabsTop = if (portrait) 14.dp else 28.dp
+        // The floating toolbar renders at a constant 0.78× (the handoff's portrait scale) in BOTH
+        // orientations — landscape no longer enlarges it, so the icons stay the same size on rotation.
+        val toolbarScale = 0.78f
+
+        // The canvas is full-bleed (the app runs edge-to-edge), but the floating chrome must reference
+        // the system bars so it sits a CONSTANT distance from the notification bar / screen edge in
+        // BOTH orientations. Previously the offsets were hardcoded (14/28 top, 16/48 side) and ignored
+        // insets, so the toolbar tucked under the status bar in portrait and floated low in landscape,
+        // and the side gap drifted between rotations.
+        //   topGap       = a constant gap below the status bar (notification bar)
+        //   leftPad/rightPad = a constant "side spacing" from the safe (cutout/nav-aware) screen edge
+        // If these need tuning on device, adjust the +8.dp ("top gap") / +24.dp ("side spacing") below.
+        val layoutDir = LocalLayoutDirection.current
+        val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val sideInsets = WindowInsets.displayCutout.union(WindowInsets.navigationBars).asPaddingValues()
+        val leftInset = sideInsets.calculateLeftPadding(layoutDir)
+        val rightInset = sideInsets.calculateRightPadding(layoutDir)
+        val topGap = statusTop + 0.dp
+        val leftPad = leftInset + 14.dp
+        val rightPad = rightInset + 14.dp
         // Note tabs live in the grey header band, just above the title (the old Attached-in-toolbar
-        // mode + its setting were removed pending a redesign). The grey band sits below the toolbar.
-        val headerTop = tabsTop + 62.dp * toolbarScale + 6.dp
+        // mode + its setting were removed pending a redesign). The grey band sits below the toolbar;
+        // its offset is derived from topGap so the toolbar→title spacing stays constant.
+        val headerTop = topGap + 62.dp * toolbarScale + 6.dp
 
         // Paper background (Ruled / Plain / Dots) behind the transparent ink layers.
         PaperBackground(paper = paperStyle, modifier = Modifier.fillMaxSize())
@@ -203,7 +225,7 @@ fun NoteCanvasScreen(
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(start = sidePad, top = tabsTop)
+                .padding(start = leftPad, top = topGap)
                 .graphicsLayer {
                     scaleX = toolbarScale; scaleY = toolbarScale
                     transformOrigin = TransformOrigin(0f, 0f)
@@ -318,7 +340,7 @@ fun NoteCanvasScreen(
         }
         val centreModifier = Modifier
             .align(Alignment.TopCenter)
-            .padding(top = tabsTop)
+            .padding(top = topGap)
             .graphicsLayer {
                 scaleX = toolbarScale; scaleY = toolbarScale
                 transformOrigin = TransformOrigin(0.5f, 0f)
@@ -330,7 +352,7 @@ fun NoteCanvasScreen(
         LeapToolbarContainer(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(end = sidePad, top = tabsTop)
+                .padding(end = rightPad, top = topGap)
                 .graphicsLayer {
                     scaleX = toolbarScale; scaleY = toolbarScale
                     transformOrigin = TransformOrigin(1f, 0f)
@@ -410,7 +432,9 @@ fun NoteCanvasScreen(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
-                .padding(start = 14.dp, end = 14.dp, top = headerTop),
+                // Inset-aware so the band can't slide under a side cutout/nav bar; keeps its own 14dp
+                // visual margin (slightly tighter than the toolbar's "side spacing").
+                .padding(start = leftInset + 14.dp, end = rightInset + 14.dp, top = headerTop),
         )
 
         if (showPages) {

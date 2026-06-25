@@ -6,6 +6,7 @@ import ai.elrond.domain.SubjectNode
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGrey
 import ai.elrond.ui.theme.LeapTheme
+import ai.elrond.ui.theme.Neutral100
 import ai.elrond.ui.theme.Neutral200
 import ai.elrond.ui.theme.Neutral400
 import ai.elrond.ui.theme.Neutral500
@@ -115,7 +116,9 @@ fun PaperBackground(paper: PaperStyle, modifier: Modifier = Modifier) {
 }
 
 /** The grey header-band tint (handoff: `rgba(38,38,38,0.045)`). */
-private val HeaderBandColor = Color(0xFF262626).copy(alpha = 0.045f)
+// Opaque light-grey band so the paper texture (ruled lines / dots) doesn't bleed through the title +
+// tabs. Neutral100 matches the previous translucent band's apparent colour over white paper.
+private val HeaderBandColor = Neutral100
 
 /**
  * The editor header (FA-15): a distinct light-grey band holding the open note's title (bold Poppins,
