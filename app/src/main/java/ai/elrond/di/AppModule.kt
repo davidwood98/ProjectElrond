@@ -4,6 +4,8 @@ import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.CalendarRepository
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NoteRepository
+import ai.elrond.data.SessionNotesTracker
+import ai.elrond.data.SubjectRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
 import ai.elrond.data.ExtractionScheduler
@@ -44,6 +46,16 @@ object AppModule {
     @Singleton
     fun provideTodoRepository(db: ElrondDatabase): TodoRepository =
         TodoRepository(todoDao = db.todoDao())
+
+    @Provides
+    @Singleton
+    fun provideSubjectRepository(db: ElrondDatabase): SubjectRepository =
+        SubjectRepository(subjectDao = db.subjectDao(), noteSubjectDao = db.noteSubjectDao())
+
+    /** Process-wide in-memory session-notes holder (FA-16); cleared on background by MainActivity. */
+    @Provides
+    @Singleton
+    fun provideSessionNotesTracker(): SessionNotesTracker = SessionNotesTracker()
 
     @Provides
     @Singleton

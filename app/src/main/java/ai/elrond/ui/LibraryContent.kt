@@ -9,6 +9,7 @@ import ai.elrond.presentation.CalendarViewModel
 import ai.elrond.presentation.EventsViewModel
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.presentation.SettingsViewModel
+import ai.elrond.presentation.SubjectViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGreen
@@ -58,6 +59,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -188,6 +190,16 @@ private fun ViewOptionsButton() {
 
 // ─────────────────────────────────── Notes ───────────────────────────────────
 
+/** Per-card actions, bundled to keep [NotesGrid]/[NoteCardItem] signatures small (FA-16). */
+private class NoteCardCallbacks(
+    val onOpenNote: (String) -> Unit,
+    val onRename: (NotePage) -> Unit,
+    val onMove: (NotePage) -> Unit,
+    /** Long-press the card OR the ⋮ Delete item — both open the delete confirmation. */
+    val onDelete: (NotePage) -> Unit,
+    val onTapSubject: (String) -> Unit,
+)
+
 @Composable
 fun NotesSection(
     onToggleSidebar: (() -> Unit)?,
@@ -196,62 +208,101 @@ fun NotesSection(
     noteListViewModel: NoteListViewModel,
     calendarViewModel: CalendarViewModel,
     eventsViewModel: EventsViewModel,
+    subjectViewModel: SubjectViewModel,
 ) {
     val notes by noteListViewModel.pages.collectAsStateWithLifecycle()
     val recents by noteListViewModel.recentNotes.collectAsStateWithLifecycle()
+    val subjectsById by subjectViewModel.subjectsById.collectAsStateWithLifecycle()
+    val noteSubjects by subjectViewModel.noteSubjects.collectAsStateWithLifecycle()
+    val selectedSubjectId by subjectViewModel.selectedSubjectId.collectAsStateWithLifecycle()
+    val selectedPath by subjectViewModel.selectedPath.collectAsStateWithLifecycle()
+    val subjectTree by subjectViewModel.tree.collectAsStateWithLifecycle()
     // Explicit shared key (NOT the auto code-position key): the portrait and landscape layouts place
     // this section at different composition positions, so an auto-keyed rememberSaveable would store a
     // separate tab per orientation (the Activity recreates on rotation). A fixed key makes both
     // orientations read/write the one slot, so the current tab persists across rotation.
     var tab by rememberSaveable(key = "library.notesTab") { mutableStateOf(NotesTab.ALL) }
     var deleteCandidate by remember { mutableStateOf<NotePage?>(null) }
+    var renameCandidate by remember { mutableStateOf<NotePage?>(null) }
+    var assignCandidate by remember { mutableStateOf<NotePage?>(null) }
+
+    val callbacks = NoteCardCallbacks(
+        onOpenNote = onOpenNote,
+        onRename = { renameCandidate = it },
+        onMove = { assignCandidate = it },
+        onDelete = { deleteCandidate = it },
+        onTapSubject = { subjectViewModel.selectSubject(it) },
+    )
 
     Column(modifier = Modifier.fillMaxSize()) {
         LibraryActionBar(onToggleSidebar = onToggleSidebar, onOpenSettings = onOpenSettings)
 
-        UnderlineTabRow(
-            tabs = NotesTab.entries,
-            selected = tab,
-            label = { it.label },
-            onSelect = { tab = it },
-            trailing = { ViewOptionsButton() },
-        )
+        if (selectedSubjectId != null) {
+            // Subject view (a subject is selected): the breadcrumb path replaces the tab row and the
+            // grid shows only the notes filed directly in this subject.
+            SubjectPathTabs(
+                path = selectedPath,
+                onSelectAll = { subjectViewModel.selectSubject(null) },
+                onSelectSubject = { subjectViewModel.selectSubject(it) },
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp),
+            )
+            HorizontalDivider(modifier = Modifier.padding(top = 10.dp))
+            val shown = notes.filter { noteSubjects[it.id] == selectedSubjectId }
+            if (shown.isEmpty()) {
+                PlaceholderState(
+                    "No notes in this subject yet",
+                    "Move notes here from a note card's ⋮ menu, or open a note and assign it to this subject.",
+                )
+            } else {
+                NotesGrid(shown, noteListViewModel, subjectsById, noteSubjects, callbacks)
+            }
+        } else {
+            UnderlineTabRow(
+                tabs = NotesTab.entries,
+                selected = tab,
+                label = { it.label },
+                onSelect = { tab = it },
+                trailing = { ViewOptionsButton() },
+            )
 
-        when (tab) {
-            NotesTab.TIMELINE -> CalendarScreen(
-                onOpenNote = onOpenNote,
-                showEvents = false,
-                viewModel = calendarViewModel,
-                eventsViewModel = eventsViewModel,
-                noteListViewModel = noteListViewModel,
-            )
-            NotesTab.FAVORITES -> PlaceholderState(
-                "Favourites are coming soon",
-                "Star a note to pin it here — coming with the next update.",
-            )
-            else -> {
-                // RECENTS = notes opened in the last 24h (last-opened first); ALL/UNFILED = everything.
-                val shown = if (tab == NotesTab.RECENTS) recents else notes
-                if (shown.isEmpty()) {
-                    if (tab == NotesTab.RECENTS) {
-                        PlaceholderState(
-                            "Nothing recent",
-                            "Notes you open show up here for 24 hours, most recent first.",
-                        )
-                    } else {
-                        PlaceholderState(
-                            "No notes yet",
-                            "Tap the new-note button to start. Write with your S Pen, and /Q to ask the AI.",
-                            modifier = Modifier.testTag(LIBRARY_EMPTY_TAG),
-                        )
+            when (tab) {
+                NotesTab.TIMELINE -> CalendarScreen(
+                    onOpenNote = onOpenNote,
+                    showEvents = false,
+                    viewModel = calendarViewModel,
+                    eventsViewModel = eventsViewModel,
+                    noteListViewModel = noteListViewModel,
+                )
+                NotesTab.FAVORITES -> PlaceholderState(
+                    "Favourites are coming soon",
+                    "Star a note to pin it here — coming with the next update.",
+                )
+                else -> {
+                    // RECENTS = opened in the last 24h; UNFILED = notes with no subject; ALL = everything.
+                    val shown = when (tab) {
+                        NotesTab.RECENTS -> recents
+                        NotesTab.UNFILED -> notes.filter { it.id !in noteSubjects }
+                        else -> notes
                     }
-                } else {
-                    NotesGrid(
-                        notes = shown,
-                        noteListViewModel = noteListViewModel,
-                        onOpenNote = onOpenNote,
-                        onLongPress = { deleteCandidate = it },
-                    )
+                    if (shown.isEmpty()) {
+                        when (tab) {
+                            NotesTab.RECENTS -> PlaceholderState(
+                                "Nothing recent",
+                                "Notes you open show up here for 24 hours, most recent first.",
+                            )
+                            NotesTab.UNFILED -> PlaceholderState(
+                                "Nothing unfiled",
+                                "Every note is filed into a subject. Notes with no subject show up here.",
+                            )
+                            else -> PlaceholderState(
+                                "No notes yet",
+                                "Tap the new-note button to start. Write with your S Pen, and /Q to ask the AI.",
+                                modifier = Modifier.testTag(LIBRARY_EMPTY_TAG),
+                            )
+                        }
+                    } else {
+                        NotesGrid(shown, noteListViewModel, subjectsById, noteSubjects, callbacks)
+                    }
                 }
             }
         }
@@ -269,6 +320,23 @@ fun NotesSection(
                 }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { deleteCandidate = null }) { Text("Cancel") } },
+        )
+    }
+    renameCandidate?.let { page ->
+        SubjectNameDialog(
+            title = "Rename note",
+            initial = page.customTitle ?: "",
+            confirmLabel = "Save",
+            onConfirm = { noteListViewModel.renameNote(page.id, it); renameCandidate = null },
+            onDismiss = { renameCandidate = null },
+        )
+    }
+    assignCandidate?.let { page ->
+        SubjectPickerDialog(
+            tree = subjectTree,
+            currentSubjectId = noteSubjects[page.id],
+            onPick = { subjectViewModel.assignNote(page.id, it); assignCandidate = null },
+            onDismiss = { assignCandidate = null },
         )
     }
 }
@@ -342,8 +410,9 @@ private fun <T> UnderlineTabRow(
 private fun NotesGrid(
     notes: List<NotePage>,
     noteListViewModel: NoteListViewModel,
-    onOpenNote: (String) -> Unit,
-    onLongPress: (NotePage) -> Unit,
+    subjectsById: Map<String, ai.elrond.domain.Subject>,
+    noteSubjects: Map<String, String>,
+    callbacks: NoteCardCallbacks,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 220.dp),
@@ -356,22 +425,29 @@ private fun NotesGrid(
             NoteCardItem(
                 page = page,
                 noteListViewModel = noteListViewModel,
-                onOpenNote = onOpenNote,
-                onLongPress = onLongPress,
+                subjectId = noteSubjects[page.id],
+                subjectsById = subjectsById,
+                callbacks = callbacks,
             )
         }
     }
 }
 
-/** A single note card — white surface, hairline border, thumbnail, title + date (FA-15 restyle). */
+/**
+ * A single note card — white surface, hairline border, thumbnail, title + date (FA-15 restyle), plus
+ * a ⋮ menu (Rename / Move to subject / Delete) and the subject breadcrumb (FA-16). Long-press still
+ * opens the delete confirmation.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NoteCardItem(
     page: NotePage,
     noteListViewModel: NoteListViewModel,
-    onOpenNote: (String) -> Unit,
-    onLongPress: (NotePage) -> Unit,
+    subjectId: String?,
+    subjectsById: Map<String, ai.elrond.domain.Subject>,
+    callbacks: NoteCardCallbacks,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -379,8 +455,8 @@ private fun NoteCardItem(
         modifier = Modifier
             .testTag(LIBRARY_NOTE_CARD_TAG)
             .combinedClickable(
-                onClick = { onOpenNote(page.id) },
-                onLongClick = { onLongPress(page) },
+                onClick = { callbacks.onOpenNote(page.id) },
+                onLongClick = { callbacks.onDelete(page) },
             ),
     ) {
         Column {
@@ -403,19 +479,41 @@ private fun NoteCardItem(
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
             Column(modifier = Modifier.padding(13.dp)) {
-                Text(
-                    page.displayTitle(),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    NOTE_DATE.format(Instant.ofEpochMilli(page.modifiedAt).atZone(ZoneId.systemDefault())),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Neutral500,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
+                Row(verticalAlignment = Alignment.Top) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            page.displayTitle(),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            NOTE_DATE.format(Instant.ofEpochMilli(page.modifiedAt).atZone(ZoneId.systemDefault())),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Neutral500,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
+                    Box {
+                        IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(30.dp)) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "Note actions", tint = Neutral500, modifier = Modifier.size(20.dp))
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; callbacks.onRename(page) })
+                            DropdownMenuItem(text = { Text("Move to subject") }, onClick = { menuOpen = false; callbacks.onMove(page) })
+                            DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; callbacks.onDelete(page) })
+                        }
+                    }
+                }
+                if (subjectId != null) {
+                    SubjectBreadcrumb(
+                        subjectId = subjectId,
+                        subjectsById = subjectsById,
+                        onTapSubject = callbacks.onTapSubject,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
             }
         }
     }

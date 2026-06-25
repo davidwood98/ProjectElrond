@@ -3,6 +3,7 @@ package ai.elrond.data
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.Subject
 import ai.elrond.domain.TodoItem
 import ai.elrond.domain.TodoPriority
 import ai.elrond.domain.TodoStatus
@@ -22,6 +23,16 @@ fun NotePageEntity.toDomain(): NotePage = NotePage(
     lastOpenedAt = lastOpenedAt,
     tags = tags,
     contextSummary = contextSummary,
+)
+
+fun SubjectEntity.toDomain(): Subject = Subject(
+    id = id,
+    parentId = parentId,
+    name = name,
+    colorId = colorId,
+    sortOrder = sortOrder,
+    createdAt = createdAt,
+    modifiedAt = modifiedAt,
 )
 
 fun TodoItemEntity.toDomain(): TodoItem = TodoItem(

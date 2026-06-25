@@ -34,6 +34,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_6_7,
         ElrondDatabase.MIGRATION_7_8,
         ElrondDatabase.MIGRATION_8_9,
+        ElrondDatabase.MIGRATION_9_10,
     )
 
     /**
@@ -57,10 +58,24 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v9_and_validates_final_schema() {
+    fun migrates_v1_to_v10_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v9 schema (incl. note_pages.lastOpenedAt).
-        helper.runMigrationsAndValidate(TEST_DB, 9, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v10 schema (incl. the FA-16
+        // subjects + note_subjects tables).
+        helper.runMigrationsAndValidate(TEST_DB, 10, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_9_to_10_creates_the_subjects_and_note_subjects_tables() {
+        helper.createDatabase(TEST_DB, 9).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 10, true, *allMigrations)
+        val tables = mutableSetOf<String>()
+        db.query("SELECT name FROM sqlite_master WHERE type = 'table'").use { c ->
+            while (c.moveToNext()) tables.add(c.getString(0))
+        }
+        db.close()
+        assertTrue("subjects table should exist after v9→v10", "subjects" in tables)
+        assertTrue("note_subjects table should exist after v9→v10", "note_subjects" in tables)
     }
 
     @Test

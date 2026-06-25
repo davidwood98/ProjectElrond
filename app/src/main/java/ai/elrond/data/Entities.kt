@@ -191,6 +191,64 @@ data class PageEditEventEntity(
 )
 
 /**
+ * A subject = a folder in the note hierarchy (Subjects feature, DB v10). Self-referential tree via
+ * [parentId] (null = root); deleting a subject cascade-deletes its descendant subjects (and, via the
+ * [NoteSubjectEntity] FK, un-files their notes — the notes themselves are never deleted).
+ */
+@Entity(
+    tableName = "subjects",
+    foreignKeys = [
+        ForeignKey(
+            entity = SubjectEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["parentId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("parentId")],
+)
+data class SubjectEntity(
+    @PrimaryKey val id: String,
+    /** Parent subject id; null for a root subject. */
+    val parentId: String? = null,
+    val name: String,
+    /** Index into [ai.elrond.domain.SubjectPalette]. */
+    val colorId: Int,
+    /** Position among same-parent siblings (drag-to-reorder writes it). */
+    val sortOrder: Long,
+    val createdAt: Long,
+    val modifiedAt: Long,
+)
+
+/**
+ * Note→subject membership (Subjects feature, DB v10). [pageId] is the primary key, so a note belongs
+ * to **at most one** subject (file-explorer model); no row = unfiled. Both foreign keys cascade, so
+ * deleting a note or a subject removes the membership (never the note itself via the subject side).
+ */
+@Entity(
+    tableName = "note_subjects",
+    foreignKeys = [
+        ForeignKey(
+            entity = NotePageEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["pageId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = SubjectEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["subjectId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("subjectId")],
+)
+data class NoteSubjectEntity(
+    @PrimaryKey val pageId: String,
+    val subjectId: String,
+)
+
+/**
  * A background-extracted TODO/calendar item awaiting the user's confirmation
  * (FA-2 confirmation flow). On "Yes" it graduates to `todo_items` / `calendar_events`;
  * either decision marks the row [dismissed] (i.e. handled) and KEEPS it, so the same item

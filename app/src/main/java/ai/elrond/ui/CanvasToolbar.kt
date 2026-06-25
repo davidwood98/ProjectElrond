@@ -132,6 +132,6 @@ fun ToolbarButton(
 }
 
 val TILE_SIZE = 46.dp
-val ICON_SIZE = 26.dp
+val ICON_SIZE = 36.dp //26 original
 private val TILE_GAP = 4.dp
 private val TOOLBAR_PADDING = 8.dp

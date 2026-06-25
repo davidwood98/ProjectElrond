@@ -65,7 +65,11 @@ private fun ElrondNavHost() {
             val pageId = entry.arguments?.getString("pageId") ?: return@composable
             NoteCanvasScreen(
                 pageId = pageId,
-                onBack = { navController.popBackStack() },
+                // The editor close (✕) is a Home button: pop the whole note stack back to the library,
+                // not one step — so note→note→note hops still land on the library home.
+                onHome = {
+                    navController.popBackStack(route = ROUTE_NOTES, inclusive = false)
+                },
                 onOpenNote = { id -> navController.navigate("note/$id") },
             )
         }

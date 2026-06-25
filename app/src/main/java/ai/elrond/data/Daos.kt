@@ -180,6 +180,54 @@ interface PendingSuggestionDao {
 }
 
 @Dao
+interface SubjectDao {
+    @Insert
+    suspend fun insert(subject: SubjectEntity)
+
+    @Update
+    suspend fun update(subject: SubjectEntity)
+
+    /** Descendant subjects cascade-delete via the self-referential parentId foreign key. */
+    @Query("DELETE FROM subjects WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("SELECT * FROM subjects WHERE id = :id")
+    suspend fun getById(id: String): SubjectEntity?
+
+    @Query("SELECT * FROM subjects ORDER BY sortOrder")
+    suspend fun getAll(): List<SubjectEntity>
+
+    @Query("SELECT * FROM subjects ORDER BY sortOrder")
+    fun observeAll(): Flow<List<SubjectEntity>>
+
+    @Query("UPDATE subjects SET name = :name, modifiedAt = :modifiedAt WHERE id = :id")
+    suspend fun rename(id: String, name: String, modifiedAt: Long)
+
+    @Query("UPDATE subjects SET colorId = :colorId, modifiedAt = :modifiedAt WHERE id = :id")
+    suspend fun setColor(id: String, colorId: Int, modifiedAt: Long)
+
+    @Query("UPDATE subjects SET sortOrder = :sortOrder, modifiedAt = :modifiedAt WHERE id = :id")
+    suspend fun setSortOrder(id: String, sortOrder: Long, modifiedAt: Long)
+}
+
+@Dao
+interface NoteSubjectDao {
+    /** Assign a note to a subject; REPLACE keeps the one-row-per-page (single-subject) invariant. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(membership: NoteSubjectEntity)
+
+    /** Unfile a note (remove its subject membership). */
+    @Query("DELETE FROM note_subjects WHERE pageId = :pageId")
+    suspend fun deleteByPage(pageId: String)
+
+    @Query("SELECT * FROM note_subjects WHERE pageId = :pageId")
+    suspend fun getForPage(pageId: String): NoteSubjectEntity?
+
+    @Query("SELECT * FROM note_subjects")
+    fun observeAll(): Flow<List<NoteSubjectEntity>>
+}
+
+@Dao
 interface TodoDao {
     @Insert
     suspend fun insert(item: TodoItemEntity)

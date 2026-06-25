@@ -1162,6 +1162,111 @@ changes; their confirmed findings were applied.
 - New/updated tests: `ElrondMigrationTest` (chain → **v9** + a v8→v9 `lastOpenedAt` backfill test),
   `NoteListViewModelTest` (+`recentNotes` 24h window + descending order), `CalendarScreenTest` updated.
 
+## FA-16 — Subjects (folder hierarchy) (2026-06-23)
+
+First post-FA-15 *feature*: a hierarchical **Subjects** (folder) system to organise notes, on branch
+**`fa-16-subject-implementation`**. **DB is now v10** (`MIGRATION_9_10`). **295 app + 24 aibackend
+JVM/Robolectric tests pass** (0 failures; was 266+24); `:app:test`, `:app:assembleDebug` and
+`:app:assembleDebugAndroidTest` build on the WSL Linux SDK. The Compose surfaces (sidebar tree, colour
+picker, breadcrumb, Quick Nav) are device/manual-verified like the other Compose flows.
+
+**Three product decisions confirmed with the user up front** (the spec's "known unknowns"):
+1. **Single-subject, file-explorer model** — a note is **unfiled or filed into exactly one subject**
+   (NOT multi-subject). The breadcrumb shows the *ancestry path* of that one subject: ancestor
+   **dots** left-to-right, then the containing subject as a named **pill**.
+2. **Cascade delete** — deleting a subject deletes its descendant subfolders too (with a confirm);
+   **notes are never deleted**, they just become unfiled (FK cascades clear the membership rows).
+3. **Colour palette** — a generated **66-colour pastel spectrum** (`SubjectPalette`), not the Leap
+   brand colours.
+
+- **Schema (DB v10, `MIGRATION_9_10`).** Two tables: `subjects` (id, parentId → self-ref FK
+  `ON DELETE CASCADE`, name, colorId, **sortOrder**, createdAt, modifiedAt — `sortOrder` added beyond
+  the spec's column list because drag-reorder needs a persistent order) and `note_subjects`
+  (**pageId PRIMARY KEY** + subjectId, both FKs `ON DELETE CASCADE`). pageId-as-PK is what enforces
+  **≤1 subject per note** at the DB level; no row = unfiled. No backfill (tree starts empty, every
+  note starts unfiled). The migration SQL was verified column-for-column against the exported
+  `10.json` (incl. both cascade FKs + the `index_subjects_parentId` / `index_note_subjects_subjectId`
+  indices).
+- **Domain (pure JVM).** `Subject` (data class); `SubjectPalette` (66 = `HUE_COUNT` 11 × `SHADE_COUNT`
+  6 pastel ARGB ints via a pure HSL→RGB, indexed by a stable `colorId`, `normalize` wraps any int);
+  `SubjectTree` (pure `build` with orphan-rescue + **cycle rescue** so no subject ever silently
+  vanishes, `pathTo` ancestry/breadcrumb, `flatten` pre-order, `reorder` index-move + `move`
+  direction-step). All Compose/Android-free — the `colorId → Color` bridge is `subjectColor()` in the
+  ui layer (per the `AppAccent` precedent).
+- **Data.** `SubjectRepository` (CRUD + `assignNote` single-subject upsert/`REPLACE`/unfile + `reorder`
+  by sortOrder; injectable clock/id/colour seams like `NoteRepository`); `SubjectDao` + `NoteSubjectDao`;
+  mapper. `SettingsRepository` gained DataStore-persisted **sidebar state**: `expandedSubjectIds`
+  (`stringSetPreferencesKey`) + `selectedSubjectId`. **`SessionNotesTracker`** (a `@Singleton` in-memory
+  `StateFlow<List<String>>`, placed in `data/` alongside the analogous in-memory `OutlookAuthProvider`)
+  records notes opened **this foreground session** for the editor tabs.
+- **Presentation.** `SubjectViewModel` (`@HiltViewModel`): `tree`/`subjectsById`/`noteSubjects`/
+  `expandedIds`/`selectedSubjectId` (a stale id resolves to null) / `selectedPath` StateFlows + CRUD,
+  `toggleExpanded`, `selectSubject`, `moveSubject(id, up)`, `assignNote`. **`deleteSubject` and
+  `moveSubject` read a fresh `subjectRepository.observeSubjects().first()` snapshot — NOT the
+  `WhileSubscribed` `.value` caches** (which return their empty initial value when no collector is
+  active, which would silently defeat the delete-selection-clear guard and no-op a reorder; caught in
+  the adversarial review). `NoteListViewModel` gained `sessionNotes` (session ids → pages) + `renameNote`.
+- **Canvas tabs = this session (not 24h).** Per spec, the editor note tabs now show notes opened in the
+  **current foreground session only** (in-memory `SessionNotesTracker`), distinct from the persisted
+  24h `recentNotes` that still backs the home **Recents** tab. `CanvasViewModel` records each open;
+  **`MainActivity.onStop` clears the session guarded by `!isChangingConfigurations`** (survives rotation,
+  resets on real background).
+- **UI.** `SubjectTreeView` (one reusable recursive tree, `editable` vs read-only): tap = select/filter,
+  chevron = expand/collapse (persisted), colour dot = picker, inline **+** = add child, **long-press** =
+  context menu (rename / add subfolder / change colour / delete), **drag handle** = reorder. *Reorder is
+  a direction-based **single-step move** (drag up/down past a small threshold → move one position),
+  computed in the VM by id from a fresh snapshot — NOT pixel-distance ÷ row-height, which the review
+  showed mis-targets once a sibling is expanded (its descendants render between siblings); the handle
+  also does not translate, so the gesture source stays under the finger.* The home **sidebar**
+  (`LibraryScreen`) renders the editable tree (scrollable, with an add-root **+**); selecting a subject
+  jumps to the now-**subject-filtered** Notes grid with a tappable **breadcrumb tab bar**
+  (`All Notes › S1 › S2`). Note **cards** gained a ⋮ menu (Rename / Move to subject / Delete) + the
+  ancestry **breadcrumb** (`SubjectBreadcrumb`). The canvas **Library overlay → "Quick Nav"**: a
+  **read-only** subject tree (expand/collapse only) + an **"Unfiled"** notes list. The colour picker is
+  a pastel swatch grid (`SubjectColorPicker`); "Move to subject" is an indented `SubjectPickerDialog`.
+  The Notes **UNFILED** tab now shows notes with no subject (was all notes).
+- **Reviewed + simplified.** An adversarial `/code-review` (correctness, Compose, regressions) and a
+  `/simplify` pass (reuse/simplification/efficiency/altitude) ran over the diff; confirmed findings were
+  applied (the `WhileSubscribed.value` staleness fixes, the reorder rework, a bigger colour-dot tap
+  target, a deduped callback, a redundant cycle-guard, stale KDoc). The two-mechanism "recent" overlap
+  (`recentNotes` vs `sessionNotes`) was reviewed and **kept** — the spec mandates session tabs be
+  in-memory and session-scoped, distinct from the 24h home Recents tab.
+- New/updated tests: `SubjectTreeTest` (build/orphan/cycle, pathTo, flatten, reorder, move),
+  `SubjectPaletteTest` (66 colours, opaque/distinct, normalize), `SessionNotesTrackerTest`,
+  `SubjectRepositoryTest` (Robolectric — CRUD/sortOrder, single-subject reassign, cascade delete of
+  descendants + memberships, note-delete cascade, reorder), `SubjectViewModelTest` (tree, stale-id→null,
+  path, delete-clears-selection, move, create-expands-parent), `ElrondMigrationTest` (chain → **v10** + a
+  v9→v10 table-creation test), `SettingsRepositoryTest` (+sidebar state), `NoteListViewModelTest`
+  (+`sessionNotes`, +`renameNote`), and instrumented `SubjectTreeViewTest` (expand/collapse, colour
+  picker, breadcrumb pill tap); `LibraryScreenTest` updated to supply the `SubjectViewModel`.
+
+### FA-16 device-feedback follow-ups (2026-06-25)
+
+Three fixes from device testing (296 app + 24 aibackend tests pass; `:app:test`/`assembleDebug`/
+`assembleDebugAndroidTest` build):
+- **Quick Nav shows notes nested in the subject tree** (was folders-only). `LibraryOverlay` now renders
+  a unified file-explorer tree: each subject expands to reveal its child subjects **then its notes**
+  (`QuickNavSubject`/`QuickNavNote` in `EditorChrome.kt`, fed a `notesBySubject: Map<String?,
+  List<NotePage>>` — null key = unfiled, rendered at root under an "Unfiled" label). Tapping a note
+  opens it in a canvas tab. Inline with the "SUBJECTS" header is a **"current note" locator** (a
+  `MyLocation` line icon) that expands the path to and highlights the open note —
+  `SubjectViewModel.expandToSubject` (fresh-snapshot `pathTo` → `SettingsRepository.expandSubjects`
+  batch). The read-only `SubjectTreeView` is no longer used by Quick Nav (still used by the editable
+  home sidebar).
+- **Note tabs survive background/foreground; reset only on process death.** Removed
+  `MainActivity.onStop`'s `SessionNotesTracker.clear()` — the `@Singleton` in-memory tracker now persists
+  across open/close (process lifetime) and resets naturally only when the app is swiped away / killed
+  (process death). (Supersedes the original FA-16 "reset on background" behaviour.)
+- **Editor ✕ is a Home button, not Back.** `NoteCanvasScreen`'s close action (`onHome`) now
+  `popBackStack(ROUTE_NOTES, inclusive = false)` — note→note→note hops all land back on the library home
+  in one tap, instead of popping one note at a time.
+- **Editor tabs keep a stable order.** `SessionNotesTracker.recordOpened` now appends new notes and
+  leaves an already-open note's position unchanged (was move-to-front), and `NoteTabPills` renders the
+  session list in order and only moves the active highlight (no longer force-renders the current note
+  first). Re-selecting a tab no longer reshuffles the bar.
+- Tests: `SubjectViewModelTest` (+`expandToSubject` path), `SettingsRepositoryTest` (+`expandSubjects`
+  batch). The Quick Nav tree + locator are device/manual-verified Compose.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
@@ -1245,7 +1350,7 @@ discipline.)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v9** — most recently `note_pages.lastOpenedAt` was added in `MIGRATION_8_9` for the FA-15 "Recent"/note-tabs window (and `todo_items.status` in `MIGRATION_7_8` for the FA-14 Kanban status; `strokes.groupId` in `MIGRATION_6_7` for FA-9 lasso-selection groups).
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v10** — most recently the `subjects` + `note_subjects` tables were added in `MIGRATION_9_10` for the FA-16 Subjects (folder) hierarchy (and `note_pages.lastOpenedAt` in `MIGRATION_8_9` for the FA-15 "Recent"/note-tabs window; `todo_items.status` in `MIGRATION_7_8` for the FA-14 Kanban status; `strokes.groupId` in `MIGRATION_6_7` for FA-9 lasso-selection groups).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
 - **Outlook Azure app registration — required final step before release.** FA-11's Outlook integration is fully coded but ships **inert** until an Azure app is registered and `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` are set (see *Outlook / Microsoft Graph OAuth setup*). This is intentionally deferred to a final pre-release task; until done, Outlook stays NotConfigured and the calendar falls back to the device provider (not a bug). Pairs with the Anthropic-key release blocker above.

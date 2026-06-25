@@ -5,12 +5,14 @@ import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NoOpOutlookAuthProvider
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SettingsRepository
+import ai.elrond.data.SubjectRepository
 import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.TodoRepository
 import ai.elrond.presentation.CalendarViewModel
 import ai.elrond.presentation.EventsViewModel
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.presentation.SettingsViewModel
+import ai.elrond.presentation.SubjectViewModel
 import ai.elrond.presentation.TodoViewModel
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
@@ -52,6 +54,7 @@ class LibraryScreenTest {
     private lateinit var settingsViewModel: SettingsViewModel
     private lateinit var calendarViewModel: CalendarViewModel
     private lateinit var eventsViewModel: EventsViewModel
+    private lateinit var subjectViewModel: SubjectViewModel
 
     @Before
     fun setUp() {
@@ -69,7 +72,12 @@ class LibraryScreenTest {
         thumbnailCache = ThumbnailCache(ctx.cacheDir.resolve("thumb-test-${System.nanoTime()}"))
         noteListViewModel = NoteListViewModel(repository, thumbnailCache)
         todoViewModel = TodoViewModel(TodoRepository(db.todoDao()))
-        settingsViewModel = SettingsViewModel(SettingsRepository(ctx))
+        val settingsRepository = SettingsRepository(ctx)
+        settingsViewModel = SettingsViewModel(settingsRepository)
+        subjectViewModel = SubjectViewModel(
+            SubjectRepository(db.subjectDao(), db.noteSubjectDao()),
+            settingsRepository,
+        )
         calendarViewModel = CalendarViewModel(repository)
         eventsViewModel = EventsViewModel(
             providerTypeFlow = flowOf(CalendarProviderType.DEVICE),
@@ -91,6 +99,7 @@ class LibraryScreenTest {
                 settingsViewModel = settingsViewModel,
                 calendarViewModel = calendarViewModel,
                 eventsViewModel = eventsViewModel,
+                subjectViewModel = subjectViewModel,
             )
         }
     }

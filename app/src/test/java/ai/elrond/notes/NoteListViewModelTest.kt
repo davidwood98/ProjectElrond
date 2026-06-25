@@ -3,6 +3,7 @@ package ai.elrond.notes
 import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotePage
 import ai.elrond.presentation.NoteListViewModel
+import ai.elrond.data.SessionNotesTracker
 import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.NoteRepository
 import io.mockk.coEvery
@@ -91,6 +92,33 @@ class NoteListViewModelTest {
         advanceUntilIdle()
 
         assertEquals("new-page", openedId)
+    }
+
+    @Test
+    fun `sessionNotes maps the tracked session ids to pages in stable open order`() = runTest(dispatcher) {
+        every { repository.observeTimeline() } returns flowOf(listOf(page("p1"), page("p2")))
+        val tracker = SessionNotesTracker()
+        tracker.recordOpened("p2") // opened first → stays first
+        tracker.recordOpened("p1")
+        val viewModel = NoteListViewModel(repository, thumbnailCache, tracker)
+
+        backgroundScope.launch { viewModel.sessionNotes.collect { } }
+        advanceUntilIdle()
+
+        assertEquals(listOf("p2", "p1"), viewModel.sessionNotes.value.map { it.id })
+    }
+
+    @Test
+    fun `renameNote delegates to repository, blank reverts to the auto title`() = runTest(dispatcher) {
+        every { repository.observeTimeline() } returns flowOf(emptyList())
+        val viewModel = NoteListViewModel(repository, thumbnailCache)
+
+        viewModel.renameNote("p1", "Maths")
+        viewModel.renameNote("p2", "   ")
+        advanceUntilIdle()
+
+        coVerify { repository.renamePage("p1", "Maths") }
+        coVerify { repository.renamePage("p2", null) }
     }
 
     @Test

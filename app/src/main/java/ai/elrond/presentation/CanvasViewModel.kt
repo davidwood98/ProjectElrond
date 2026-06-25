@@ -34,6 +34,7 @@ import ai.elrond.aibackend.anthropic.AnthropicProvider
 import ai.elrond.data.CalendarEvent
 import ai.elrond.data.CalendarRepository
 import ai.elrond.data.NoteRepository
+import ai.elrond.data.SessionNotesTracker
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
 import ai.elrond.data.ExtractionScheduler
@@ -132,6 +133,8 @@ class CanvasViewModel(
      * a seam so JVM tests assert the orchestration with a fake; null in tests / when no page is set.
      */
     private val thumbnailGenerator: (suspend (pageId: String) -> Unit)? = null,
+    /** Records this page as opened this session (FA-16) — feeds the editor's session note tabs. */
+    private val sessionNotesTracker: SessionNotesTracker? = null,
     private val triggerDebounceMillis: Long = TRIGGER_DEBOUNCE_MILLIS,
     private val autoSaveDebounceMillis: Long = AUTOSAVE_DEBOUNCE_MILLIS,
     private val requestTimeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
@@ -156,6 +159,7 @@ class CanvasViewModel(
         enqueueExtraction: @JvmSuppressWildcards (String) -> Unit,
         settings: SettingsRepository,
         thumbnailCache: ThumbnailCache,
+        sessionNotesTracker: SessionNotesTracker,
     ) : this(
         recognizer = recognizer,
         aiProvider = aiProvider,
@@ -184,6 +188,7 @@ class CanvasViewModel(
                 bitmap.recycle()
             }
         },
+        sessionNotesTracker = sessionNotesTracker,
     )
 
     private val _finishedStrokes = MutableStateFlow<List<CanvasStroke>>(emptyList())
@@ -345,6 +350,8 @@ class CanvasViewModel(
                 }
                 // Record the open so this note rises to the top of "Recent" / the note tabs (FA-15).
                 runCatching { repository.markOpened(pageId) }
+                // Also record it in this foreground session — the editor tabs show session notes (FA-16).
+                sessionNotesTracker?.recordOpened(pageId)
                 lastPersisted = _finishedStrokes.value
                 lastPersistedAiNotes = _aiNotes.value.filterNot { it.isError }
                 startAutoSave(repository, pageId)
