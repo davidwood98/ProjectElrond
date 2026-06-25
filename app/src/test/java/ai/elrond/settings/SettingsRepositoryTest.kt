@@ -1,5 +1,7 @@
 package ai.elrond.settings
 
+import ai.elrond.domain.AiColorMode
+import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PaperStyle
@@ -110,6 +112,15 @@ class SettingsRepositoryTest {
         assertEquals(AppAccent.PINK, repo.appAccent.first())
         assertEquals(PaperStyle.RULED, repo.paperStyle.first())
         assertEquals(NoteTabsMode.ATTACHED, repo.noteTabsMode.first())
+
+        // FA-17 AI-mark appearance: defaults (17c cluster + colour), then round-trip.
+        assertEquals(AiLoaderStyle.CLUSTER, repo.aiLoaderStyle.first())
+        assertEquals(AiColorMode.COLOR, repo.aiColorMode.first())
+
+        repo.setAiLoaderStyle(AiLoaderStyle.PINCH)
+        repo.setAiColorMode(AiColorMode.BLACK)
+        assertEquals(AiLoaderStyle.PINCH, repo.aiLoaderStyle.first())
+        assertEquals(AiColorMode.BLACK, repo.aiColorMode.first())
 
         // FA-16 subjects sidebar state: defaults (nothing expanded, no selection), then round-trip.
         assertTrue(repo.expandedSubjectIds.first().isEmpty())

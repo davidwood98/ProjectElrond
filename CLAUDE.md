@@ -1267,6 +1267,60 @@ Three fixes from device testing (296 app + 24 aibackend tests pass; `:app:test`/
 - Tests: `SubjectViewModelTest` (+`expandToSubject` path), `SettingsRepositoryTest` (+`expandSubjects`
   batch). The Quick Nav tree + locator are device/manual-verified Compose.
 
+## FA-17 — organic loaders + AI logo (2026-06-25)
+
+Brings in the **`organic-loaders`** Claude Design handoff (`Claude Design/organic-loaders/`): the
+AI "thinking" indicator becomes a user-selectable **organic loader**, and a static **AI logo** (the
+handoff's icon 02c-04) marks AI items. On branch **`fa-17-organic-loaders`**. **No schema change —
+DB stays v10** (both settings are DataStore prefs). `:app:compileDebugKotlin`, `:app:testDebugUnitTest`,
+`:aibackend:test`, `:app:assembleDebug` and `:app:assembleDebugAndroidTest` build on the WSL Linux
+SDK. The loader/logo visuals are **device/manual-verified** like the other Compose canvas work (the
+goo `RenderEffect` needs a hardware canvas — it can't be unit-tested). **Scope was confirmed with the
+user up front** (the four clarifications below).
+
+**User-confirmed decisions:** (1) the loader picker offers the **7 loaders the design's selection
+grid showcases** — `2 orbit · 5 split · 7 comet · 11 lava · 14 pinch · 15 rings · 17 cluster`, rebuilt
+as Compose animations, **default 17** (the other CSS loaders / `d` dark variants are not offered);
+(2) a **single colour setting** (`Colour`/`Black`, default Colour) drives **both** the loader palette
+and the logo drawable (the handoff `white` variant is dropped); (3) the to-do source-note link drops
+the `🔗` and shows the **AI logo inline at text height before the link**, only when a link exists
+(no link → a plain tile, no "AI" text — that fallback was already unreachable dead code); (4) the
+lasso AI button shows the **logo only**.
+
+- **Loaders rebuilt in Compose (`ui/loaders/OrganicLoaders.kt`).** The handoff loaders are CSS
+  metaball ("gooey") animations — blurred circles passed through an alpha-threshold so overlapping
+  blobs fuse. Recreated with a **`RenderEffect`** (blur → alpha-threshold `ColorMatrix`, the handoff's
+  `feColorMatrix` `A' = 22·A − 10` scaled to 0..255, RGB untouched so the Leap colours survive) applied
+  via `Modifier.graphicsLayer { renderEffect = … }`. **The goo is Android 12+ (`RenderEffect`, API 31);
+  below that the `goo` modifier is a no-op and the circles simply overlap** — a graceful degrade
+  (`minSdk = 29`; fine on the Galaxy Tab S target). Each loader animates colored `Box` circles with
+  `rememberInfiniteTransition`, geometry ported from the CSS keyframes as fractions of the loader size;
+  the animated state is read **inside** the `graphicsLayer` lambda (per the FA-10 rule — layer re-reads
+  per frame, no recomposition/mesh redraw). None of the 7 chosen loaders need SVG path-morphing (all are
+  circle/blob based). `OrganicLoader(style, colorMode, size)` is the dispatcher.
+- **AI logo (`ui/AiLogo.kt`).** The handoff icon 02c-04 bundled as `res/drawable-nodpi/ai_logo_color.png`
+  + `ai_logo_black.png` (white ignored), registered in `ElrondIcons`. `AiLogo` picks the drawable from
+  the colour mode (a multi-colour brand mark, so **not** tinted at the call site). `AiSourceLink` is the
+  inline logo + note-title link that replaced the `🔗`-prefixed `Text` at all three to-do label sites
+  (`TodoPanel`, `LibraryContent` ×2), sized to the label's line height.
+- **App-wide appearance via CompositionLocals (`ui/AiAppearance.kt`).** `LocalAiColorMode` +
+  `LocalAiLoaderStyle` are provided once in `MainActivity` from the persisted settings (the same
+  top-level approach as the app accent) so the logo and loader render consistently across screens
+  without per-ViewModel plumbing. `NoteCanvasScreen`'s on-canvas thinking indicator (`AiLoadingIndicator`)
+  now renders `OrganicLoader` from the locals (the old 3-ink-dots composable is gone); the lasso AI
+  button (`SelectionLayer`) and the to-do links read `LocalAiColorMode` through `AiLogo`.
+- **Domain enums (Compose-free):** `AiLoaderStyle(number, label)` (the 7 loaders, default `CLUSTER`/17)
+  and `AiColorMode { COLOR, BLACK }` (default COLOR) in `ai.elrond.domain`; the colour→colours /
+  drawable bridges live in `ui`. New DataStore prefs `ai_loader_style` / `ai_color_mode` in
+  `SettingsRepository`, surfaced via `SettingsViewModel`.
+- **Settings → "AI assistant" section.** A **Colour** toggle (Colour/Black, each a live `AiLogo`
+  preview) and a **Loader style** `FlowRow` of all 7 loaders as live, tappable `OrganicLoader` preview
+  tiles (in the current colour mode), selected highlighted — mirrors the FA-13/14 tool-style/accent
+  preview pattern.
+- New/updated tests: `SettingsRepositoryTest` (+`aiLoaderStyle`/`aiColorMode` round-trips + defaults),
+  `AppearanceEnumsTest` (+FA-17 defaults/`fromName` + the seven loader numbers). The loaders, the goo
+  effect, and the logo placements are device-verified.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):

@@ -37,6 +37,10 @@ object ElrondIcons {
     @DrawableRes val Undo = R.drawable.ic_undo
     @DrawableRes val Redo = R.drawable.ic_redo
 
+    /** The AI logo (organic-loaders handoff icon 02c-04), colour + black variants (FA-17). */
+    @DrawableRes val AiLogoColor = R.drawable.ai_logo_color
+    @DrawableRes val AiLogoBlack = R.drawable.ai_logo_black
+
     /** Resolves a pen-family tool's glyph for the chosen [PenIconStyle] (Body vs Tip). */
     @DrawableRes
     fun penToolIcon(body: Int, tip: Int, style: PenIconStyle): Int =

@@ -220,13 +220,11 @@ private fun TodoRow(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     if (item.isAiExtracted && item.hasSourceLink) {
-                        Text(
-                            text = item.sourcePageTitle?.let { "🔗 $it" } ?: "AI",
+                        AiSourceLink(
+                            title = item.sourcePageTitle.orEmpty(),
+                            onClick = onOpenSource,
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false).clickable(onClick = onOpenSource),
+                            modifier = Modifier.weight(1f, fill = false),
                         )
                     }
                     Text(

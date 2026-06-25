@@ -305,7 +305,9 @@ private fun SelectionToolbar(sel: SelectionState, viewModel: CanvasViewModel, la
         ) {
             TextButton(onClick = viewModel::duplicateSelection) { Text("Duplicate") }
             TextButton(onClick = viewModel::deleteSelection) { Text("Delete") }
-            TextButton(onClick = viewModel::aiPromptSelection) { Text("AI") }
+            TextButton(onClick = viewModel::aiPromptSelection) {
+                AiLogo(modifier = Modifier.size(20.dp), contentDescription = "Ask AI")
+            }
             Box {
                 TextButton(onClick = { menuOpen = true }) { Text("⋮") }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {

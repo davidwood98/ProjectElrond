@@ -10,11 +10,7 @@ import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.SubjectViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import ai.elrond.ui.loaders.OrganicLoader
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -30,7 +26,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -578,39 +573,22 @@ private fun TaskExtractionSheet(
     }
 }
 
-/** Animated "ink dots" loading indicator placed on the canvas where the answer will land. */
+/**
+ * The on-canvas "thinking" indicator placed where the answer will land — the user's chosen organic
+ * loader (FA-17), styled by [LocalAiLoaderStyle] / [LocalAiColorMode]. Replaces the old ink dots.
+ */
 @Composable
 private fun AiLoadingIndicator(x: Float, y: Float) {
     val density = LocalDensity.current
-    val transition = rememberInfiniteTransition(label = "ai-loading")
-    Row(
-        modifier = Modifier
-            .absoluteOffset(
-                x = with(density) { x.toDp() },
-                y = with(density) { y.toDp() },
-            )
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        repeat(3) { i ->
-            val alpha by transition.animateFloat(
-                initialValue = 0.2f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(600, delayMillis = i * 200),
-                    repeatMode = RepeatMode.Reverse,
-                ),
-                label = "dot$i",
-            )
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(AiInkColor.copy(alpha = alpha)),
-            )
-        }
-    }
+    OrganicLoader(
+        style = LocalAiLoaderStyle.current,
+        colorMode = LocalAiColorMode.current,
+        size = 56.dp,
+        modifier = Modifier.absoluteOffset(
+            x = with(density) { x.toDp() },
+            y = with(density) { y.toDp() },
+        ),
+    )
 }
 
 /** Inline failure message in red handwriting style, on the canvas; tap to dismiss. */

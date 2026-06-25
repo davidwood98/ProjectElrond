@@ -1,5 +1,7 @@
 package ai.elrond.data
 
+import ai.elrond.domain.AiColorMode
+import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PaperStyle
@@ -79,6 +81,24 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setAppAccent(accent: AppAccent) {
         context.settingsDataStore.edit { it[APP_ACCENT_KEY] = accent.name }
+    }
+
+    // --- AI mark appearance (FA-17, from the organic-loaders handoff) ---
+
+    /** Which organic loader animates while the AI is thinking (default 17c · cluster). */
+    val aiLoaderStyle: Flow<AiLoaderStyle> = context.settingsDataStore.data
+        .map { AiLoaderStyle.fromName(it[AI_LOADER_STYLE_KEY]) }
+
+    suspend fun setAiLoaderStyle(style: AiLoaderStyle) {
+        context.settingsDataStore.edit { it[AI_LOADER_STYLE_KEY] = style.name }
+    }
+
+    /** Colour treatment for both the loader and the AI logo (Colour / Black). Default Colour. */
+    val aiColorMode: Flow<AiColorMode> = context.settingsDataStore.data
+        .map { AiColorMode.fromName(it[AI_COLOR_MODE_KEY]) }
+
+    suspend fun setAiColorMode(mode: AiColorMode) {
+        context.settingsDataStore.edit { it[AI_COLOR_MODE_KEY] = mode.name }
     }
 
     /** The note-canvas paper background (Ruled / Plain / Dots). */
@@ -238,6 +258,8 @@ class SettingsRepository(private val context: Context) {
         private val STYLUS_ONLY_KEY = booleanPreferencesKey("stylus_only")
         private val TOOL_TREATMENT_KEY = stringPreferencesKey("tool_selected_treatment")
         private val PEN_ICON_STYLE_KEY = stringPreferencesKey("pen_icon_style")
+        private val AI_LOADER_STYLE_KEY = stringPreferencesKey("ai_loader_style")
+        private val AI_COLOR_MODE_KEY = stringPreferencesKey("ai_color_mode")
         private val APP_ACCENT_KEY = stringPreferencesKey("app_accent")
         private val PAPER_STYLE_KEY = stringPreferencesKey("paper_style")
         private val NOTE_TABS_MODE_KEY = stringPreferencesKey("note_tabs_mode")

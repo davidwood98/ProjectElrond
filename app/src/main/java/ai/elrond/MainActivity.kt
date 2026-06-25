@@ -1,11 +1,16 @@
 package ai.elrond
 
 import ai.elrond.data.SettingsRepository
+import ai.elrond.domain.AiColorMode
+import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.ui.LibraryScreen
+import ai.elrond.ui.LocalAiColorMode
+import ai.elrond.ui.LocalAiLoaderStyle
 import ai.elrond.ui.NoteCanvasScreen
 import ai.elrond.ui.SettingsScreen
 import ai.elrond.ui.theme.ElrondTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -37,9 +42,20 @@ class MainActivity : ComponentActivity() {
         setContent {
             val accent by settingsRepository.appAccent
                 .collectAsStateWithLifecycle(initialValue = AppAccent.DEFAULT)
+            // FA-17: the AI-mark appearance is provided once here (like the accent) so the AI logo
+            // and loader render consistently across screens without per-ViewModel plumbing.
+            val aiColorMode by settingsRepository.aiColorMode
+                .collectAsStateWithLifecycle(initialValue = AiColorMode.DEFAULT)
+            val aiLoaderStyle by settingsRepository.aiLoaderStyle
+                .collectAsStateWithLifecycle(initialValue = AiLoaderStyle.DEFAULT)
             ElrondTheme(accent = accent) {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    ElrondNavHost()
+                CompositionLocalProvider(
+                    LocalAiColorMode provides aiColorMode,
+                    LocalAiLoaderStyle provides aiLoaderStyle,
+                ) {
+                    Surface(modifier = Modifier.fillMaxSize()) {
+                        ElrondNavHost()
+                    }
                 }
             }
         }
