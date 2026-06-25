@@ -2,11 +2,9 @@ package ai.elrond.ui
 
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.PaperStyle
+import ai.elrond.domain.SubjectNode
 import ai.elrond.ui.icons.ElrondIcons
-import ai.elrond.ui.theme.LeapGreen
 import ai.elrond.ui.theme.LeapGrey
-import ai.elrond.ui.theme.LeapNavy
-import ai.elrond.ui.theme.LeapPink
 import ai.elrond.ui.theme.LeapTheme
 import ai.elrond.ui.theme.Neutral200
 import ai.elrond.ui.theme.Neutral400
@@ -36,12 +34,15 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -193,9 +194,10 @@ fun EditorHeader(
 }
 
 /**
- * The note-tab pills: the open note first, then a few recents (a placeholder for real multi-note tabs;
- * inactive tabs navigate). Rendered inside the tab card that sits above the toolbar — the card's
- * shape/gap (flush vs detached) is what the Attached/Separate setting drives, in `NoteCanvasScreen`.
+ * The note-tab pills: the notes opened this session, in a **stable** order (they do not reshuffle when
+ * a note is re-selected — only the active highlight moves). Inactive tabs navigate. The current note is
+ * highlighted in place; in the brief race before it lands in [tabs] it's shown as a leading active tab
+ * so the active pill is never missing.
  */
 @Composable
 internal fun NoteTabPills(
@@ -205,17 +207,23 @@ internal fun NoteTabPills(
     onSelectTab: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // The current note is ALWAYS the first, active tab — even before it lands in the recent list from
-    // the DB (markOpened round-trip), so the active tab is never missing. Other recents follow.
-    val others = remember(tabs, currentPageId) { tabs.filter { it.id != currentPageId }.take(5) }
+    val hasCurrent = remember(tabs, currentPageId) { tabs.any { it.id == currentPageId } }
     Row(
         modifier = modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TabPill(label = currentTitle, active = true, onClick = {})
-        others.forEach { page ->
-            TabPill(label = page.displayTitle(), active = false, onClick = { onSelectTab(page.id) })
+        // Fallback only while the current note hasn't yet propagated into the session list.
+        if (!hasCurrent) {
+            TabPill(label = currentTitle, active = true, onClick = {})
+        }
+        tabs.forEach { page ->
+            val active = page.id == currentPageId
+            TabPill(
+                label = if (active) currentTitle else page.displayTitle(),
+                active = active,
+                onClick = { if (!active) onSelectTab(page.id) },
+            )
         }
     }
 }
@@ -363,15 +371,26 @@ private fun AddPageCard(modifier: Modifier = Modifier) {
 }
 
 /**
- * The Library / subject-structure drawer (left). Subjects are a UI placeholder (no backend yet) —
- * shown as static colour-dot groups; the note list below is live and navigates to real notes.
+ * The canvas **Quick Nav** drawer (left, FA-16). The subject tree is **read-only** here — expand /
+ * collapse only, no editing — per the spec; the **Unfiled** list below shows notes with no subject
+ * and navigates to them. (Full subject CRUD + filing live in the home Library.)
  */
 @Composable
 fun LibraryOverlay(
-    notes: List<NotePage>,
+    subjectTree: List<SubjectNode>,
+    notesBySubject: Map<String?, List<NotePage>>,
+    expandedIds: Set<String>,
+    currentPageId: String,
+    onToggleSubject: (String) -> Unit,
+    onLocateCurrent: () -> Unit,
     onOpenNote: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // Which note to flash as "you are here" — set when the locate button reveals the current note.
+    var highlighted by remember { mutableStateOf<String?>(null) }
+    val unfiled = notesBySubject[null].orEmpty()
+    val isEmpty = subjectTree.isEmpty() && notesBySubject.values.all { it.isEmpty() }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
@@ -392,7 +411,7 @@ fun LibraryOverlay(
                     Icon(Icons.Outlined.Folder, contentDescription = null, tint = LeapTheme.tokens.accentStrong)
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        "Library",
+                        "Quick Nav",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold,
                         color = LeapGrey,
@@ -405,51 +424,176 @@ fun LibraryOverlay(
                         modifier = Modifier.size(20.dp).clickable(onClick = onDismiss),
                     )
                 }
+                // "Subjects" header with a right-aligned "current note" locator (expands the path to,
+                // and highlights, the open note).
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "SUBJECTS",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Neutral500,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = { onLocateCurrent(); highlighted = currentPageId },
+                        modifier = Modifier.size(30.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.MyLocation,
+                            contentDescription = "Current note",
+                            tint = LeapTheme.tokens.accentStrong,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 12.dp, vertical = 4.dp),
                 ) {
-                    SectionLabel("Subjects")
-                    SubjectRow("Welcome", LeapPink)
-                    SubjectRow("Test structure", LeapNavy)
-                    SubjectRow("Personal", LeapGreen)
-                    Text(
-                        "Organising notes into subjects is coming soon.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Neutral400,
-                        modifier = Modifier.padding(start = 12.dp, top = 2.dp, bottom = 8.dp),
-                    )
-                    SectionLabel("Notes")
-                    notes.forEach { page ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(9.dp))
-                                .clickable { onOpenNote(page.id) }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Outlined.Description,
-                                contentDescription = null,
-                                tint = Neutral400,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(Modifier.width(9.dp))
-                            Text(
-                                page.displayTitle(),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = LeapGrey,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                    if (isEmpty) {
+                        Text(
+                            "No notes yet. Create notes and subjects from the home library.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Neutral400,
+                            modifier = Modifier.padding(start = 12.dp, top = 2.dp, bottom = 8.dp),
+                        )
+                    }
+                    // The subject tree, with each subject's notes nested inside it (file-explorer style).
+                    subjectTree.forEach { node ->
+                        QuickNavSubject(
+                            node = node,
+                            notesBySubject = notesBySubject,
+                            expandedIds = expandedIds,
+                            highlightedNoteId = highlighted,
+                            depth = 0,
+                            onToggle = onToggleSubject,
+                            onOpenNote = onOpenNote,
+                        )
+                    }
+                    // Notes that aren't filed into any subject sit at the root, under an "Unfiled" label.
+                    if (unfiled.isNotEmpty()) {
+                        SectionLabel("Unfiled")
+                        unfiled.forEach { page ->
+                            QuickNavNote(
+                                page = page,
+                                depth = 0,
+                                highlighted = page.id == highlighted,
+                                onOpenNote = onOpenNote,
                             )
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/** One subject row in Quick Nav; when expanded it reveals its child subjects then its notes. */
+@Composable
+private fun QuickNavSubject(
+    node: SubjectNode,
+    notesBySubject: Map<String?, List<NotePage>>,
+    expandedIds: Set<String>,
+    highlightedNoteId: String?,
+    depth: Int,
+    onToggle: (String) -> Unit,
+    onOpenNote: (String) -> Unit,
+) {
+    val subject = node.subject
+    val notes = notesBySubject[subject.id].orEmpty()
+    val expandable = node.children.isNotEmpty() || notes.isNotEmpty()
+    val expanded = subject.id in expandedIds
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(9.dp))
+            .clickable { if (expandable) onToggle(subject.id) }
+            .padding(start = (8 + depth * 16).dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (expandable) {
+            Icon(
+                if (expanded) Icons.Filled.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = Neutral500,
+                modifier = Modifier.size(20.dp),
+            )
+        } else {
+            Spacer(Modifier.width(20.dp))
+        }
+        Spacer(Modifier.width(6.dp))
+        Box(modifier = Modifier.size(11.dp).clip(CircleShape).background(subjectColor(subject.colorId)))
+        Spacer(Modifier.width(10.dp))
+        Text(
+            subject.name,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = LeapGrey,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    if (expanded) {
+        node.children.forEach { child ->
+            QuickNavSubject(
+                node = child,
+                notesBySubject = notesBySubject,
+                expandedIds = expandedIds,
+                highlightedNoteId = highlightedNoteId,
+                depth = depth + 1,
+                onToggle = onToggle,
+                onOpenNote = onOpenNote,
+            )
+        }
+        notes.forEach { page ->
+            QuickNavNote(
+                page = page,
+                depth = depth + 1,
+                highlighted = page.id == highlightedNoteId,
+                onOpenNote = onOpenNote,
+            )
+        }
+    }
+}
+
+/** A note leaf in Quick Nav; tapping it opens the note in a canvas tab. */
+@Composable
+private fun QuickNavNote(
+    page: NotePage,
+    depth: Int,
+    highlighted: Boolean,
+    onOpenNote: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (highlighted) LeapTheme.tokens.accentSoft else Color.Transparent)
+            .clickable { onOpenNote(page.id) }
+            // Align the note text with subject names one level shallower (chevron + dot ≈ 27dp).
+            .padding(start = (8 + depth * 16 + 27).dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Description,
+            contentDescription = null,
+            tint = if (highlighted) LeapTheme.tokens.accentStrong else Neutral400,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(9.dp))
+        Text(
+            page.displayTitle(),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (highlighted) FontWeight.Bold else FontWeight.Normal,
+            color = if (highlighted) LeapTheme.tokens.accentStrong else LeapGrey,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -462,18 +606,6 @@ private fun SectionLabel(text: String) {
         color = Neutral500,
         modifier = Modifier.padding(start = 12.dp, top = 14.dp, bottom = 6.dp),
     )
-}
-
-@Composable
-private fun SubjectRow(name: String, dot: Color) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(modifier = Modifier.size(11.dp).clip(CircleShape).background(dot))
-        Spacer(Modifier.width(11.dp))
-        Text(name, style = MaterialTheme.typography.bodyMedium, color = LeapGrey)
-    }
 }
 
 /** Small neutral count pill used in overlay headers. */

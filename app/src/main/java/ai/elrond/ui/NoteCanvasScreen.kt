@@ -7,6 +7,7 @@ import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.domain.PendingSuggestion
 import ai.elrond.domain.SuggestionType
 import ai.elrond.presentation.SettingsViewModel
+import ai.elrond.presentation.SubjectViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
 import androidx.compose.animation.core.RepeatMode
@@ -76,13 +77,14 @@ import kotlinx.coroutines.launch
 @Composable
 fun NoteCanvasScreen(
     pageId: String,
-    onBack: () -> Unit,
+    onHome: () -> Unit,
     onOpenNote: (pageId: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CanvasViewModel = hiltViewModel(),
     todoViewModel: TodoViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     noteListViewModel: NoteListViewModel = hiltViewModel(),
+    subjectViewModel: SubjectViewModel = hiltViewModel(),
 ) {
     val tool by viewModel.tool.collectAsStateWithLifecycle()
     val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
@@ -105,9 +107,16 @@ fun NoteCanvasScreen(
     val pageTitle by viewModel.pageTitle.collectAsStateWithLifecycle()
     val pageDateLabel by viewModel.pageDateLabel.collectAsStateWithLifecycle()
     val libraryNotes by noteListViewModel.pages.collectAsStateWithLifecycle()
-    // The note tabs show "Recent" notes (opened in the last 24h, last-opened first); the Library
-    // overlay still lists every note.
-    val recentNotes by noteListViewModel.recentNotes.collectAsStateWithLifecycle()
+    // The note tabs show notes opened in the current foreground session (FA-16) — cleared on background.
+    val sessionNotes by noteListViewModel.sessionNotes.collectAsStateWithLifecycle()
+    // Quick Nav (FA-16): the read-only subject tree with each subject's notes nested inside it.
+    val subjectTree by subjectViewModel.tree.collectAsStateWithLifecycle()
+    val subjectExpandedIds by subjectViewModel.expandedIds.collectAsStateWithLifecycle()
+    val noteSubjects by subjectViewModel.noteSubjects.collectAsStateWithLifecycle()
+    // subjectId → its notes (null key = unfiled), so the Quick Nav tree can render notes under subjects.
+    val notesBySubject = remember(libraryNotes, noteSubjects) {
+        libraryNotes.groupBy { noteSubjects[it.id] }
+    }
     var showPages by remember { mutableStateOf(false) }
     var showLibrary by remember { mutableStateOf(false) }
 
@@ -207,8 +216,8 @@ fun NoteCanvasScreen(
         ) {
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Close),
-                contentDescription = "Back to notes",
-                onClick = onBack,
+                contentDescription = "Home",
+                onClick = onHome,
             )
             ToolbarDivider()
             ToolbarButton(
@@ -396,7 +405,7 @@ fun NoteCanvasScreen(
             onRename = viewModel::renamePage,
             tabs = {
                 NoteTabPills(
-                    tabs = recentNotes,
+                    tabs = sessionNotes,
                     currentPageId = pageId,
                     currentTitle = pageTitle,
                     onSelectTab = { id -> if (id != pageId) onOpenNote(id) },
@@ -414,7 +423,14 @@ fun NoteCanvasScreen(
         }
         if (showLibrary) {
             LibraryOverlay(
-                notes = libraryNotes,
+                subjectTree = subjectTree,
+                notesBySubject = notesBySubject,
+                expandedIds = subjectExpandedIds,
+                currentPageId = pageId,
+                onToggleSubject = subjectViewModel::toggleExpanded,
+                onLocateCurrent = {
+                    noteSubjects[pageId]?.let { subjectViewModel.expandToSubject(it) }
+                },
                 onOpenNote = { id ->
                     showLibrary = false
                     if (id != pageId) onOpenNote(id)

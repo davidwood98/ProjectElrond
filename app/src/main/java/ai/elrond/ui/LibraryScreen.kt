@@ -4,10 +4,10 @@ import ai.elrond.presentation.CalendarViewModel
 import ai.elrond.presentation.EventsViewModel
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.presentation.SettingsViewModel
+import ai.elrond.presentation.SubjectViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGrey
-import ai.elrond.ui.theme.LeapPink
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,9 +24,11 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.Description
@@ -44,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,6 +90,7 @@ fun LibraryScreen(
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     calendarViewModel: CalendarViewModel = hiltViewModel(),
     eventsViewModel: EventsViewModel = hiltViewModel(),
+    subjectViewModel: SubjectViewModel = hiltViewModel(),
 ) {
     var nav by rememberSaveable { mutableStateOf(LibraryNav.NOTES) }
     val notes by noteListViewModel.pages.collectAsStateWithLifecycle()
@@ -97,7 +101,10 @@ fun LibraryScreen(
             current = nav,
             noteCount = notes.size,
             todoCount = todoCount,
+            subjectViewModel = subjectViewModel,
             onSelect = { nav = it; onItem() },
+            // Choosing a subject jumps to the (now-filtered) Notes section and closes the drawer.
+            onSubjectChosen = { nav = LibraryNav.NOTES; onItem() },
             onOpenSettings = { onItem(); onOpenSettings() },
         )
     }
@@ -124,6 +131,7 @@ fun LibraryScreen(
                         settingsViewModel = settingsViewModel,
                         calendarViewModel = calendarViewModel,
                         eventsViewModel = eventsViewModel,
+                        subjectViewModel = subjectViewModel,
                     )
                 }
             }
@@ -160,6 +168,7 @@ fun LibraryScreen(
                         settingsViewModel = settingsViewModel,
                         calendarViewModel = calendarViewModel,
                         eventsViewModel = eventsViewModel,
+                        subjectViewModel = subjectViewModel,
                     )
                 }
                 SlideOutSidebar(
@@ -215,6 +224,7 @@ private fun LibraryMain(
     settingsViewModel: SettingsViewModel,
     calendarViewModel: CalendarViewModel,
     eventsViewModel: EventsViewModel,
+    subjectViewModel: SubjectViewModel,
 ) {
     Scaffold(
         // New note is always reachable from the lower-right, on every section (FA-15).
@@ -242,6 +252,7 @@ private fun LibraryMain(
                     noteListViewModel = noteListViewModel,
                     calendarViewModel = calendarViewModel,
                     eventsViewModel = eventsViewModel,
+                    subjectViewModel = subjectViewModel,
                 )
                 LibraryNav.FILES -> FilesSection(
                     onToggleSidebar = onToggleSidebar,
@@ -269,9 +280,27 @@ private fun LibrarySidebar(
     current: LibraryNav,
     noteCount: Int,
     todoCount: Int,
+    subjectViewModel: SubjectViewModel,
     onSelect: (LibraryNav) -> Unit,
+    onSubjectChosen: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
+    val tree by subjectViewModel.tree.collectAsStateWithLifecycle()
+    val expandedIds by subjectViewModel.expandedIds.collectAsStateWithLifecycle()
+    val selectedSubject by subjectViewModel.selectedSubjectId.collectAsStateWithLifecycle()
+    var addingRoot by rememberSaveable { mutableStateOf(false) }
+    val actions = remember(subjectViewModel) {
+        SubjectTreeActions(
+            onToggleExpand = subjectViewModel::toggleExpanded,
+            onSelect = { subjectViewModel.selectSubject(it); onSubjectChosen() },
+            onAddChild = { parentId, name -> subjectViewModel.createSubject(parentId, name) },
+            onRename = subjectViewModel::renameSubject,
+            onSetColor = subjectViewModel::setColor,
+            onDelete = subjectViewModel::deleteSubject,
+            onMove = subjectViewModel::moveSubject,
+        )
+    }
+
     Column(modifier = Modifier.fillMaxHeight().padding(14.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 6.dp, bottom = 16.dp),
@@ -295,28 +324,73 @@ private fun LibrarySidebar(
             }
         }
 
-        LibraryNav.entries.forEach { item ->
-            val count = when (item) {
-                LibraryNav.NOTES -> noteCount
-                LibraryNav.TODO -> todoCount
-                else -> null
+        // Nav + the subject tree scroll together; the sync + Settings footer stays pinned below.
+        Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            LibraryNav.entries.forEach { item ->
+                val count = when (item) {
+                    LibraryNav.NOTES -> noteCount
+                    LibraryNav.TODO -> todoCount
+                    else -> null
+                }
+                NavRow(
+                    item = item,
+                    selected = current == item,
+                    count = count,
+                    onClick = {
+                        // Tapping the Notes nav directly clears any subject filter (= All Notes).
+                        if (item == LibraryNav.NOTES) subjectViewModel.selectSubject(null)
+                        onSelect(item)
+                    },
+                )
             }
-            NavRow(item = item, selected = current == item, count = count, onClick = { onSelect(item) })
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 22.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "SUBJECTS",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { addingRoot = true }, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = "New subject",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            if (tree.isEmpty()) {
+                Text(
+                    "Tap + to create a subject and organise your notes into folders.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                )
+            } else {
+                SubjectTreeView(
+                    nodes = tree,
+                    expandedIds = expandedIds,
+                    selectedId = selectedSubject,
+                    editable = true,
+                    actions = actions,
+                )
+            }
         }
 
-        // Subjects — a UI placeholder (no backend yet).
-        Text(
-            "SUBJECTS",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 12.dp, top = 22.dp, bottom = 6.dp),
-        )
-        SubjectPlaceholder("Welcome", LeapPink)
-        SubjectPlaceholder("Test structure", MaterialTheme.colorScheme.primary)
-        SubjectPlaceholder("Personal", ai.elrond.ui.theme.LeapGreen)
-
-        Spacer(Modifier.weight(1f))
+        if (addingRoot) {
+            SubjectNameDialog(
+                title = "New subject",
+                initial = "",
+                confirmLabel = "Create",
+                onConfirm = { subjectViewModel.createSubject(null, it); addingRoot = false },
+                onDismiss = { addingRoot = false },
+            )
+        }
 
         Surface(
             color = MaterialTheme.colorScheme.surface,
@@ -380,14 +454,3 @@ private fun NavRow(item: LibraryNav, selected: Boolean, count: Int?, onClick: ()
     }
 }
 
-@Composable
-private fun SubjectPlaceholder(name: String, dot: androidx.compose.ui.graphics.Color) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(modifier = Modifier.size(11.dp).clip(CircleShape).background(dot))
-        Spacer(Modifier.width(11.dp))
-        Text(name, style = MaterialTheme.typography.bodyMedium, color = LeapGrey)
-    }
-}

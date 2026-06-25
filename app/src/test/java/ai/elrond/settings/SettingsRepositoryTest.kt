@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -109,5 +110,23 @@ class SettingsRepositoryTest {
         assertEquals(AppAccent.PINK, repo.appAccent.first())
         assertEquals(PaperStyle.RULED, repo.paperStyle.first())
         assertEquals(NoteTabsMode.ATTACHED, repo.noteTabsMode.first())
+
+        // FA-16 subjects sidebar state: defaults (nothing expanded, no selection), then round-trip.
+        assertTrue(repo.expandedSubjectIds.first().isEmpty())
+        assertNull(repo.selectedSubjectId.first())
+
+        repo.setSubjectExpanded("s1", true)
+        repo.setSubjectExpanded("s2", true)
+        repo.setSubjectExpanded("s1", false) // collapsing removes it
+        assertEquals(setOf("s2"), repo.expandedSubjectIds.first())
+
+        // Batch expand (used by the Quick Nav "current note" locator) unions the ids in.
+        repo.expandSubjects(setOf("s3", "s4"))
+        assertEquals(setOf("s2", "s3", "s4"), repo.expandedSubjectIds.first())
+
+        repo.setSelectedSubjectId("s2")
+        assertEquals("s2", repo.selectedSubjectId.first())
+        repo.setSelectedSubjectId(null)
+        assertNull(repo.selectedSubjectId.first())
     }
 }

@@ -18,8 +18,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CalendarEventEntity::class,
         PageEditEventEntity::class,
         PendingSuggestionEntity::class,
+        SubjectEntity::class,
+        NoteSubjectEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -32,6 +34,8 @@ abstract class ElrondDatabase : RoomDatabase() {
     abstract fun calendarEventDao(): CalendarEventDao
     abstract fun pageEditEventDao(): PageEditEventDao
     abstract fun pendingSuggestionDao(): PendingSuggestionDao
+    abstract fun subjectDao(): SubjectDao
+    abstract fun noteSubjectDao(): NoteSubjectDao
 
     companion object {
         private const val DB_NAME = "elrond.db"
@@ -189,6 +193,45 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v10 adds the Subjects feature (FA-16): the `subjects` folder tree (self-referential
+         * parentId, ON DELETE CASCADE) and the `note_subjects` membership table (pageId PRIMARY KEY,
+         * so a note files into at most one subject). Both FKs cascade. No backfill — every note
+         * starts unfiled and the subject tree starts empty.
+         */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS subjects (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        parentId TEXT,
+                        name TEXT NOT NULL,
+                        colorId INTEGER NOT NULL,
+                        sortOrder INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        modifiedAt INTEGER NOT NULL,
+                        FOREIGN KEY(parentId) REFERENCES subjects(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_subjects_parentId ON subjects(parentId)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS note_subjects (
+                        pageId TEXT NOT NULL PRIMARY KEY,
+                        subjectId TEXT NOT NULL,
+                        FOREIGN KEY(pageId) REFERENCES note_pages(id) ON DELETE CASCADE,
+                        FOREIGN KEY(subjectId) REFERENCES subjects(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_note_subjects_subjectId ON note_subjects(subjectId)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -200,7 +243,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                     DB_NAME,
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-                    MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                    MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
                 ).build().also { instance = it }
             }
     }

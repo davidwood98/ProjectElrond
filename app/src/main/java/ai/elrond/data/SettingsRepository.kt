@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -146,6 +147,37 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[LASSO_SNAPBACK_ENABLED_KEY] = enabled }
     }
 
+    // --- Subjects sidebar state (FA-16) ---
+
+    /** Ids of subjects currently expanded in the sidebar tree (persisted across launches). */
+    val expandedSubjectIds: Flow<Set<String>> = context.settingsDataStore.data
+        .map { it[EXPANDED_SUBJECTS_KEY] ?: emptySet() }
+
+    suspend fun setSubjectExpanded(id: String, expanded: Boolean) {
+        context.settingsDataStore.edit { prefs ->
+            val current = prefs[EXPANDED_SUBJECTS_KEY] ?: emptySet()
+            prefs[EXPANDED_SUBJECTS_KEY] = if (expanded) current + id else current - id
+        }
+    }
+
+    /** Expands several subjects at once (one write) — used to reveal the path to the current note. */
+    suspend fun expandSubjects(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        context.settingsDataStore.edit { prefs ->
+            prefs[EXPANDED_SUBJECTS_KEY] = (prefs[EXPANDED_SUBJECTS_KEY] ?: emptySet()) + ids
+        }
+    }
+
+    /** The selected subject that filters the notes grid; null = no filter (All Notes). */
+    val selectedSubjectId: Flow<String?> = context.settingsDataStore.data
+        .map { it[SELECTED_SUBJECT_KEY]?.takeIf { id -> id.isNotEmpty() } }
+
+    suspend fun setSelectedSubjectId(id: String?) {
+        context.settingsDataStore.edit {
+            if (id == null) it.remove(SELECTED_SUBJECT_KEY) else it[SELECTED_SUBJECT_KEY] = id
+        }
+    }
+
     // --- Background auto-extraction (FA-2) ---
 
     /** Master switch: run TODO/calendar extraction in the background after a note is saved. */
@@ -218,5 +250,7 @@ class SettingsRepository(private val context: Context) {
         private val CONFIRM_TODO_KEY = booleanPreferencesKey("confirm_todo_extraction")
         private val CONFIRM_CALENDAR_KEY = booleanPreferencesKey("confirm_calendar_extraction")
         private val NEW_EXTRACTED_ITEMS_KEY = booleanPreferencesKey("has_new_extracted_items")
+        private val EXPANDED_SUBJECTS_KEY = stringSetPreferencesKey("expanded_subject_ids")
+        private val SELECTED_SUBJECT_KEY = stringPreferencesKey("selected_subject_id")
     }
 }
