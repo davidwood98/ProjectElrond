@@ -1,5 +1,7 @@
 package ai.elrond.presentation
 
+import ai.elrond.domain.AiColorMode
+import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PaperStyle
@@ -88,6 +90,24 @@ class SettingsViewModel @Inject constructor(
 
     fun setAppAccent(accent: AppAccent) {
         viewModelScope.launch { repository.setAppAccent(accent) }
+    }
+
+    // --- AI mark appearance (FA-17) ---
+
+    /** Which organic loader animates while the AI is thinking (default 17 · cluster). */
+    val aiLoaderStyle: StateFlow<AiLoaderStyle> = repository.aiLoaderStyle
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AiLoaderStyle.DEFAULT)
+
+    fun setAiLoaderStyle(style: AiLoaderStyle) {
+        viewModelScope.launch { repository.setAiLoaderStyle(style) }
+    }
+
+    /** Colour treatment for the loader + AI logo (Colour / Black). */
+    val aiColorMode: StateFlow<AiColorMode> = repository.aiColorMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AiColorMode.DEFAULT)
+
+    fun setAiColorMode(mode: AiColorMode) {
+        viewModelScope.launch { repository.setAiColorMode(mode) }
     }
 
     /** Note-canvas paper background (Ruled / Plain / Dots). */

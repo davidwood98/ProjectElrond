@@ -753,13 +753,11 @@ private fun TodoListRow(
                     color = if (item.isCompleted) Neutral500 else MaterialTheme.colorScheme.onSurface,
                 )
                 if (item.isAiExtracted && item.hasSourceLink) {
-                    Text(
-                        item.sourcePageTitle?.let { "🔗 $it" } ?: "AI",
+                    AiSourceLink(
+                        title = item.sourcePageTitle.orEmpty(),
+                        onClick = onOpenNote,
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp).clickable(onClick = onOpenNote),
+                        modifier = Modifier.padding(top = 4.dp),
                     )
                 }
             }
@@ -858,13 +856,11 @@ private fun KanbanCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 if (item.isAiExtracted && item.hasSourceLink) {
-                    Text(
-                        item.sourcePageTitle?.let { "🔗 $it" } ?: "AI",
+                    AiSourceLink(
+                        title = item.sourcePageTitle.orEmpty(),
+                        onClick = onOpenNote,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false).clickable(onClick = onOpenNote),
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 } else {
                     Spacer(Modifier.width(1.dp))

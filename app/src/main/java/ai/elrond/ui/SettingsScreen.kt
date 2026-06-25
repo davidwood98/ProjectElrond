@@ -1,5 +1,7 @@
 package ai.elrond.ui
 
+import ai.elrond.domain.AiColorMode
+import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
@@ -9,6 +11,7 @@ import ai.elrond.data.SettingsRepository
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.domain.ToolSelectedTreatment
 import ai.elrond.ui.icons.ElrondIcons
+import ai.elrond.ui.loaders.OrganicLoader
 import ai.elrond.ui.theme.color
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
@@ -18,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -67,7 +71,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlin.math.hypot
 
 /** App settings: AI activation (command vs gesture), canvas input, AI responses, auto-extraction. */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
@@ -89,6 +93,8 @@ fun SettingsScreen(
     val penIconStyle by viewModel.penIconStyle.collectAsStateWithLifecycle()
     val appAccent by viewModel.appAccent.collectAsStateWithLifecycle()
     val paperStyle by viewModel.paperStyle.collectAsStateWithLifecycle()
+    val aiLoaderStyle by viewModel.aiLoaderStyle.collectAsStateWithLifecycle()
+    val aiColorMode by viewModel.aiColorMode.collectAsStateWithLifecycle()
 
     var draft by remember(trigger) { mutableStateOf(trigger) }
     // Local slider position, re-seeded whenever the persisted threshold changes (e.g. when toggling
@@ -304,6 +310,64 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
+            // --- AI assistant mark (FA-17, organic-loaders handoff) ---
+            Text("AI assistant", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "The logo that marks AI items and the loader shown while the assistant is thinking.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Text(
+                "Colour",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                AiColorModeOption(
+                    label = "Colour",
+                    mode = AiColorMode.COLOR,
+                    current = aiColorMode,
+                    onSelect = { viewModel.setAiColorMode(AiColorMode.COLOR) },
+                )
+                AiColorModeOption(
+                    label = "Black",
+                    mode = AiColorMode.BLACK,
+                    current = aiColorMode,
+                    onSelect = { viewModel.setAiColorMode(AiColorMode.BLACK) },
+                )
+            }
+
+            Text(
+                "Loader style",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+            Text(
+                "The animation shown while the AI is thinking. Tap one to use it.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                AiLoaderStyle.entries.forEach { style ->
+                    AiLoaderOption(
+                        style = style,
+                        current = aiLoaderStyle,
+                        colorMode = aiColorMode,
+                        onSelect = { viewModel.setAiLoaderStyle(style) },
+                    )
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
             Text("Interaction", style = MaterialTheme.typography.titleMedium)
             SettingRow(
                 title = "Snap selection back to origin",
@@ -457,6 +521,98 @@ private fun TreatmentOption(
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal,
             color = if (chosen) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+    }
+}
+
+/** A tappable preview of the AI colour mode (FA-17): the real [AiLogo] drawn in that mode. */
+@Composable
+private fun AiColorModeOption(
+    label: String,
+    mode: AiColorMode,
+    current: AiColorMode,
+    onSelect: () -> Unit,
+) {
+    val selected = mode == current
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onSelect)
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .then(
+                    if (selected) {
+                        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
+                    } else {
+                        Modifier
+                    },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            AiLogo(modifier = Modifier.size(40.dp), colorMode = mode, contentDescription = null)
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+    }
+}
+
+/** A tappable, live preview tile of one organic loader (FA-17), in the user's current colour mode. */
+@Composable
+private fun AiLoaderOption(
+    style: AiLoaderStyle,
+    current: AiLoaderStyle,
+    colorMode: AiColorMode,
+    onSelect: () -> Unit,
+) {
+    val selected = style == current
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onSelect)
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .then(
+                    if (selected) {
+                        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
+                    } else {
+                        Modifier
+                    },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            OrganicLoader(style = style, colorMode = colorMode, size = 46.dp)
+        }
+        Text(
+            style.label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) {
                 MaterialTheme.colorScheme.primary
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant

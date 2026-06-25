@@ -15,6 +15,10 @@ class AppearanceEnumsTest {
         assertEquals(PaperStyle.DOTS, PaperStyle.DEFAULT)
         assertEquals(NoteTabsMode.SEPARATE, NoteTabsMode.DEFAULT)
         assertEquals(TodoStatus.TODO, TodoStatus.DEFAULT)
+        // FA-17 AI-mark appearance: 17c cluster + colour.
+        assertEquals(AiLoaderStyle.CLUSTER, AiLoaderStyle.DEFAULT)
+        assertEquals(17, AiLoaderStyle.DEFAULT.number)
+        assertEquals(AiColorMode.COLOR, AiColorMode.DEFAULT)
     }
 
     @Test
@@ -25,6 +29,19 @@ class AppearanceEnumsTest {
         assertEquals(AppAccent.BLUE, AppAccent.fromName(null))
         assertEquals(PaperStyle.RULED, PaperStyle.fromName("RULED"))
         assertEquals(NoteTabsMode.ATTACHED, NoteTabsMode.fromName("ATTACHED"))
+        // FA-17
+        assertEquals(AiLoaderStyle.PINCH, AiLoaderStyle.fromName("PINCH"))
+        assertEquals(AiLoaderStyle.CLUSTER, AiLoaderStyle.fromName("nonsense"))
+        assertEquals(AiColorMode.BLACK, AiColorMode.fromName("BLACK"))
+        assertEquals(AiColorMode.COLOR, AiColorMode.fromName(null))
+    }
+
+    @Test
+    fun `AiLoaderStyle exposes the seven designed loader numbers`() {
+        assertEquals(
+            listOf(2, 5, 7, 11, 14, 15, 17),
+            AiLoaderStyle.entries.map { it.number },
+        )
     }
 
     @Test
