@@ -71,6 +71,28 @@ class SettingsRepositoryTest {
         assertEquals(TriggerMode.GESTURE, repo.triggerMode.first())
         assertFalse(repo.stylusOnly.first())
 
+        // Prefix-mode trigger mode round-trips (third activation option).
+        repo.setTriggerMode(TriggerMode.PREFIX_COMMAND)
+        assertEquals(TriggerMode.PREFIX_COMMAND, repo.triggerMode.first())
+
+        // Prefix-mode delays: defaults (0.5s / 2s), round-trip, and clamp to range.
+        assertEquals(500L, repo.prefixTriggerDelayMs.first())
+        assertEquals(2_000L, repo.prefixNoPromptTimeoutMs.first())
+
+        repo.setPrefixTriggerDelayMs(800L)
+        assertEquals(800L, repo.prefixTriggerDelayMs.first())
+        repo.setPrefixTriggerDelayMs(50L) // below the 200ms floor
+        assertEquals(200L, repo.prefixTriggerDelayMs.first())
+        repo.setPrefixTriggerDelayMs(9_999L) // above the 3000ms ceiling
+        assertEquals(3_000L, repo.prefixTriggerDelayMs.first())
+
+        repo.setPrefixNoPromptTimeoutMs(5_000L)
+        assertEquals(5_000L, repo.prefixNoPromptTimeoutMs.first())
+        repo.setPrefixNoPromptTimeoutMs(100L) // below the 1s floor
+        assertEquals(1_000L, repo.prefixNoPromptTimeoutMs.first())
+        repo.setPrefixNoPromptTimeoutMs(99_999L) // above the 10s ceiling
+        assertEquals(10_000L, repo.prefixNoPromptTimeoutMs.first())
+
         // FA-10 lasso snap-back: defaults (2.5%, on), then round-trip and persist.
         assertEquals(0.025f, repo.lassoSnapBackThreshold.first(), 1e-4f)
         assertTrue(repo.lassoSnapBackEnabled.first())

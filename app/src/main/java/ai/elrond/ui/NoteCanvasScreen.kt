@@ -5,12 +5,18 @@ import ai.elrond.domain.CanvasTool
 import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.domain.PendingSuggestion
+import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.SuggestionType
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.SubjectViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.loaders.OrganicLoader
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -33,6 +39,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Checkbox
@@ -100,6 +107,8 @@ fun NoteCanvasScreen(
     val pendingSuggestions by viewModel.pendingSuggestions.collectAsStateWithLifecycle()
     val hasNewExtractedItems by settingsViewModel.hasNewExtractedItems.collectAsStateWithLifecycle()
     val transientMessage by viewModel.transientMessage.collectAsStateWithLifecycle()
+    // Prefix `/Q` listening state — drives the bottom-of-canvas listening indicator.
+    val prefixTriggerState by viewModel.prefixTriggerState.collectAsStateWithLifecycle()
     // The active-tool highlight style (A soft tile / B filled / C underline), from Settings.
     val toolTreatment by settingsViewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
     var showMoreMenu by remember { mutableStateOf(false) }
@@ -505,6 +514,18 @@ fun NoteCanvasScreen(
             }
         }
 
+        // Prefix `/Q` listening indicator: rises from the bottom while the canvas listens for the
+        // question (loader + ✕ cancel). When the inactivity timer fires it slides out and the
+        // note-position thinking loader (above, driven by aiState) takes over — the loader appears
+        // to move up to where the answer will land.
+        PrefixListeningIndicator(
+            state = prefixTriggerState,
+            onCancel = viewModel::cancelPrefixTrigger,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 28.dp),
+        )
+
         // Unclear-request pop-up: rendered last (top-most) and CENTRED on screen, so its
         // Yes/No / Edit-prompt / Okay controls are always reachable even when the /Q was near a
         // page edge. The answer it produces (on Yes / Re-send) lands inline at the trigger.
@@ -592,6 +613,36 @@ private fun TaskExtractionSheet(
                 ) {
                     Text("Add selected")
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Bottom-of-canvas indicator for prefix `/Q` listening: the user's organic loader plus a ✕ to
+ * cancel, sliding up from the bottom edge. Shown only while [PrefixTriggerState.Listening] — when
+ * the query starts processing it slides out and the note-position [AiLoadingIndicator] takes over.
+ */
+@Composable
+private fun PrefixListeningIndicator(
+    state: PrefixTriggerState,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = state is PrefixTriggerState.Listening,
+        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+        modifier = modifier,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            OrganicLoader(
+                style = LocalAiLoaderStyle.current,
+                colorMode = LocalAiColorMode.current,
+                size = 48.dp,
+            )
+            IconButton(onClick = onCancel) {
+                Icon(Icons.Default.Close, contentDescription = "Cancel")
             }
         }
     }

@@ -45,6 +45,30 @@ object QueryTriggerDetector {
         candidates.take(maxCandidates).firstOrNull { containsTrigger(it, trigger) }
 
     /**
+     * True when the recognised text IS the trigger and nothing else — used to detect a prefix
+     * `/Q` written alone on its own line ([TriggerMode.PREFIX_COMMAND]). Unlike [containsTrigger],
+     * text either side of the trigger (a prompt before or after it) makes this false.
+     */
+    fun isStandaloneTrigger(recognizedText: String, trigger: String = DEFAULT_TRIGGER): Boolean {
+        val trimmed = recognizedText.trim()
+        if (trimmed.isEmpty()) return false
+        return regexFor(trigger).matches(trimmed) || trimmed.equals(trigger.trim(), ignoreCase = true)
+    }
+
+    /**
+     * The text of the first candidate — within the top [maxCandidates], ranked best-first — that
+     * is a [standalone trigger][isStandaloneTrigger], or null when none are. Lets the prefix `/Q`
+     * fire even if the single best guess garbled it, with the same rank-based confidence floor as
+     * [firstTriggerCandidate].
+     */
+    fun firstStandaloneTriggerCandidate(
+        candidates: List<String>,
+        trigger: String = DEFAULT_TRIGGER,
+        maxCandidates: Int = MAX_TRIGGER_CANDIDATES,
+    ): String? =
+        candidates.take(maxCandidates).firstOrNull { isStandaloneTrigger(it, trigger) }
+
+    /**
      * @return the prompt text preceding a trailing trigger, or null when no
      *         trigger (or no prompt content) is present.
      */

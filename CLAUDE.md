@@ -138,6 +138,18 @@ Home for design elements — pen/eraser symbols, loading-indicator animations, e
   need `Font(res, weight, variationSettings = FontVariation.Settings(FontVariation.weight(n)))` under
   `@OptIn(ExperimentalTextApi::class)`; `BadgedBox(badge = …)` takes a `BoxScope.()->Unit`, so pass
   `badge = { x() }`, not a bare `() -> Unit`.) See FA-13.
+- **Edge-to-edge screens must offset floating chrome by window insets, not hardcoded padding.** The app
+  runs `enableEdgeToEdge()`, so content draws under the status/navigation bars. `Scaffold`-based screens
+  (e.g. `LibraryScreen`) get this for free via the scaffold's content insets, but a full-bleed screen
+  built on a raw `BoxWithConstraints` does **not** — any toolbar/header/title pinned with a fixed
+  `top`/`start` padding ignores the system bars, so it tucks under the notification bar (and the gap
+  drifts between orientations). The fix: keep the canvas full-bleed but anchor the floating chrome to
+  the real insets plus a **constant** gap that is identical in both orientations —
+  `top = WindowInsets.statusBars top + topGap`, `start/end =
+  (WindowInsets.displayCutout ∪ navigationBars) side + sideSpacing` (direction-aware via
+  `calculateLeftPadding(LocalLayoutDirection.current)`). Derive dependent offsets (e.g. a header band
+  below the toolbar) from the same anchor so inter-element spacing stays constant. See the editor
+  window-insets fix (2026-06-26).
 
 ## Testing Conventions
 
@@ -1320,6 +1332,98 @@ lasso AI button shows the **logo only**.
 - New/updated tests: `SettingsRepositoryTest` (+`aiLoaderStyle`/`aiColorMode` round-trips + defaults),
   `AppearanceEnumsTest` (+FA-17 defaults/`fromName` + the seven loader numbers). The loaders, the goo
   effect, and the logo placements are device-verified.
+
+## Editor window-insets fix (2026-06-26)
+
+Small post-FA-17 UI fix on `main` (commit "UI toolbar tweaking") — no schema/test change, Compose-visual
+and device-verified on a Galaxy Tab S in both orientations. The note editor (`NoteCanvasScreen`) is a
+full-bleed `BoxWithConstraints` that ignored window insets even though the app runs `enableEdgeToEdge()`,
+so its floating chrome was pinned with hardcoded, orientation-split padding (`tabsTop` 14/28 top,
+`sidePad` 16/48 side). Result: the toolbar + title/tabs tucked under the notification bar in portrait,
+floated low in landscape, and the side gap drifted between rotations. (`LibraryScreen` was unaffected — it
+uses a `Scaffold`, which applies system-bar insets for free.)
+
+- **Chrome now anchors to real insets + a constant gap, identical in both orientations** (see the
+  edge-to-edge architectural rule above): `topGap = WindowInsets.statusBars top + N.dp`,
+  `leftPad/rightPad = (displayCutout ∪ navigationBars) side + M.dp` (direction-aware). The canvas itself
+  stays full-bleed (paper + ink still cover the whole screen, including behind the status bar). The grey
+  header band's vertical offset (`headerTop`) derives from `topGap`, so the toolbar→title spacing is
+  preserved. The two tunables are named **`topGap`** ("top gap") and **`leftPad`/`rightPad`** ("side
+  spacing") for device-feedback tweaking. As tuned on device: top gap `+0.dp`, side spacing `+14.dp` (so
+  the toolbar pods line up with the header band, which keeps its own 14dp margin).
+- **Toolbar scale is now constant `0.78×` in both orientations** (was `0.78f` portrait / `1f` landscape) —
+  landscape no longer enlarges the toolbar/icons on rotation. The `portrait` flag (formerly only used to
+  pick the scale) was removed.
+- **Opaque editor header band.** `EditorChrome.HeaderBandColor` changed from a translucent
+  `Color(0xFF262626).copy(alpha = 0.045f)` to the opaque palette token `Neutral100` (`#F2F3F3`) — same
+  apparent grey over white paper, but the paper texture (ruled lines / dots) no longer bleeds through the
+  title + tabs band.
+
+## FA-18 — prefix `/Q` trigger mode (2026-06-26)
+
+Adds a third AI activation mode alongside the suffix `/Q` command and the circle gesture: write the
+command **first** on its own line, then write the question — a pause (inactivity) signals the end and
+sends it. A listening indicator rises from the bottom of the canvas while it waits. On `main`.
+**304 app + 24 aibackend JVM/Robolectric tests pass** (0 failures; was 296+24);
+`:app:testDebugUnitTest` + `:aibackend:test` build on the WSL Linux SDK. **No schema change — DB stays
+v10** (both new prefs are DataStore). The on-canvas indicator + slide-out→hand-off transition are
+device/manual-verified like the other Compose canvas flows. Scope (indicator behaviour, `/Q`-ink
+retention, context inclusion) was confirmed with the user up front.
+
+- **`TriggerMode.PREFIX_COMMAND`** (third enum value; `fromName` handles it via `valueOf`). The
+  Settings "AI activation" selector is now three chips — **After prompt** (COMMAND) / **Before prompt**
+  (PREFIX_COMMAND) / **Circle gesture** (GESTURE) — and the validated trigger-char field is shared by
+  the two command modes.
+- **`PrefixTriggerState`** (`domain/`, in-memory only): `Idle` / `Listening(triggerStrokeIds,
+  promptStrokeIds)` / `Processing`. Exposed by `CanvasViewModel.prefixTriggerState`.
+- **`QueryTriggerDetector.isStandaloneTrigger` + `firstStandaloneTriggerCandidate`** — true only when a
+  recognized line IS the trigger and nothing else (a prompt either side makes it false). The candidate
+  form scans the top-N ML Kit guesses with the same rank cap as `firstTriggerCandidate`, so a `/Q` the
+  best guess garbled still fires.
+- **Detection scans, doesn't just check the last line.** Unlike the COMMAND path (which only recognizes
+  the last-drawn line), `CanvasViewModel.handlePrefixTrigger` (only while `Idle`) scans the recognized
+  lines for a standalone-trigger line — skipping over-long lines (`MAX_PREFIX_TRIGGER_STROKES = 6`) and
+  any line whose strokes are already in `consumedPrefixTriggerIds`. This is what makes the listening
+  indicator appear even when the user flows straight from the command into the question (the 900ms
+  detection debounce resets on every stroke, so by the time it fires the `/Q` is no longer the last
+  line). The trigger line's stroke ids are recorded (for cancel) and marked consumed so a `/Q` left on
+  the canvas (fired or abandoned) is never re-detected; anything already written below it pre-seeds the
+  prompt.
+- **The AI waits until writing has genuinely stopped (and always gets the full page context).**
+  `runPrefixQuery` recognizes the prompt strokes as the question **plus every other stroke on the page
+  as context** (the chosen behaviour — same `Handwritten question: … / Other notes on the page …`
+  envelope as the COMMAND path), placing the answer **below the question** with both the `/Q` and the
+  question ink kept (also chosen), via `submitQuery(..., bypassDedup = true)`. Two timers gate the send:
+  - an **inactivity** timer (`prefixTriggerDelayMs`, default 0.5s) restarted on each *finished* prompt
+    stroke; on fire → `Processing` → `runPrefixQuery` → back to `Idle`.
+  - **Pen-down holds off the send.** `CanvasViewModel.onWritingStarted()` (called from `InkCanvas` on the
+    pen `ACTION_DOWN`) cancels the pending inactivity job while the pen is engaged, so the timer only ever
+    elapses when the pen is **lifted and idle** — it can't fire mid-stroke or between the strokes of the
+    question, so the AI never answers on a partial question. (The earlier risk: the timer only restarted
+    on stroke *finish*, so a short delay could elapse during a long stroke / pause.)
+  - a **no-prompt** timeout (`prefixNoPromptTimeoutMs`, default 2s) started when listening begins with no
+    prompt yet: if nothing is written in time, the session is quietly abandoned and the `/Q` is **left on
+    the canvas as normal ink** (no stroke removal).
+- **Cancel (✕).** `cancelPrefixTrigger()` removes the `/Q` strokes AND everything written after them (the
+  in-progress question) as one undoable step; strokes before `/Q` (and any drawn after a finished block)
+  are untouched.
+- **Indicator + hand-off.** `NoteCanvasScreen.PrefixListeningIndicator` (bottom-centre, `AnimatedVisibility`
+  slide-in/out) shows the user's organic loader + a ✕ cancel **only while `Listening`**. When the query
+  starts (`Processing`) it slides out and the existing note-position thinking loader (driven by `aiState`)
+  takes over — the loader appears to move up to where the answer lands.
+- **Settings.** New **Long** DataStore prefs (the app's first `longPreferencesKey`s) on
+  `SettingsRepository`: `prefixTriggerDelayMs` (default 500, clamp 200–3000) and `prefixNoPromptTimeoutMs`
+  (default 2000, clamp 1000–10000), surfaced via `SettingsViewModel`. The **Before prompt** mode shows a
+  **Listening delay** slider (0.2–3.0s) and a **No-prompt timeout** slider (1–10s).
+- **DI / test seams.** `CanvasViewModel` gains nullable `prefixTriggerDelayMsFlow` /
+  `prefixNoPromptTimeoutMsFlow` constructor params (collected into vars, defaulted to 500/2000 so JVM
+  tests are deterministic with `advanceTimeBy`); the `@Inject` secondary ctor wires them from
+  `SettingsRepository`.
+- New/updated tests: `QueryTriggerDetectorTest` (+`isStandaloneTrigger` standalone/suffix/empty/custom,
+  `firstStandaloneTriggerCandidate` recovery), `CanvasViewModelAiTest` (+standalone `/Q` → Listening,
+  prompt-tracking + inactivity fires the query, **pen-down holds the send until writing finishes**, cancel
+  removes trigger+prompt but not earlier ink, 2s no-prompt timeout leaves the ink), `SettingsRepositoryTest`
+  (+both Long prefs: defaults, round-trip, clamp). The indicator/slider Compose visuals are device-verified.
 
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 

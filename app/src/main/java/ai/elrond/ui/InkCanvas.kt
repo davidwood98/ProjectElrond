@@ -218,6 +218,9 @@ private fun createTouchListener(
                         viewModel.beginEraseGesture() // one undo step per gesture
                         viewModel.eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
                     } else {
+                        // Pen down: hold off any prefix-/Q inactivity send until this stroke finishes,
+                        // so the AI never answers mid-writing (and always gets the full question).
+                        viewModel.onWritingStarted()
                         currentStrokeId =
                             inProgressStrokesView.startStroke(event, pointerId, viewModel.penBrush)
                     }

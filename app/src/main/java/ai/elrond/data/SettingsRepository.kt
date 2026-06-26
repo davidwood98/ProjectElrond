@@ -14,6 +14,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -47,6 +48,43 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setTriggerMode(mode: TriggerMode) {
         context.settingsDataStore.edit { it[TRIGGER_MODE_KEY] = mode.name }
+    }
+
+    /**
+     * Prefix-mode ([TriggerMode.PREFIX_COMMAND]) inactivity delay (ms): how long the canvas waits
+     * after the last prompt stroke before sending the question. Clamped to
+     * [[MIN_PREFIX_TRIGGER_DELAY_MS], [MAX_PREFIX_TRIGGER_DELAY_MS]]; default
+     * [DEFAULT_PREFIX_TRIGGER_DELAY_MS].
+     */
+    val prefixTriggerDelayMs: Flow<Long> = context.settingsDataStore.data
+        .map {
+            (it[PREFIX_TRIGGER_DELAY_KEY] ?: DEFAULT_PREFIX_TRIGGER_DELAY_MS)
+                .coerceIn(MIN_PREFIX_TRIGGER_DELAY_MS, MAX_PREFIX_TRIGGER_DELAY_MS)
+        }
+
+    suspend fun setPrefixTriggerDelayMs(ms: Long) {
+        context.settingsDataStore.edit {
+            it[PREFIX_TRIGGER_DELAY_KEY] = ms.coerceIn(MIN_PREFIX_TRIGGER_DELAY_MS, MAX_PREFIX_TRIGGER_DELAY_MS)
+        }
+    }
+
+    /**
+     * Prefix-mode no-prompt timeout (ms): if nothing is written after the command within this
+     * window, the listening session is quietly cancelled and the command is left as normal ink.
+     * Clamped to [[MIN_PREFIX_NO_PROMPT_TIMEOUT_MS], [MAX_PREFIX_NO_PROMPT_TIMEOUT_MS]]; default
+     * [DEFAULT_PREFIX_NO_PROMPT_TIMEOUT_MS].
+     */
+    val prefixNoPromptTimeoutMs: Flow<Long> = context.settingsDataStore.data
+        .map {
+            (it[PREFIX_NO_PROMPT_TIMEOUT_KEY] ?: DEFAULT_PREFIX_NO_PROMPT_TIMEOUT_MS)
+                .coerceIn(MIN_PREFIX_NO_PROMPT_TIMEOUT_MS, MAX_PREFIX_NO_PROMPT_TIMEOUT_MS)
+        }
+
+    suspend fun setPrefixNoPromptTimeoutMs(ms: Long) {
+        context.settingsDataStore.edit {
+            it[PREFIX_NO_PROMPT_TIMEOUT_KEY] =
+                ms.coerceIn(MIN_PREFIX_NO_PROMPT_TIMEOUT_MS, MAX_PREFIX_NO_PROMPT_TIMEOUT_MS)
+        }
     }
 
     /** Palm rejection: when true (default), finger touches never draw ink. */
@@ -253,8 +291,20 @@ class SettingsRepository(private val context: Context) {
         const val DEFAULT_LASSO_SNAP_BACK_THRESHOLD = 0.025f
         const val MAX_LASSO_SNAP_BACK_THRESHOLD = 0.10f
         const val DEFAULT_LASSO_SNAP_BACK_ENABLED = true
+
+        /** Prefix-mode inactivity delay: default 0.5s, clamped to 0.2–3.0s. */
+        const val DEFAULT_PREFIX_TRIGGER_DELAY_MS = 500L
+        const val MIN_PREFIX_TRIGGER_DELAY_MS = 200L
+        const val MAX_PREFIX_TRIGGER_DELAY_MS = 3_000L
+
+        /** Prefix-mode no-prompt timeout: default 2s, clamped to 1–10s. */
+        const val DEFAULT_PREFIX_NO_PROMPT_TIMEOUT_MS = 2_000L
+        const val MIN_PREFIX_NO_PROMPT_TIMEOUT_MS = 1_000L
+        const val MAX_PREFIX_NO_PROMPT_TIMEOUT_MS = 10_000L
         private val TRIGGER_KEY = stringPreferencesKey("trigger_command")
         private val TRIGGER_MODE_KEY = stringPreferencesKey("trigger_mode")
+        private val PREFIX_TRIGGER_DELAY_KEY = longPreferencesKey("prefix_trigger_delay_ms")
+        private val PREFIX_NO_PROMPT_TIMEOUT_KEY = longPreferencesKey("prefix_no_prompt_timeout_ms")
         private val STYLUS_ONLY_KEY = booleanPreferencesKey("stylus_only")
         private val TOOL_TREATMENT_KEY = stringPreferencesKey("tool_selected_treatment")
         private val PEN_ICON_STYLE_KEY = stringPreferencesKey("pen_icon_style")

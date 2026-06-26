@@ -102,6 +102,38 @@ class QueryTriggerDetectorTest {
     }
 
     @Test
+    fun `isStandaloneTrigger is true only for the trigger alone`() {
+        assertTrue(QueryTriggerDetector.isStandaloneTrigger("/Q"))
+        assertTrue(QueryTriggerDetector.isStandaloneTrigger("  /q  "))
+        assertTrue(QueryTriggerDetector.isStandaloneTrigger("""\Q"""))
+        // A prompt after the trigger (the suffix form is not standalone).
+        assertFalse(QueryTriggerDetector.isStandaloneTrigger("/Q why is the sky blue"))
+        // A prompt before the trigger (a normal suffix trigger).
+        assertFalse(QueryTriggerDetector.isStandaloneTrigger("why is the sky blue /Q"))
+        assertFalse(QueryTriggerDetector.isStandaloneTrigger(""))
+        assertFalse(QueryTriggerDetector.isStandaloneTrigger("just notes"))
+    }
+
+    @Test
+    fun `isStandaloneTrigger honours a custom trigger`() {
+        assertTrue(QueryTriggerDetector.isStandaloneTrigger(">Q", trigger = ">Q"))
+        assertTrue(QueryTriggerDetector.isStandaloneTrigger("  >q ", trigger = ">Q"))
+        assertFalse(QueryTriggerDetector.isStandaloneTrigger("ask >Q", trigger = ">Q"))
+        // The default /Q must not count as standalone when a custom trigger is configured.
+        assertFalse(QueryTriggerDetector.isStandaloneTrigger("/Q", trigger = ">Q"))
+    }
+
+    @Test
+    fun `firstStandaloneTriggerCandidate recovers a standalone trigger the top guess missed`() {
+        assertEquals(
+            "/Q",
+            QueryTriggerDetector.firstStandaloneTriggerCandidate(listOf("10", "/Q")),
+        )
+        // A candidate that is a suffix trigger (prompt before it) is not standalone.
+        assertNull(QueryTriggerDetector.firstStandaloneTriggerCandidate(listOf("hello /Q", "more")))
+    }
+
+    @Test
     fun `firstTriggerCandidate ignores low-confidence candidates past the rank cap`() {
         // The trigger only appears in a deep, low-confidence candidate — must not fire.
         val candidates = listOf("aaa", "bbb", "ccc", "ddd", "eee", "real question /Q")

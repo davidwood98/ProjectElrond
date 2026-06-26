@@ -50,6 +50,30 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { repository.setTriggerMode(mode) }
     }
 
+    /** Prefix-mode inactivity delay (ms) before the question is sent (default 500). */
+    val prefixTriggerDelayMs: StateFlow<Long> = repository.prefixTriggerDelayMs
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_PREFIX_TRIGGER_DELAY_MS,
+        )
+
+    fun setPrefixTriggerDelayMs(ms: Long) {
+        viewModelScope.launch { repository.setPrefixTriggerDelayMs(ms) }
+    }
+
+    /** Prefix-mode no-prompt timeout (ms) before an abandoned command reverts to ink (default 2000). */
+    val prefixNoPromptTimeoutMs: StateFlow<Long> = repository.prefixNoPromptTimeoutMs
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_PREFIX_NO_PROMPT_TIMEOUT_MS,
+        )
+
+    fun setPrefixNoPromptTimeoutMs(ms: Long) {
+        viewModelScope.launch { repository.setPrefixNoPromptTimeoutMs(ms) }
+    }
+
     /** Palm rejection: when true (default), finger touches never draw. */
     val stylusOnly: StateFlow<Boolean> = repository.stylusOnly
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_STYLUS_ONLY)

@@ -16,6 +16,7 @@ import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.MlKitHandwritingRecognizer
 import ai.elrond.domain.NotePosition
+import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.QueryTriggerDetector
 import ai.elrond.domain.TriggerMode
 import ai.elrond.domain.defaultAiNotePosition
@@ -121,6 +122,10 @@ class CanvasViewModel(
     /** Axis-aligned bounds of a stroke (lasso tool). Injected so JVM tests use a fake. */
     private val strokeBoundsOf: (Stroke) -> SelectionBounds = StrokeTransforms::strokeBounds,
     triggerModeFlow: Flow<TriggerMode>? = null,
+    /** Prefix-mode inactivity delay (ms) before the question fires; null keeps the default. */
+    prefixTriggerDelayMsFlow: Flow<Long>? = null,
+    /** Prefix-mode no-prompt timeout (ms) before an abandoned command reverts; null keeps default. */
+    prefixNoPromptTimeoutMsFlow: Flow<Long>? = null,
     stylusOnlyFlow: Flow<Boolean>? = null,
     /** Lasso-move snap-back threshold (fraction of canvas size); null keeps the default. */
     lassoSnapBackThresholdFlow: Flow<Float>? = null,
@@ -172,6 +177,8 @@ class CanvasViewModel(
         enqueueExtraction = enqueueExtraction,
         triggerCommandFlow = settings.triggerCommand,
         triggerModeFlow = settings.triggerMode,
+        prefixTriggerDelayMsFlow = settings.prefixTriggerDelayMs,
+        prefixNoPromptTimeoutMsFlow = settings.prefixNoPromptTimeoutMs,
         stylusOnlyFlow = settings.stylusOnly,
         lassoSnapBackThresholdFlow = settings.lassoSnapBackThreshold,
         lassoSnapBackEnabledFlow = settings.lassoSnapBackEnabled,
@@ -317,12 +324,45 @@ class CanvasViewModel(
     @Volatile
     private var triggerMode: TriggerMode = TriggerMode.COMMAND
 
+    // ── Prefix `/Q` activation (TriggerMode.PREFIX_COMMAND) ───────────────────────────────────
+
+    /** Listening state for prefix-mode `/Q`; drives the bottom-of-canvas listening indicator. */
+    private val _prefixTriggerState = MutableStateFlow<PrefixTriggerState>(PrefixTriggerState.Idle)
+    val prefixTriggerState: StateFlow<PrefixTriggerState> = _prefixTriggerState.asStateFlow()
+
+    /** Restarted on each prompt stroke; fires the query once the user pauses. */
+    private var prefixInactivityJob: Job? = null
+
+    /** Started when listening begins; cancels the session if no prompt is written in time. */
+    private var prefixNoPromptJob: Job? = null
+
+    /**
+     * Stroke ids of `/Q` lines already used to start a listening session, so a detected trigger
+     * that stays on the canvas (fired or abandoned) is never re-detected on a later stroke (the
+     * scan re-reads all lines, unlike the last-line-only COMMAND path).
+     */
+    private val consumedPrefixTriggerIds = mutableSetOf<String>()
+
+    /** Prefix-mode inactivity delay (ms), kept in sync with settings. */
+    @Volatile
+    private var prefixTriggerDelayMs: Long = SettingsRepository.DEFAULT_PREFIX_TRIGGER_DELAY_MS
+
+    /** Prefix-mode no-prompt timeout (ms), kept in sync with settings. */
+    @Volatile
+    private var prefixNoPromptTimeoutMs: Long = SettingsRepository.DEFAULT_PREFIX_NO_PROMPT_TIMEOUT_MS
+
     init {
         triggerCommandFlow?.let { flow ->
             viewModelScope.launch { flow.collect { triggerCommand = it } }
         }
         triggerModeFlow?.let { flow ->
             viewModelScope.launch { flow.collect { triggerMode = it } }
+        }
+        prefixTriggerDelayMsFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { prefixTriggerDelayMs = it } }
+        }
+        prefixNoPromptTimeoutMsFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { prefixNoPromptTimeoutMs = it } }
         }
         stylusOnlyFlow?.let { flow ->
             viewModelScope.launch { flow.collect { _stylusOnly.value = it } }
@@ -507,8 +547,33 @@ class CanvasViewModel(
         clearSelection() // a fresh pen stroke isn't part of any lasso selection
         contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
         thumbnailDirty = true // ink changed — the note-card thumbnail is now stale
-        _finishedStrokes.update { current -> current + strokes.map { CanvasStroke(newStrokeId(), it) } }
+        val newStrokes = strokes.map { CanvasStroke(newStrokeId(), it) }
+        _finishedStrokes.update { current -> current + newStrokes }
+
+        // Prefix `/Q`: while listening, every new stroke is part of the question — track its id and
+        // restart the inactivity timer (don't run the trigger detector; the timer drives the send).
+        val listening = _prefixTriggerState.value
+        if (listening is PrefixTriggerState.Listening) {
+            _prefixTriggerState.value =
+                listening.copy(promptStrokeIds = listening.promptStrokeIds + newStrokes.map { it.id })
+            prefixNoPromptJob?.cancel() // a prompt stroke arrived — the no-prompt window is moot
+            resetPrefixInactivityTimer()
+            return
+        }
         scheduleTriggerDetection()
+    }
+
+    /**
+     * Called when the pen touches down to begin a stroke. During prefix `/Q` listening this holds
+     * off the inactivity send: the timer only restarts once the stroke *finishes*
+     * ([onStrokesFinished]), so it can never elapse while the pen is mid-stroke or paused between
+     * the strokes of the question — the AI waits until writing has genuinely stopped (and so always
+     * sees the whole question plus the page context).
+     */
+    fun onWritingStarted() {
+        if (_prefixTriggerState.value is PrefixTriggerState.Listening) {
+            prefixInactivityJob?.cancel()
+        }
     }
 
     /** Marks the start of an eraser gesture so all its removals undo as one step. */
@@ -554,6 +619,7 @@ class CanvasViewModel(
 
     fun clearPage() {
         triggerDetectionJob?.cancel()
+        cancelPrefixListening()
         if (_finishedStrokes.value.isNotEmpty()) {
             pushUndoSnapshot(_finishedStrokes.value)
         }
@@ -563,6 +629,16 @@ class CanvasViewModel(
         lastHandledPrompt = null
         clearSelection()
         clearClipboard()
+    }
+
+    /** Stops any prefix-listening session and its timers (no stroke removal); resets to Idle. */
+    private fun cancelPrefixListening() {
+        prefixInactivityJob?.cancel()
+        prefixNoPromptJob?.cancel()
+        consumedPrefixTriggerIds.clear()
+        if (_prefixTriggerState.value != PrefixTriggerState.Idle) {
+            _prefixTriggerState.value = PrefixTriggerState.Idle
+        }
     }
 
     fun dismissAiResponse() {
@@ -862,6 +938,7 @@ class CanvasViewModel(
 
         when (triggerMode) {
             TriggerMode.COMMAND -> handleCommandTrigger(recognizer, strokes, lines)
+            TriggerMode.PREFIX_COMMAND -> handlePrefixTrigger(recognizer, strokes, lines)
             TriggerMode.GESTURE -> handleGestureTrigger(recognizer, strokes)
         }
     }
@@ -938,6 +1015,134 @@ class CanvasViewModel(
         // A lasso is a deliberate, explicit request (like pressing a button): re-circling the
         // same selection must always re-run, so it bypasses the unchanged-content de-dupe guard.
         submitQuery(question, question, notePlacer(enclosed), bypassDedup = true)
+    }
+
+    /**
+     * Prefix activation (`/Q` first, then the question). While [PrefixTriggerState.Idle], scans the
+     * recognized lines for a line that is the trigger and nothing else, ignoring lines already
+     * consumed by an earlier session. When found, it enters [PrefixTriggerState.Listening]: the
+     * trigger line's strokes are recorded for cancel, any strokes already written below it pre-seed
+     * the prompt, and the inactivity / no-prompt timer begins. No query is sent yet — the inactivity
+     * timer ([firePrefixQuery]) does that once the user pauses.
+     *
+     * (Scans all lines, not just the last-drawn one like [handleCommandTrigger], so the listening
+     * indicator appears even when the user flows straight from the command into the question.)
+     */
+    private suspend fun handlePrefixTrigger(
+        recognizer: HandwritingRecognizer,
+        strokes: List<Stroke>,
+        lines: List<List<Stroke>>,
+    ) {
+        if (_prefixTriggerState.value !is PrefixTriggerState.Idle) return
+
+        // Map each Stroke back to its CanvasStroke id (identity — strokes have no value equality).
+        val idByStroke = java.util.IdentityHashMap<Stroke, String>()
+        _finishedStrokes.value.forEach { idByStroke[it.stroke] = it.id }
+        fun lineIds(line: List<Stroke>): List<String> = line.mapNotNull { idByStroke[it] }
+
+        val trigger = triggerCommand
+        var triggerIndex = -1
+        for (i in lines.indices) {
+            // A standalone trigger is tiny; skip long content lines so the scan stays cheap.
+            if (lines[i].size > MAX_PREFIX_TRIGGER_STROKES) continue
+            val ids = lineIds(lines[i])
+            if (ids.isEmpty() || ids.all { it in consumedPrefixTriggerIds }) continue
+            val candidates = recognizer.recognizeCandidates(lines[i]).getOrNull().orEmpty().map { it.text }
+            if (QueryTriggerDetector.firstStandaloneTriggerCandidate(candidates, trigger) != null) {
+                triggerIndex = i
+                break
+            }
+        }
+        if (triggerIndex < 0) return
+
+        val triggerIds = lineIds(lines[triggerIndex])
+        // Anything already written below the command is the start of the question.
+        val promptIds = lines.drop(triggerIndex + 1).flatMap { lineIds(it) }
+        consumedPrefixTriggerIds.addAll(triggerIds)
+        _prefixTriggerState.value = PrefixTriggerState.Listening(triggerIds, promptIds)
+        if (promptIds.isEmpty()) startPrefixNoPromptTimer() else resetPrefixInactivityTimer()
+    }
+
+    /** (Re)starts the inactivity countdown; firing sends the prompt written so far. */
+    private fun resetPrefixInactivityTimer() {
+        prefixInactivityJob?.cancel()
+        if (_prefixTriggerState.value !is PrefixTriggerState.Listening) return
+        prefixInactivityJob = viewModelScope.launch {
+            delay(prefixTriggerDelayMs)
+            firePrefixQuery()
+        }
+    }
+
+    /** Starts the no-prompt timeout: if nothing is written in time, abandon (leave the ink). */
+    private fun startPrefixNoPromptTimer() {
+        prefixNoPromptJob?.cancel()
+        prefixNoPromptJob = viewModelScope.launch {
+            delay(prefixNoPromptTimeoutMs)
+            val state = _prefixTriggerState.value
+            // No question was written — quietly cancel and leave the `/Q` on the canvas as ink.
+            if (state is PrefixTriggerState.Listening && state.promptStrokeIds.isEmpty()) {
+                _prefixTriggerState.value = PrefixTriggerState.Idle
+            }
+        }
+    }
+
+    /** Inactivity fired: move to Processing and send the recognized question (+ page context). */
+    private fun firePrefixQuery() {
+        val state = _prefixTriggerState.value as? PrefixTriggerState.Listening ?: return
+        if (state.promptStrokeIds.isEmpty()) return
+        prefixInactivityJob?.cancel()
+        prefixNoPromptJob?.cancel()
+        _prefixTriggerState.value = PrefixTriggerState.Processing
+        viewModelScope.launch {
+            runCatching { runPrefixQuery(state) }
+            _prefixTriggerState.value = PrefixTriggerState.Idle
+        }
+    }
+
+    /** Recognizes the prompt strokes as the question + the rest of the page as context, then asks. */
+    private suspend fun runPrefixQuery(state: PrefixTriggerState.Listening) {
+        val recognizer = recognizer ?: return
+        val byId = _finishedStrokes.value.associateBy { it.id }
+        val promptStrokes = state.promptStrokeIds.mapNotNull { byId[it]?.stroke }
+        if (promptStrokes.isEmpty()) return
+
+        val question = lineSplitter(promptStrokes)
+            .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
+            .joinToString(" ")
+            .ifBlank { null } ?: return
+
+        // The command line and the question itself aside, the rest of the page goes along as context.
+        val excludedIds = (state.triggerStrokeIds + state.promptStrokeIds).toSet()
+        val contextStrokes = _finishedStrokes.value.filterNot { it.id in excludedIds }.map { it.stroke }
+        val context = lineSplitter(contextStrokes)
+            .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
+            .joinToString("\n")
+
+        val userPrompt = if (context.isBlank()) {
+            question
+        } else {
+            "Handwritten question: $question\n\n" +
+                "Other notes on the page (context, may be unrelated):\n$context"
+        }
+        // The answer lands below the question; a deliberate trigger bypasses the de-dupe guard.
+        submitQuery(question, userPrompt, notePlacer(promptStrokes), bypassDedup = true)
+    }
+
+    /**
+     * The listening indicator's ✕: cancels the session and removes the `/Q` strokes AND everything
+     * written after it (the in-progress question). Strokes before `/Q`, and any drawn after the
+     * cancelled block, are untouched. Only callable while [PrefixTriggerState.Listening].
+     */
+    fun cancelPrefixTrigger() {
+        val state = _prefixTriggerState.value as? PrefixTriggerState.Listening ?: return
+        prefixInactivityJob?.cancel()
+        prefixNoPromptJob?.cancel()
+        val idsToRemove = (state.triggerStrokeIds + state.promptStrokeIds).toSet()
+        if (idsToRemove.isNotEmpty()) {
+            pushUndoSnapshot(_finishedStrokes.value) // make the removal undoable
+            _finishedStrokes.update { current -> current.filterNot { it.id in idsToRemove } }
+        }
+        _prefixTriggerState.value = PrefixTriggerState.Idle
     }
 
     /**
@@ -1263,6 +1468,9 @@ class CanvasViewModel(
         const val BRUSH_EPSILON: Float = 0.1f
         const val ERASER_RADIUS: Float = 16f
         const val TRIGGER_DEBOUNCE_MILLIS: Long = 900L
+
+        /** Max strokes a line may have and still be scanned as a possible standalone prefix `/Q`. */
+        const val MAX_PREFIX_TRIGGER_STROKES: Int = 6
         const val AUTOSAVE_DEBOUNCE_MILLIS: Long = 800L
         const val REQUEST_TIMEOUT_MILLIS: Long = 15_000L
         const val MAX_HISTORY: Int = 50

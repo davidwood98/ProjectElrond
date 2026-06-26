@@ -80,6 +80,8 @@ fun SettingsScreen(
 ) {
     val trigger by viewModel.triggerCommand.collectAsStateWithLifecycle()
     val triggerMode by viewModel.triggerMode.collectAsStateWithLifecycle()
+    val prefixDelayMs by viewModel.prefixTriggerDelayMs.collectAsStateWithLifecycle()
+    val prefixTimeoutMs by viewModel.prefixNoPromptTimeoutMs.collectAsStateWithLifecycle()
     val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
     val toolTreatment by viewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
     val aiSelectedOnCreate by viewModel.aiNoteSelectedOnCreate.collectAsStateWithLifecycle()
@@ -100,6 +102,9 @@ fun SettingsScreen(
     // Local slider position, re-seeded whenever the persisted threshold changes (e.g. when toggling
     // snap-back on restores the default); persisted on release via onValueChangeFinished.
     var snapBackPos by remember(snapBackThreshold) { mutableStateOf(snapBackThreshold) }
+    // Prefix-mode slider positions in seconds, re-seeded from the persisted ms; saved on release.
+    var prefixDelayPos by remember(prefixDelayMs) { mutableStateOf(prefixDelayMs / 1000f) }
+    var prefixTimeoutPos by remember(prefixTimeoutMs) { mutableStateOf(prefixTimeoutMs / 1000f) }
     val tooLong = draft.trim().length > SettingsRepository.MAX_TRIGGER_LENGTH
     val empty = draft.isBlank()
     val effectiveTrigger = if (!empty && !tooLong) draft.trim() else trigger
@@ -131,11 +136,23 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Save the trigger command on edit, when valid, so it takes effect on the next note.
+            val onTriggerChange: (String) -> Unit = { new ->
+                draft = new
+                if (new.isNotBlank() && new.trim().length <= SettingsRepository.MAX_TRIGGER_LENGTH) {
+                    viewModel.setTriggerCommand(new)
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = triggerMode == TriggerMode.COMMAND,
                     onClick = { viewModel.setTriggerMode(TriggerMode.COMMAND) },
-                    label = { Text("Written command") },
+                    label = { Text("After prompt") },
+                )
+                FilterChip(
+                    selected = triggerMode == TriggerMode.PREFIX_COMMAND,
+                    onClick = { viewModel.setTriggerMode(TriggerMode.PREFIX_COMMAND) },
+                    label = { Text("Before prompt") },
                 )
                 FilterChip(
                     selected = triggerMode == TriggerMode.GESTURE,
@@ -152,31 +169,62 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { new ->
-                            draft = new
-                            // Save immediately when valid so it takes effect on the next note opened.
-                            if (new.isNotBlank() &&
-                                new.trim().length <= SettingsRepository.MAX_TRIGGER_LENGTH
-                            ) {
-                                viewModel.setTriggerCommand(new)
-                            }
-                        },
-                        singleLine = true,
-                        isError = tooLong || empty,
-                        label = { Text("Trigger command") },
-                        supportingText = {
-                            when {
-                                empty -> Text("Cannot be empty")
-                                tooLong -> Text(
-                                    "Too long — max ${SettingsRepository.MAX_TRIGGER_LENGTH} characters",
-                                )
-                                else -> Text("Saved")
-                            }
-                        },
-                    )
+                    TriggerCommandField(draft, empty, tooLong, onTriggerChange)
                     TriggerPreview("What's the capital of France?  $effectiveTrigger")
+                }
+
+                TriggerMode.PREFIX_COMMAND -> {
+                    Text(
+                        "Write the command first on its own line, then write your question. When " +
+                            "you stop writing, the AI reads everything after the command. Max " +
+                            "${SettingsRepository.MAX_TRIGGER_LENGTH} characters.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TriggerCommandField(draft, empty, tooLong, onTriggerChange)
+                    TriggerPreview("$effectiveTrigger  →  What's the capital of France?")
+
+                    Text(
+                        "Listening delay: ${formatSeconds(prefixDelayPos)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Text(
+                        "How long to wait after you stop writing before sending the question.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Slider(
+                        value = prefixDelayPos,
+                        onValueChange = { prefixDelayPos = it },
+                        onValueChangeFinished = {
+                            viewModel.setPrefixTriggerDelayMs((prefixDelayPos * 1000f).toLong())
+                        },
+                        valueRange = SettingsRepository.MIN_PREFIX_TRIGGER_DELAY_MS / 1000f ..
+                            SettingsRepository.MAX_PREFIX_TRIGGER_DELAY_MS / 1000f,
+                        steps = PREFIX_DELAY_SLIDER_STEPS,
+                    )
+
+                    Text(
+                        "No-prompt timeout: ${formatSeconds(prefixTimeoutPos)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Text(
+                        "If you write the command but nothing after it, cancel and leave it as ink.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Slider(
+                        value = prefixTimeoutPos,
+                        onValueChange = { prefixTimeoutPos = it },
+                        onValueChangeFinished = {
+                            viewModel.setPrefixNoPromptTimeoutMs((prefixTimeoutPos * 1000f).toLong())
+                        },
+                        valueRange = SettingsRepository.MIN_PREFIX_NO_PROMPT_TIMEOUT_MS / 1000f ..
+                            SettingsRepository.MAX_PREFIX_NO_PROMPT_TIMEOUT_MS / 1000f,
+                        steps = PREFIX_TIMEOUT_SLIDER_STEPS,
+                    )
                 }
 
                 TriggerMode.GESTURE -> {
@@ -469,6 +517,30 @@ fun SettingsScreen(
     }
 }
 
+/** The validated activation-command text field, shared by the After-prompt and Before-prompt modes. */
+@Composable
+private fun TriggerCommandField(
+    draft: String,
+    empty: Boolean,
+    tooLong: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = draft,
+        onValueChange = onValueChange,
+        singleLine = true,
+        isError = tooLong || empty,
+        label = { Text("Trigger command") },
+        supportingText = {
+            when {
+                empty -> Text("Cannot be empty")
+                tooLong -> Text("Too long — max ${SettingsRepository.MAX_TRIGGER_LENGTH} characters")
+                else -> Text("Saved")
+            }
+        },
+    )
+}
+
 /** A small "this is what you write/draw" example box for the activation section. */
 @Composable
 private fun TriggerPreview(example: String) {
@@ -740,6 +812,9 @@ private fun SettingRow(
 /** "2.5%" for a 0–1 fraction (one decimal). */
 private fun formatPercent(fraction: Float): String = "${"%.1f".format(fraction * 100f)}%"
 
+/** "0.5s" for a seconds value (one decimal). */
+private fun formatSeconds(seconds: Float): String = "${"%.1f".format(seconds)}s"
+
 /**
  * A feel-test for the snap-back threshold: an origin dot at the centre, a dashed ring at the snap
  * radius ([threshold] × the box width), and a draggable dot that snaps back to the centre when
@@ -810,3 +885,9 @@ private fun SnapBackPreview(threshold: Float, enabled: Boolean) {
 /** Discrete slider stops for 0–10% in 0.5% steps (21 values → 19 between the endpoints). */
 private const val SNAP_BACK_SLIDER_STEPS = 19
 private const val SNAP_BACK_PREVIEW_DP = 160
+
+/** Prefix listening delay: 0.2–3.0s in 0.1s steps (29 values → 27 between the endpoints). */
+private const val PREFIX_DELAY_SLIDER_STEPS = 27
+
+/** Prefix no-prompt timeout: 1–10s in 0.5s steps (19 values → 17 between the endpoints). */
+private const val PREFIX_TIMEOUT_SLIDER_STEPS = 17

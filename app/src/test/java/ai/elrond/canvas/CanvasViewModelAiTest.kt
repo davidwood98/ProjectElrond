@@ -5,6 +5,7 @@ import ai.elrond.presentation.AiUiState
 import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.RecognitionCandidate
+import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.TriggerMode
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
@@ -481,6 +482,169 @@ class CanvasViewModelAiTest {
         advanceUntilIdle()
 
         assertEquals(1, recognizer.warmUpCount)
+    }
+
+    // ── Prefix `/Q` activation (TriggerMode.PREFIX_COMMAND) ─────────────────────────────────────
+
+    /** Each stroke is its own handwriting line (so the prefix scan sees per-stroke lines). */
+    private val perStrokeLines: (List<Stroke>) -> List<List<Stroke>> = { it.map { s -> listOf(s) } }
+
+    private fun prefixViewModel(
+        recognizer: HandwritingRecognizer,
+        provider: AIProvider?,
+    ) = CanvasViewModel(
+        recognizer = recognizer,
+        aiProvider = provider,
+        lineSplitter = perStrokeLines,
+        notePlacer = fixedPlacement,
+        triggerModeFlow = kotlinx.coroutines.flow.flowOf(TriggerMode.PREFIX_COMMAND),
+    )
+
+    /** Recognizer whose recognize + candidates both come from one per-line text mapping. */
+    private fun prefixRecognizer(text: (List<Stroke>) -> String): FakeRecognizer =
+        FakeRecognizer(text).apply { candidatesFor = { listOf(text(it)) } }
+
+    @Test
+    fun `standalone prefix trigger enters the listening state`() = runTest(dispatcher) {
+        val q = mockk<Stroke>()
+        val vm = prefixViewModel(
+            prefixRecognizer { line -> if (line.any { it === q }) "/Q" else "notes" },
+            FakeProvider("ok"),
+        )
+
+        vm.onStrokesFinished(listOf(q))
+        advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+        runCurrent()
+
+        assertTrue(vm.prefixTriggerState.value is PrefixTriggerState.Listening)
+    }
+
+    @Test
+    fun `prompt strokes are tracked and inactivity fires the query`() = runTest(dispatcher) {
+        val q = mockk<Stroke>()
+        val p = mockk<Stroke>()
+        val provider = FakeProvider("4")
+        val vm = prefixViewModel(
+            prefixRecognizer { line ->
+                when {
+                    line.any { it === q } -> "/Q"
+                    line.any { it === p } -> "what is 2+2"
+                    else -> "notes"
+                }
+            },
+            provider,
+        )
+
+        vm.onStrokesFinished(listOf(q))
+        advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+        runCurrent() // Listening, no prompt yet
+
+        vm.onStrokesFinished(listOf(p))
+        runCurrent() // the prompt stroke is appended; the inactivity timer (re)starts
+        val listening = vm.prefixTriggerState.value as PrefixTriggerState.Listening
+        assertEquals(1, listening.promptStrokeIds.size)
+
+        advanceUntilIdle() // inactivity fires → recognize → submitQuery → back to Idle
+        assertEquals(1, provider.prompts.size)
+        assertTrue(provider.prompts.single().contains("what is 2+2"))
+        assertTrue(vm.prefixTriggerState.value is PrefixTriggerState.Idle)
+    }
+
+    @Test
+    fun `pen-down during listening holds off the send until writing finishes`() = runTest(dispatcher) {
+        val q = mockk<Stroke>()
+        val p1 = mockk<Stroke>()
+        val p2 = mockk<Stroke>()
+        val provider = FakeProvider("answer")
+        val vm = prefixViewModel(
+            prefixRecognizer { line ->
+                when {
+                    line.any { it === q } -> "/Q"
+                    line.any { it === p1 } -> "what is"
+                    line.any { it === p2 } -> "my name"
+                    else -> "notes"
+                }
+            },
+            provider,
+        )
+
+        vm.onStrokesFinished(listOf(q))
+        advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+        runCurrent() // Listening
+
+        vm.onStrokesFinished(listOf(p1))
+        runCurrent() // first question stroke; inactivity timer running
+
+        // Pen comes down for the next stroke before the inactivity delay elapses: the send is held.
+        vm.onWritingStarted()
+        advanceTimeBy(5_000L) // well past the inactivity delay
+        runCurrent()
+        assertTrue("must not fire while still writing", provider.prompts.isEmpty())
+        assertTrue(vm.prefixTriggerState.value is PrefixTriggerState.Listening)
+
+        // Writing finishes (pen up) → timer restarts → fires once idle.
+        vm.onStrokesFinished(listOf(p2))
+        advanceUntilIdle()
+        assertEquals(1, provider.prompts.size)
+        assertTrue(provider.prompts.single().contains("what is my name"))
+        assertTrue(vm.prefixTriggerState.value is PrefixTriggerState.Idle)
+    }
+
+    @Test
+    fun `cancel removes the trigger and prompt strokes but not earlier ink`() = runTest(dispatcher) {
+        val earlier = mockk<Stroke>()
+        val q = mockk<Stroke>()
+        val p = mockk<Stroke>()
+        val vm = prefixViewModel(
+            prefixRecognizer { line ->
+                when {
+                    line.any { it === q } -> "/Q"
+                    line.any { it === p } -> "the question"
+                    else -> "earlier notes"
+                }
+            },
+            FakeProvider("ok"),
+        )
+
+        // Pre-existing ink that is NOT the trigger: detection finds no standalone /Q, stays Idle.
+        vm.onStrokesFinished(listOf(earlier))
+        advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+        runCurrent()
+        assertTrue(vm.prefixTriggerState.value is PrefixTriggerState.Idle)
+
+        // Then the prefix command, then a question stroke.
+        vm.onStrokesFinished(listOf(q))
+        advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+        runCurrent()
+        vm.onStrokesFinished(listOf(p))
+        runCurrent()
+
+        vm.cancelPrefixTrigger()
+
+        // Only the pre-/Q ink survives; the trigger + question strokes are gone.
+        assertEquals(listOf(earlier), vm.finishedStrokes.value.map { it.stroke })
+        assertTrue(vm.prefixTriggerState.value is PrefixTriggerState.Idle)
+    }
+
+    @Test
+    fun `no-prompt timeout leaves the command on the canvas as ink`() = runTest(dispatcher) {
+        val q = mockk<Stroke>()
+        val vm = prefixViewModel(
+            prefixRecognizer { line -> if (line.any { it === q }) "/Q" else "notes" },
+            FakeProvider("ok"),
+        )
+
+        vm.onStrokesFinished(listOf(q))
+        advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+        runCurrent()
+        assertTrue(vm.prefixTriggerState.value is PrefixTriggerState.Listening)
+
+        // No question written before the 2s default timeout → quietly cancel, leaving the /Q ink.
+        advanceTimeBy(2_001L)
+        runCurrent()
+
+        assertTrue(vm.prefixTriggerState.value is PrefixTriggerState.Idle)
+        assertEquals(listOf(q), vm.finishedStrokes.value.map { it.stroke })
     }
 
     @Test
