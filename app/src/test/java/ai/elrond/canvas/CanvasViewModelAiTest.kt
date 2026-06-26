@@ -24,6 +24,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -289,6 +290,26 @@ class CanvasViewModelAiTest {
 
         assertTrue("the original error note is dismissed", viewModel.aiNotes.value.none { it.id == errorId })
         assertTrue("the edited prompt is sent", provider.prompts.any { it.contains("capital of France") })
+    }
+
+    @Test
+    fun `a re-sent prompt that is still unclear does not offer another guess`() = runTest(dispatcher) {
+        // The model keeps replying unclear-with-a-guess; without the loop-breaker this would let the
+        // user keep tapping "Yes" forever. After a re-send the new error note carries no guess, so
+        // only Edit prompt / Okay remain.
+        val provider = FakeProvider("I need more information, request unclear\nDid you mean: how old is the moon?")
+        val viewModel = viewModel(FakeRecognizer("how old mn /Q"), provider)
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+        val first = viewModel.aiNotes.value.single()
+        assertEquals("how old is the moon", first.suggestedQuestion)
+
+        viewModel.resendQuery(first.id, "how old is the moon")
+        advanceUntilIdle()
+
+        val second = viewModel.aiNotes.value.single()
+        assertTrue("still an error note", second.isError)
+        assertNull("a re-sent guess must not offer yet another guess", second.suggestedQuestion)
     }
 
     @Test

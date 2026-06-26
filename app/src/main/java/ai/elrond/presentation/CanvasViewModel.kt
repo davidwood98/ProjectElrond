@@ -1155,6 +1155,7 @@ class CanvasViewModel(
         userPrompt: String,
         position: NotePosition,
         bypassDedup: Boolean = false,
+        suppressGuess: Boolean = false,
     ) {
         // The de-dupe guard stops the debounced detector re-firing on unchanged content. A
         // deliberate, explicit trigger (a lasso, or a re-send) opts out so it always runs.
@@ -1214,7 +1215,10 @@ class CanvasViewModel(
                             widthPx = width,
                             isError = true,
                             sourceQuestion = effectiveQuestion,
-                            suggestedQuestion = suggestedQuestion(answer),
+                            // Don't offer another guess on a re-sent guess — that's the loop where
+                            // the model keeps proposing prompts it then re-flags as unclear. After a
+                            // re-send the user only gets Edit prompt / Okay.
+                            suggestedQuestion = if (suppressGuess) null else suggestedQuestion(answer),
                         )
                     }
                 } else {
@@ -1258,7 +1262,9 @@ class CanvasViewModel(
         val text = editedQuestion.trim()
         if (text.isBlank()) return
         lastHandledPrompt = null // an explicit re-send may repeat the previous text
-        viewModelScope.launch { submitQuery(text, text, position) }
+        // suppressGuess: if this re-sent prompt is still unclear, fall back to Edit/Okay rather
+        // than offering yet another "Did you mean …?" — that's the circular-clarify loop.
+        viewModelScope.launch { submitQuery(text, text, position, suppressGuess = true) }
     }
 
     /** True for the one-shot "I need more information, request unclear" error response. */
@@ -1547,8 +1553,11 @@ class CanvasViewModel(
             then, on the next line, your single most likely interpretation as a
             complete, self-contained question:
             Did you mean: <your best guess at the full question>?
-            If you genuinely cannot even guess what was meant, output only the first
-            line and omit the "Did you mean" line.
+            The "Did you mean" line MUST be a clear, complete question that you are
+            confident you could answer directly if the user confirmed it — never
+            propose a guess that you yourself would also find unclear, ambiguous, or
+            unanswerable. If you cannot form such an answerable guess, output only the
+            first line and omit the "Did you mean" line entirely.
 
             ${AssistantCapabilities.systemPromptSection()}
         """.trimIndent()

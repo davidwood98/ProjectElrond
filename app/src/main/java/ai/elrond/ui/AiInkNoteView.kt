@@ -202,9 +202,11 @@ fun AiErrorNoteView(
 ) {
     var editing by remember(note.id) { mutableStateOf(false) }
     var declinedSuggestion by remember(note.id) { mutableStateOf(false) }
-    var prompt by remember(note.id) { mutableStateOf(note.sourceQuestion.orEmpty()) }
-    val focusRequester = remember(note.id) { FocusRequester() }
     val guess = note.suggestedQuestion?.takeIf { it.isNotBlank() }
+    // Prefill the editor with the model's fuller suggested prompt when it offered one (that's the
+    // "full prompt" the user wants to refine), else the raw recognized question.
+    var prompt by remember(note.id) { mutableStateOf(guess ?: note.sourceQuestion.orEmpty()) }
+    val focusRequester = remember(note.id) { FocusRequester() }
     val showClarify = guess != null && !declinedSuggestion && !editing
 
     Surface(
@@ -254,7 +256,11 @@ fun AiErrorNoteView(
                                 .padding(top = 8.dp)
                                 .focusRequester(focusRequester),
                             label = { Text("Edit prompt") },
-                            singleLine = true,
+                            // Multi-line + wrapping so a long suggested prompt is fully visible and
+                            // editable (singleLine clipped it to one horizontally-scrolling line).
+                            singleLine = false,
+                            minLines = 2,
+                            maxLines = 6,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                             keyboardActions = KeyboardActions(
                                 onSend = { if (prompt.isNotBlank()) onResend(prompt) },
