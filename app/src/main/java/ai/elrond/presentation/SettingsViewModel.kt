@@ -7,6 +7,7 @@ import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.ToolSelectedTreatment
+import ai.elrond.domain.UnitSystem
 import ai.elrond.data.SettingsRepository
 import ai.elrond.domain.TriggerMode
 import ai.elrond.data.CalendarProviderType
@@ -132,6 +133,14 @@ class SettingsViewModel @Inject constructor(
 
     fun setAiColorMode(mode: AiColorMode) {
         viewModelScope.launch { repository.setAiColorMode(mode) }
+    }
+
+    /** Unit system the AI uses for measurements in its answers (Metric / Imperial). */
+    val unitSystem: StateFlow<UnitSystem> = repository.unitSystem
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UnitSystem.DEFAULT)
+
+    fun setUnitSystem(system: UnitSystem) {
+        viewModelScope.launch { repository.setUnitSystem(system) }
     }
 
     /** Note-canvas paper background (Ruled / Plain / Dots). */

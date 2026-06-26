@@ -10,6 +10,7 @@ import ai.elrond.data.CalendarProviderType
 import ai.elrond.data.SettingsRepository
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.domain.ToolSelectedTreatment
+import ai.elrond.domain.UnitSystem
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.loaders.OrganicLoader
 import ai.elrond.ui.theme.color
@@ -97,6 +98,7 @@ fun SettingsScreen(
     val paperStyle by viewModel.paperStyle.collectAsStateWithLifecycle()
     val aiLoaderStyle by viewModel.aiLoaderStyle.collectAsStateWithLifecycle()
     val aiColorMode by viewModel.aiColorMode.collectAsStateWithLifecycle()
+    val unitSystem by viewModel.unitSystem.collectAsStateWithLifecycle()
 
     var draft by remember(trigger) { mutableStateOf(trigger) }
     // Local slider position, re-seeded whenever the persisted threshold changes (e.g. when toggling
@@ -412,6 +414,32 @@ fun SettingsScreen(
                         onSelect = { viewModel.setAiLoaderStyle(style) },
                     )
                 }
+            }
+
+            Text(
+                "Response units",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+            Text(
+                "Which units the assistant uses when an answer includes a measurement.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = unitSystem == UnitSystem.METRIC,
+                    onClick = { viewModel.setUnitSystem(UnitSystem.METRIC) },
+                    label = { Text("Metric") },
+                )
+                FilterChip(
+                    selected = unitSystem == UnitSystem.IMPERIAL,
+                    onClick = { viewModel.setUnitSystem(UnitSystem.IMPERIAL) },
+                    label = { Text("Imperial") },
+                )
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

@@ -8,6 +8,7 @@ import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.ToolSelectedTreatment
 import ai.elrond.domain.TriggerMode
+import ai.elrond.domain.UnitSystem
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -137,6 +138,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setAiColorMode(mode: AiColorMode) {
         context.settingsDataStore.edit { it[AI_COLOR_MODE_KEY] = mode.name }
+    }
+
+    /** Unit system the AI must use for measurements in its answers (Metric / Imperial). Default Metric. */
+    val unitSystem: Flow<UnitSystem> = context.settingsDataStore.data
+        .map { UnitSystem.fromName(it[UNIT_SYSTEM_KEY]) }
+
+    suspend fun setUnitSystem(system: UnitSystem) {
+        context.settingsDataStore.edit { it[UNIT_SYSTEM_KEY] = system.name }
     }
 
     /** The note-canvas paper background (Ruled / Plain / Dots). */
@@ -310,6 +319,7 @@ class SettingsRepository(private val context: Context) {
         private val PEN_ICON_STYLE_KEY = stringPreferencesKey("pen_icon_style")
         private val AI_LOADER_STYLE_KEY = stringPreferencesKey("ai_loader_style")
         private val AI_COLOR_MODE_KEY = stringPreferencesKey("ai_color_mode")
+        private val UNIT_SYSTEM_KEY = stringPreferencesKey("unit_system")
         private val APP_ACCENT_KEY = stringPreferencesKey("app_accent")
         private val PAPER_STYLE_KEY = stringPreferencesKey("paper_style")
         private val NOTE_TABS_MODE_KEY = stringPreferencesKey("note_tabs_mode")

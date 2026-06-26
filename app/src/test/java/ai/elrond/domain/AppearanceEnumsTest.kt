@@ -19,6 +19,8 @@ class AppearanceEnumsTest {
         assertEquals(AiLoaderStyle.CLUSTER, AiLoaderStyle.DEFAULT)
         assertEquals(17, AiLoaderStyle.DEFAULT.number)
         assertEquals(AiColorMode.COLOR, AiColorMode.DEFAULT)
+        // AI response units: metric by default.
+        assertEquals(UnitSystem.METRIC, UnitSystem.DEFAULT)
     }
 
     @Test
@@ -34,6 +36,9 @@ class AppearanceEnumsTest {
         assertEquals(AiLoaderStyle.CLUSTER, AiLoaderStyle.fromName("nonsense"))
         assertEquals(AiColorMode.BLACK, AiColorMode.fromName("BLACK"))
         assertEquals(AiColorMode.COLOR, AiColorMode.fromName(null))
+        assertEquals(UnitSystem.IMPERIAL, UnitSystem.fromName("IMPERIAL"))
+        assertEquals(UnitSystem.METRIC, UnitSystem.fromName(null))
+        assertEquals(UnitSystem.METRIC, UnitSystem.fromName("nonsense"))
     }
 
     @Test

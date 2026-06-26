@@ -9,6 +9,7 @@ import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.ToolSelectedTreatment
 import ai.elrond.data.SettingsRepository
 import ai.elrond.domain.TriggerMode
+import ai.elrond.domain.UnitSystem
 import ai.elrond.data.CalendarProviderType
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
@@ -143,6 +144,13 @@ class SettingsRepositoryTest {
         repo.setAiColorMode(AiColorMode.BLACK)
         assertEquals(AiLoaderStyle.PINCH, repo.aiLoaderStyle.first())
         assertEquals(AiColorMode.BLACK, repo.aiColorMode.first())
+
+        // AI response units: default Metric, round-trips to Imperial and back.
+        assertEquals(UnitSystem.METRIC, repo.unitSystem.first())
+        repo.setUnitSystem(UnitSystem.IMPERIAL)
+        assertEquals(UnitSystem.IMPERIAL, repo.unitSystem.first())
+        repo.setUnitSystem(UnitSystem.METRIC)
+        assertEquals(UnitSystem.METRIC, repo.unitSystem.first())
 
         // FA-16 subjects sidebar state: defaults (nothing expanded, no selection), then round-trip.
         assertTrue(repo.expandedSubjectIds.first().isEmpty())

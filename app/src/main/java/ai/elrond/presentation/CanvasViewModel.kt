@@ -19,6 +19,7 @@ import ai.elrond.domain.NotePosition
 import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.QueryTriggerDetector
 import ai.elrond.domain.TriggerMode
+import ai.elrond.domain.UnitSystem
 import ai.elrond.domain.defaultAiNotePosition
 import ai.elrond.domain.groupStrokesIntoLines
 import ai.elrond.domain.selectQuestionLines
@@ -127,6 +128,8 @@ class CanvasViewModel(
     /** Prefix-mode no-prompt timeout (ms) before an abandoned command reverts; null keeps default. */
     prefixNoPromptTimeoutMsFlow: Flow<Long>? = null,
     stylusOnlyFlow: Flow<Boolean>? = null,
+    /** Unit system the AI must use for measurements in answers; null keeps the default (Metric). */
+    unitSystemFlow: Flow<UnitSystem>? = null,
     /** Lasso-move snap-back threshold (fraction of canvas size); null keeps the default. */
     lassoSnapBackThresholdFlow: Flow<Float>? = null,
     /** Lasso-move snap-back on/off; null keeps the default (on). */
@@ -180,6 +183,7 @@ class CanvasViewModel(
         prefixTriggerDelayMsFlow = settings.prefixTriggerDelayMs,
         prefixNoPromptTimeoutMsFlow = settings.prefixNoPromptTimeoutMs,
         stylusOnlyFlow = settings.stylusOnly,
+        unitSystemFlow = settings.unitSystem,
         lassoSnapBackThresholdFlow = settings.lassoSnapBackThreshold,
         lassoSnapBackEnabledFlow = settings.lassoSnapBackEnabled,
         persistStylusOnly = { settings.setStylusOnly(it) },
@@ -351,6 +355,10 @@ class CanvasViewModel(
     @Volatile
     private var prefixNoPromptTimeoutMs: Long = SettingsRepository.DEFAULT_PREFIX_NO_PROMPT_TIMEOUT_MS
 
+    /** Unit system the AI must use for measurements, kept in sync with settings. */
+    @Volatile
+    private var unitSystem: UnitSystem = UnitSystem.DEFAULT
+
     init {
         triggerCommandFlow?.let { flow ->
             viewModelScope.launch { flow.collect { triggerCommand = it } }
@@ -366,6 +374,9 @@ class CanvasViewModel(
         }
         stylusOnlyFlow?.let { flow ->
             viewModelScope.launch { flow.collect { _stylusOnly.value = it } }
+        }
+        unitSystemFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { unitSystem = it } }
         }
         lassoSnapBackThresholdFlow?.let { flow ->
             viewModelScope.launch { flow.collect { lassoSnapBackThreshold = it } }
@@ -1192,7 +1203,7 @@ class CanvasViewModel(
 
         // 15s timeout: null result is treated like a connection failure.
         val result = withTimeoutOrNull(requestTimeoutMillis) {
-            provider.generate(AIRequest(input = AIInput.Text(userPrompt), systemPrompt = SYSTEM_PROMPT))
+            provider.generate(AIRequest(input = AIInput.Text(userPrompt), systemPrompt = systemPrompt(unitSystem)))
         }
         when {
             result == null -> _aiState.value = AiUiState.Error(CONNECTION_ERROR, position.x, position.y)
@@ -1562,6 +1573,25 @@ class CanvasViewModel(
             ${AssistantCapabilities.systemPromptSection()}
         """.trimIndent()
 
+        /**
+         * The full `/Q` system prompt for the chosen [unitSystem]. The stable [SYSTEM_PROMPT]
+         * stays the cached prefix; the unit directive is appended at the end so prompt-caching is
+         * unaffected as long as the unit setting doesn't change.
+         */
+        private fun systemPrompt(unitSystem: UnitSystem): String =
+            "$SYSTEM_PROMPT\n\n${unitsDirective(unitSystem)}"
+
+        private fun unitsDirective(unitSystem: UnitSystem): String = when (unitSystem) {
+            UnitSystem.METRIC ->
+                "When your answer includes a measurement, always express it using the metric " +
+                    "system (SI units: metres, centimetres, kilograms, grams, litres, °C), " +
+                    "converting from any other system if needed. Never add measurements the user " +
+                    "did not ask for."
+            UnitSystem.IMPERIAL ->
+                "When your answer includes a measurement, always express it using the imperial/US " +
+                    "system (feet, inches, miles, pounds, ounces, gallons, °F), converting from " +
+                    "any other system if needed. Never add measurements the user did not ask for."
+        }
     }
 }
 
