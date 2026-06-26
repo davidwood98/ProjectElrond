@@ -3,6 +3,7 @@ package ai.elrond.data
 import ai.elrond.domain.AiColorMode
 import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
+import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
@@ -94,6 +95,50 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setStylusOnly(enabled: Boolean) {
         context.settingsDataStore.edit { it[STYLUS_ONLY_KEY] = enabled }
+    }
+
+    // --- Finger gestures (FA-19) ---
+    // Multi-finger taps mapped to canvas actions. Independent of palm rejection: detected whether
+    // stylus-only is on or off (a deliberate 2-/3-finger tap is distinct from a resting palm).
+
+    /** Master switch for finger gestures (default on). */
+    val fingerGesturesEnabled: Flow<Boolean> = context.settingsDataStore.data
+        .map { it[FINGER_GESTURES_ENABLED_KEY] ?: DEFAULT_FINGER_GESTURES_ENABLED }
+
+    suspend fun setFingerGesturesEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[FINGER_GESTURES_ENABLED_KEY] = enabled }
+    }
+
+    /** Single tap, two fingers (default [FingerGestureAction.UNDO]). */
+    val twoFingerTapAction: Flow<FingerGestureAction> = context.settingsDataStore.data
+        .map { it[TWO_FINGER_TAP_KEY]?.let(FingerGestureAction::fromName) ?: DEFAULT_TWO_FINGER_TAP_ACTION }
+
+    suspend fun setTwoFingerTapAction(action: FingerGestureAction) {
+        context.settingsDataStore.edit { it[TWO_FINGER_TAP_KEY] = action.name }
+    }
+
+    /** Single tap, three fingers (default [FingerGestureAction.REDO]). */
+    val threeFingerTapAction: Flow<FingerGestureAction> = context.settingsDataStore.data
+        .map { it[THREE_FINGER_TAP_KEY]?.let(FingerGestureAction::fromName) ?: DEFAULT_THREE_FINGER_TAP_ACTION }
+
+    suspend fun setThreeFingerTapAction(action: FingerGestureAction) {
+        context.settingsDataStore.edit { it[THREE_FINGER_TAP_KEY] = action.name }
+    }
+
+    /** Double tap, two fingers (default [FingerGestureAction.LAST_TOOL_SWAP]). */
+    val twoFingerDoubleTapAction: Flow<FingerGestureAction> = context.settingsDataStore.data
+        .map { it[TWO_FINGER_DOUBLE_TAP_KEY]?.let(FingerGestureAction::fromName) ?: DEFAULT_TWO_FINGER_DOUBLE_TAP_ACTION }
+
+    suspend fun setTwoFingerDoubleTapAction(action: FingerGestureAction) {
+        context.settingsDataStore.edit { it[TWO_FINGER_DOUBLE_TAP_KEY] = action.name }
+    }
+
+    /** Double tap, three fingers (default [FingerGestureAction.NONE]). */
+    val threeFingerDoubleTapAction: Flow<FingerGestureAction> = context.settingsDataStore.data
+        .map { it[THREE_FINGER_DOUBLE_TAP_KEY]?.let(FingerGestureAction::fromName) ?: DEFAULT_THREE_FINGER_DOUBLE_TAP_ACTION }
+
+    suspend fun setThreeFingerDoubleTapAction(action: FingerGestureAction) {
+        context.settingsDataStore.edit { it[THREE_FINGER_DOUBLE_TAP_KEY] = action.name }
     }
 
     /** How the active note-tool is highlighted in the toolbar (A soft tile / B filled / C underline). */
@@ -296,6 +341,13 @@ class SettingsRepository(private val context: Context) {
         const val DEFAULT_STYLUS_ONLY = true
         const val DEFAULT_TRUE = true
 
+        /** FA-19 finger gestures: master on; 1×2 Undo, 1×3 Redo, 2×2 last-tool, 2×3 unbound. */
+        const val DEFAULT_FINGER_GESTURES_ENABLED = true
+        val DEFAULT_TWO_FINGER_TAP_ACTION = FingerGestureAction.UNDO
+        val DEFAULT_THREE_FINGER_TAP_ACTION = FingerGestureAction.REDO
+        val DEFAULT_TWO_FINGER_DOUBLE_TAP_ACTION = FingerGestureAction.LAST_TOOL_SWAP
+        val DEFAULT_THREE_FINGER_DOUBLE_TAP_ACTION = FingerGestureAction.NONE
+
         /** Lasso-move snap-back: default 2.5% of the canvas size, capped at 10%; on by default. */
         const val DEFAULT_LASSO_SNAP_BACK_THRESHOLD = 0.025f
         const val MAX_LASSO_SNAP_BACK_THRESHOLD = 0.10f
@@ -315,6 +367,11 @@ class SettingsRepository(private val context: Context) {
         private val PREFIX_TRIGGER_DELAY_KEY = longPreferencesKey("prefix_trigger_delay_ms")
         private val PREFIX_NO_PROMPT_TIMEOUT_KEY = longPreferencesKey("prefix_no_prompt_timeout_ms")
         private val STYLUS_ONLY_KEY = booleanPreferencesKey("stylus_only")
+        private val FINGER_GESTURES_ENABLED_KEY = booleanPreferencesKey("finger_gestures_enabled")
+        private val TWO_FINGER_TAP_KEY = stringPreferencesKey("two_finger_tap_action")
+        private val THREE_FINGER_TAP_KEY = stringPreferencesKey("three_finger_tap_action")
+        private val TWO_FINGER_DOUBLE_TAP_KEY = stringPreferencesKey("two_finger_double_tap_action")
+        private val THREE_FINGER_DOUBLE_TAP_KEY = stringPreferencesKey("three_finger_double_tap_action")
         private val TOOL_TREATMENT_KEY = stringPreferencesKey("tool_selected_treatment")
         private val PEN_ICON_STYLE_KEY = stringPreferencesKey("pen_icon_style")
         private val AI_LOADER_STYLE_KEY = stringPreferencesKey("ai_loader_style")

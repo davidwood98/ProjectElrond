@@ -3,6 +3,7 @@ package ai.elrond.presentation
 import ai.elrond.domain.AiColorMode
 import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
+import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
@@ -81,6 +82,47 @@ class SettingsViewModel @Inject constructor(
 
     fun setStylusOnly(enabled: Boolean) {
         viewModelScope.launch { repository.setStylusOnly(enabled) }
+    }
+
+    // --- Finger gestures (FA-19) ---
+
+    val fingerGesturesEnabled: StateFlow<Boolean> = repository.fingerGesturesEnabled
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_FINGER_GESTURES_ENABLED,
+        )
+
+    fun setFingerGesturesEnabled(enabled: Boolean) {
+        viewModelScope.launch { repository.setFingerGesturesEnabled(enabled) }
+    }
+
+    val twoFingerTapAction: StateFlow<FingerGestureAction> = repository.twoFingerTapAction
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_TWO_FINGER_TAP_ACTION)
+
+    fun setTwoFingerTapAction(action: FingerGestureAction) {
+        viewModelScope.launch { repository.setTwoFingerTapAction(action) }
+    }
+
+    val threeFingerTapAction: StateFlow<FingerGestureAction> = repository.threeFingerTapAction
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_THREE_FINGER_TAP_ACTION)
+
+    fun setThreeFingerTapAction(action: FingerGestureAction) {
+        viewModelScope.launch { repository.setThreeFingerTapAction(action) }
+    }
+
+    val twoFingerDoubleTapAction: StateFlow<FingerGestureAction> = repository.twoFingerDoubleTapAction
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_TWO_FINGER_DOUBLE_TAP_ACTION)
+
+    fun setTwoFingerDoubleTapAction(action: FingerGestureAction) {
+        viewModelScope.launch { repository.setTwoFingerDoubleTapAction(action) }
+    }
+
+    val threeFingerDoubleTapAction: StateFlow<FingerGestureAction> = repository.threeFingerDoubleTapAction
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_THREE_FINGER_DOUBLE_TAP_ACTION)
+
+    fun setThreeFingerDoubleTapAction(action: FingerGestureAction) {
+        viewModelScope.launch { repository.setThreeFingerDoubleTapAction(action) }
     }
 
     /** Active-tool highlight style shown in the note toolbar (default A · soft tile). */

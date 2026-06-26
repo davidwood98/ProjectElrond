@@ -3,6 +3,7 @@ package ai.elrond.settings
 import ai.elrond.domain.AiColorMode
 import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
+import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
@@ -71,6 +72,26 @@ class SettingsRepositoryTest {
         assertEquals(">Q", repo.triggerCommand.first())
         assertEquals(TriggerMode.GESTURE, repo.triggerMode.first())
         assertFalse(repo.stylusOnly.first())
+
+        // FA-19 finger gestures: defaults (on; 1×2 Undo, 1×3 Redo, 2×2 last-tool, 2×3 none),
+        // then round-trip each preference.
+        assertTrue(repo.fingerGesturesEnabled.first())
+        assertEquals(FingerGestureAction.UNDO, repo.twoFingerTapAction.first())
+        assertEquals(FingerGestureAction.REDO, repo.threeFingerTapAction.first())
+        assertEquals(FingerGestureAction.LAST_TOOL_SWAP, repo.twoFingerDoubleTapAction.first())
+        assertEquals(FingerGestureAction.NONE, repo.threeFingerDoubleTapAction.first())
+
+        repo.setFingerGesturesEnabled(false)
+        repo.setTwoFingerTapAction(FingerGestureAction.SELECT_PEN)
+        repo.setThreeFingerTapAction(FingerGestureAction.SELECT_ERASER)
+        repo.setTwoFingerDoubleTapAction(FingerGestureAction.SELECT_HAND)
+        repo.setThreeFingerDoubleTapAction(FingerGestureAction.REDO)
+
+        assertFalse(repo.fingerGesturesEnabled.first())
+        assertEquals(FingerGestureAction.SELECT_PEN, repo.twoFingerTapAction.first())
+        assertEquals(FingerGestureAction.SELECT_ERASER, repo.threeFingerTapAction.first())
+        assertEquals(FingerGestureAction.SELECT_HAND, repo.twoFingerDoubleTapAction.first())
+        assertEquals(FingerGestureAction.REDO, repo.threeFingerDoubleTapAction.first())
 
         // Prefix-mode trigger mode round-trips (third activation option).
         repo.setTriggerMode(TriggerMode.PREFIX_COMMAND)

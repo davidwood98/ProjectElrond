@@ -3,11 +3,14 @@ package ai.elrond.ui
 import ai.elrond.domain.PalmRejection
 import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.CanvasStroke
+import ai.elrond.domain.FingerGesture
 import ai.elrond.presentation.CanvasViewModel
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Matrix
+import android.os.Handler
+import android.os.Looper
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
@@ -29,6 +32,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlin.math.hypot
 
 /**
  * Handwriting canvas with two ink layers:
@@ -115,7 +119,10 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
         )
     }
     val predictor = MotionEventPredictor.newInstance(rootView)
-    rootView.setOnTouchListener(createTouchListener(inProgressStrokesView, viewModel, predictor))
+    val fingerGestureTracker = FingerGestureTracker(viewModel)
+    rootView.setOnTouchListener(
+        createTouchListener(inProgressStrokesView, viewModel, predictor, fingerGestureTracker),
+    )
     // Dry layer (bottom), wet ink on top. The lasso-selected strokes (live move/scale + the faded
     // origin ghost) are drawn by the Compose SelectionLayer overlay, NOT here: the wet-ink view is a
     // front-buffered SurfaceView composited on top of the whole window, and a plain sibling View
@@ -168,6 +175,7 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
             override fun onViewDetachedFromWindow(v: View) {
                 job?.cancel()
                 job = null
+                fingerGestureTracker.dispose()
             }
         },
     )
@@ -178,15 +186,21 @@ private fun createTouchListener(
     inProgressStrokesView: InProgressStrokesView,
     viewModel: CanvasViewModel,
     predictor: MotionEventPredictor,
+    fingerGestureTracker: FingerGestureTracker,
 ): View.OnTouchListener {
     var currentPointerId: Int? = null
     var currentStrokeId: InProgressStrokeId? = null
+    var currentIsFinger = false
     var erasing = false
 
     return View.OnTouchListener { view, event ->
         // In lasso-select mode the Compose selection overlay owns all input (it sits above this
         // view and consumes the gesture); never draw ink here. This is a belt-and-braces guard.
         if (viewModel.tool.value == CanvasTool.LASSO) return@OnTouchListener false
+
+        // Feed the multi-finger gesture detector first — it runs independently of palm rejection,
+        // so 2-/3-finger taps fire whether stylus-only mode is on or off (FA-19).
+        fingerGestureTracker.onTouchEvent(event)
 
         predictor.record(event)
         val predictedEvent = predictor.predict()
@@ -205,6 +219,20 @@ private fun createTouchListener(
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                    // A second finger landing during a finger-drawn stroke means a multi-finger
+                    // gesture is starting, not ink — cancel the nascent finger stroke so the tap
+                    // leaves no mark (FA-19). Stylus strokes (a resting palm landing mid-stroke)
+                    // are untouched: currentIsFinger is false for them.
+                    if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN &&
+                        currentIsFinger && currentStrokeId != null
+                    ) {
+                        currentStrokeId?.let { inProgressStrokesView.cancelStroke(it, event) }
+                        currentPointerId = null
+                        currentStrokeId = null
+                        currentIsFinger = false
+                        erasing = false
+                        return@OnTouchListener true
+                    }
                     // Swallow a rejected finger pointer without disturbing any active stroke.
                     if (rejectFinger) return@OnTouchListener true
                     // Single active stroke: ignore additional pointers while one is down.
@@ -213,6 +241,7 @@ private fun createTouchListener(
                     val pointerIndex = event.actionIndex
                     val pointerId = event.getPointerId(pointerIndex)
                     currentPointerId = pointerId
+                    currentIsFinger = isFinger
                     if (erase) {
                         erasing = true
                         viewModel.beginEraseGesture() // one undo step per gesture
@@ -251,6 +280,7 @@ private fun createTouchListener(
                         }
                         currentPointerId = null
                         currentStrokeId = null
+                        currentIsFinger = false
                         erasing = false
                         view.performClick()
                     }
@@ -261,6 +291,7 @@ private fun createTouchListener(
                     currentStrokeId?.let { inProgressStrokesView.cancelStroke(it, event) }
                     currentPointerId = null
                     currentStrokeId = null
+                    currentIsFinger = false
                     erasing = false
                     true
                 }
@@ -270,5 +301,148 @@ private fun createTouchListener(
         } finally {
             predictedEvent?.recycle()
         }
+    }
+}
+
+/**
+ * Detects multi-finger tap gestures (FA-19) from raw [MotionEvent]s and dispatches them to
+ * [CanvasViewModel.onFingerGesture]. Runs independently of palm rejection — it's fed every event
+ * regardless of the stylus-only setting, so a deliberate 2-/3-finger tap is recognised whether
+ * fingers draw or not. A resting palm or a two-finger drag is rejected by the duration + movement
+ * gates; any stylus pointer in the gesture disqualifies it (it's a pen interaction, not a tap).
+ *
+ * A single tap waits out [DOUBLE_TAP_WINDOW_MS] to disambiguate it from a double tap — but only when
+ * that finger count actually has a double-tap action bound ([CanvasViewModel.isDoubleTapBound]);
+ * otherwise the single fires immediately so common actions (e.g. a 3-finger Redo) feel instant.
+ *
+ * Not a [android.view.GestureDetector]: that doesn't expose multi-pointer tap counts, so this is a
+ * small manual state machine. Lives in the View layer (touches [MotionEvent]); the binding logic it
+ * calls is unit-tested on the ViewModel, so this is device/manual-verified like the other ink flows.
+ */
+private class FingerGestureTracker(private val viewModel: CanvasViewModel) {
+    private val handler = Handler(Looper.getMainLooper())
+
+    // State for the gesture currently in progress (first finger down → all fingers up).
+    private var gestureStartTime = 0L
+    private var maxFingerCount = 0
+    private var stylusInvolved = false
+    private var movedTooFar = false
+    private val startPositions = HashMap<Int, FloatArray>() // pointerId -> [x, y] at its down
+
+    // State spanning gestures, for double-tap detection.
+    private var lastTapFingerCount = 0
+    private var lastTapTime = 0L
+    private var pendingSingleTap: Runnable? = null
+
+    fun onTouchEvent(event: MotionEvent) {
+        if (!viewModel.fingerGesturesEnabled.value) {
+            resetGesture()
+            return
+        }
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                resetGesture()
+                gestureStartTime = event.eventTime
+                recordPointer(event, event.actionIndex)
+                updateCounts(event)
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                recordPointer(event, event.actionIndex)
+                updateCounts(event)
+            }
+            MotionEvent.ACTION_MOVE -> checkMovement(event)
+            MotionEvent.ACTION_UP -> {
+                checkMovement(event)
+                evaluateTap(event.eventTime)
+                resetGesture()
+            }
+            MotionEvent.ACTION_CANCEL -> resetGesture()
+        }
+    }
+
+    /** Cancels any pending delayed single-tap. Call on detach so no gesture fires after teardown. */
+    fun dispose() {
+        pendingSingleTap?.let { handler.removeCallbacks(it) }
+        pendingSingleTap = null
+    }
+
+    private fun recordPointer(event: MotionEvent, index: Int) {
+        startPositions[event.getPointerId(index)] = floatArrayOf(event.getX(index), event.getY(index))
+    }
+
+    private fun updateCounts(event: MotionEvent) {
+        var fingers = 0
+        for (i in 0 until event.pointerCount) {
+            if (event.getToolType(i) == MotionEvent.TOOL_TYPE_FINGER) fingers++ else stylusInvolved = true
+        }
+        if (fingers > maxFingerCount) maxFingerCount = fingers
+    }
+
+    private fun checkMovement(event: MotionEvent) {
+        for (i in 0 until event.pointerCount) {
+            val start = startPositions[event.getPointerId(i)] ?: continue
+            if (hypot(event.getX(i) - start[0], event.getY(i) - start[1]) > TAP_MAX_MOVEMENT_PX) {
+                movedTooFar = true
+                return
+            }
+        }
+    }
+
+    private fun evaluateTap(upTime: Long) {
+        if (stylusInvolved || movedTooFar) return
+        if (upTime - gestureStartTime > TAP_MAX_DURATION_MS) return
+        val count = maxFingerCount
+        if (count != 2 && count != 3) return
+        handleTap(count, upTime)
+    }
+
+    private fun handleTap(count: Int, now: Long) {
+        // A second tap of the same finger count within the window upgrades to a double tap.
+        if (lastTapFingerCount == count && now - lastTapTime < DOUBLE_TAP_WINDOW_MS) {
+            pendingSingleTap?.let { handler.removeCallbacks(it) }
+            pendingSingleTap = null
+            lastTapFingerCount = 0
+            lastTapTime = 0L
+            viewModel.onFingerGesture(doubleGesture(count))
+            return
+        }
+        lastTapFingerCount = count
+        lastTapTime = now
+        // No double-tap bound for this count → fire the single immediately (no need to wait).
+        if (!viewModel.isDoubleTapBound(count)) {
+            lastTapFingerCount = 0
+            lastTapTime = 0L
+            viewModel.onFingerGesture(singleGesture(count))
+            return
+        }
+        // Double-tap is bound: defer the single until the window passes without a second tap.
+        val runnable = Runnable {
+            pendingSingleTap = null
+            lastTapFingerCount = 0
+            lastTapTime = 0L
+            viewModel.onFingerGesture(singleGesture(count))
+        }
+        pendingSingleTap = runnable
+        handler.postDelayed(runnable, DOUBLE_TAP_WINDOW_MS)
+    }
+
+    private fun resetGesture() {
+        gestureStartTime = 0L
+        maxFingerCount = 0
+        stylusInvolved = false
+        movedTooFar = false
+        startPositions.clear()
+    }
+
+    private companion object {
+        const val TAP_MAX_DURATION_MS = 250L
+        const val TAP_MAX_MOVEMENT_PX = 24f
+        const val DOUBLE_TAP_WINDOW_MS = 300L
+
+        fun singleGesture(count: Int): FingerGesture =
+            if (count == 3) FingerGesture.ThreeFingerTap else FingerGesture.TwoFingerTap
+
+        fun doubleGesture(count: Int): FingerGesture =
+            if (count == 3) FingerGesture.ThreeFingerDoubleTap else FingerGesture.TwoFingerDoubleTap
     }
 }

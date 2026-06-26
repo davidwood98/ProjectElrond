@@ -3,6 +3,7 @@ package ai.elrond.ui
 import ai.elrond.domain.AiColorMode
 import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
+import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.TriggerMode
@@ -33,12 +34,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -83,7 +89,11 @@ fun SettingsScreen(
     val triggerMode by viewModel.triggerMode.collectAsStateWithLifecycle()
     val prefixDelayMs by viewModel.prefixTriggerDelayMs.collectAsStateWithLifecycle()
     val prefixTimeoutMs by viewModel.prefixNoPromptTimeoutMs.collectAsStateWithLifecycle()
-    val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
+    val fingerGesturesEnabled by viewModel.fingerGesturesEnabled.collectAsStateWithLifecycle()
+    val twoFingerTap by viewModel.twoFingerTapAction.collectAsStateWithLifecycle()
+    val threeFingerTap by viewModel.threeFingerTapAction.collectAsStateWithLifecycle()
+    val twoFingerDoubleTap by viewModel.twoFingerDoubleTapAction.collectAsStateWithLifecycle()
+    val threeFingerDoubleTap by viewModel.threeFingerDoubleTapAction.collectAsStateWithLifecycle()
     val toolTreatment by viewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
     val aiSelectedOnCreate by viewModel.aiNoteSelectedOnCreate.collectAsStateWithLifecycle()
     val autoExtraction by viewModel.autoExtractionEnabled.collectAsStateWithLifecycle()
@@ -242,14 +252,38 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("Canvas input", style = MaterialTheme.typography.titleMedium)
+            Text("Finger gestures", style = MaterialTheme.typography.titleMedium)
             SettingRow(
-                title = "Palm rejection (stylus only)",
-                subtitle = "Ignore finger touches so a hand resting on the screen doesn't draw. " +
-                    "Turn off to draw with a finger.",
-                checked = stylusOnly,
-                onCheckedChange = viewModel::setStylusOnly,
+                title = "Finger gestures",
+                subtitle = "Tap the canvas with two or three fingers to run a quick action. " +
+                    "Works whether or not palm rejection is on; multi-finger taps never draw.",
+                checked = fingerGesturesEnabled,
+                onCheckedChange = viewModel::setFingerGesturesEnabled,
             )
+            AnimatedVisibility(visible = fingerGesturesEnabled) {
+                Column(modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 4.dp)) {
+                    FingerGestureRow(
+                        title = "Two-finger tap",
+                        action = twoFingerTap,
+                        onAction = viewModel::setTwoFingerTapAction,
+                    )
+                    FingerGestureRow(
+                        title = "Three-finger tap",
+                        action = threeFingerTap,
+                        onAction = viewModel::setThreeFingerTapAction,
+                    )
+                    FingerGestureRow(
+                        title = "Two-finger double tap",
+                        action = twoFingerDoubleTap,
+                        onAction = viewModel::setTwoFingerDoubleTapAction,
+                    )
+                    FingerGestureRow(
+                        title = "Three-finger double tap",
+                        action = threeFingerDoubleTap,
+                        onAction = viewModel::setThreeFingerDoubleTapAction,
+                    )
+                }
+            }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -839,6 +873,57 @@ private fun SettingRow(
 
 /** "2.5%" for a 0–1 fraction (one decimal). */
 private fun formatPercent(fraction: Float): String = "${"%.1f".format(fraction * 100f)}%"
+
+/** Human-readable label for a finger-gesture action (the domain enum stays Compose-/string-free). */
+private fun FingerGestureAction.label(): String = when (this) {
+    FingerGestureAction.NONE -> "Off"
+    FingerGestureAction.UNDO -> "Undo"
+    FingerGestureAction.REDO -> "Redo"
+    FingerGestureAction.LAST_TOOL_SWAP -> "Swap last tool"
+    FingerGestureAction.SELECT_PEN -> "Switch to Pen"
+    FingerGestureAction.SELECT_ERASER -> "Switch to Eraser"
+    FingerGestureAction.SELECT_LASSO -> "Switch to Lasso"
+    FingerGestureAction.SELECT_HAND -> "Enable finger draw"
+}
+
+/** A "<gesture> → <action>" row: a label and a dropdown to bind one of the [FingerGestureAction]s. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FingerGestureRow(
+    title: String,
+    action: FingerGestureAction,
+    onAction: (FingerGestureAction) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.width(16.dp))
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+            OutlinedTextField(
+                value = action.label(),
+                onValueChange = {},
+                readOnly = true,
+                singleLine = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).width(200.dp),
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                FingerGestureAction.entries.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.label()) },
+                        onClick = {
+                            onAction(option)
+                            expanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
 
 /** "0.5s" for a seconds value (one decimal). */
 private fun formatSeconds(seconds: Float): String = "${"%.1f".format(seconds)}s"

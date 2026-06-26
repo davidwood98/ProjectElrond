@@ -10,6 +10,8 @@ import ai.elrond.domain.SelectionBounds
 import ai.elrond.domain.ClipboardState
 import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.CanvasStroke
+import ai.elrond.domain.FingerGesture
+import ai.elrond.domain.FingerGestureAction
 import ai.elrond.BuildConfig
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.GestureTriggerDetector
@@ -134,6 +136,16 @@ class CanvasViewModel(
     lassoSnapBackThresholdFlow: Flow<Float>? = null,
     /** Lasso-move snap-back on/off; null keeps the default (on). */
     lassoSnapBackEnabledFlow: Flow<Boolean>? = null,
+    /** Finger-gestures master switch (FA-19); null keeps the default (on). */
+    fingerGesturesEnabledFlow: Flow<Boolean>? = null,
+    /** Action bound to a single two-finger tap; null keeps the default (Undo). */
+    twoFingerTapActionFlow: Flow<FingerGestureAction>? = null,
+    /** Action bound to a single three-finger tap; null keeps the default (Redo). */
+    threeFingerTapActionFlow: Flow<FingerGestureAction>? = null,
+    /** Action bound to a double two-finger tap; null keeps the default (last-tool swap). */
+    twoFingerDoubleTapActionFlow: Flow<FingerGestureAction>? = null,
+    /** Action bound to a double three-finger tap; null keeps the default (none). */
+    threeFingerDoubleTapActionFlow: Flow<FingerGestureAction>? = null,
     /** Write-through for the palm-rejection preference (null in tests). */
     private val persistStylusOnly: (suspend (Boolean) -> Unit)? = null,
     /**
@@ -186,6 +198,11 @@ class CanvasViewModel(
         unitSystemFlow = settings.unitSystem,
         lassoSnapBackThresholdFlow = settings.lassoSnapBackThreshold,
         lassoSnapBackEnabledFlow = settings.lassoSnapBackEnabled,
+        fingerGesturesEnabledFlow = settings.fingerGesturesEnabled,
+        twoFingerTapActionFlow = settings.twoFingerTapAction,
+        threeFingerTapActionFlow = settings.threeFingerTapAction,
+        twoFingerDoubleTapActionFlow = settings.twoFingerDoubleTapAction,
+        threeFingerDoubleTapActionFlow = settings.threeFingerDoubleTapAction,
         persistStylusOnly = { settings.setStylusOnly(it) },
         // Real generator: render the page's normalized polylines (the same data the card draws) to a
         // bitmap off-thread and cache it; an empty page drops any stale file so the card shows blank.
@@ -223,6 +240,22 @@ class CanvasViewModel(
     /** Palm rejection: when true (default), finger touches never draw ink. */
     private val _stylusOnly = MutableStateFlow(true)
     val stylusOnly: StateFlow<Boolean> = _stylusOnly.asStateFlow()
+
+    /** The tool selected before the current one — restored by the FA-19 "last tool swap" gesture. */
+    private var previousTool: CanvasTool = CanvasTool.PEN
+
+    // ── Finger gestures (FA-19) ───────────────────────────────────────────────────────────────
+    // Multi-finger taps bound to canvas actions, kept in sync with settings. [fingerGesturesEnabled]
+    // is read by InkCanvas to gate detection; the action flows are read via [isDoubleTapBound] /
+    // [onFingerGesture]. Defaults match SettingsRepository so JVM tests (no flows) are deterministic.
+
+    private val _fingerGesturesEnabled = MutableStateFlow(true)
+    val fingerGesturesEnabled: StateFlow<Boolean> = _fingerGesturesEnabled.asStateFlow()
+
+    private val _twoFingerTapAction = MutableStateFlow(FingerGestureAction.UNDO)
+    private val _threeFingerTapAction = MutableStateFlow(FingerGestureAction.REDO)
+    private val _twoFingerDoubleTapAction = MutableStateFlow(FingerGestureAction.LAST_TOOL_SWAP)
+    private val _threeFingerDoubleTapAction = MutableStateFlow(FingerGestureAction.NONE)
 
     private val _aiState = MutableStateFlow<AiUiState>(AiUiState.Idle)
     val aiState: StateFlow<AiUiState> = _aiState.asStateFlow()
@@ -384,6 +417,21 @@ class CanvasViewModel(
         lassoSnapBackEnabledFlow?.let { flow ->
             viewModelScope.launch { flow.collect { lassoSnapBackEnabled = it } }
         }
+        fingerGesturesEnabledFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _fingerGesturesEnabled.value = it } }
+        }
+        twoFingerTapActionFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _twoFingerTapAction.value = it } }
+        }
+        threeFingerTapActionFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _threeFingerTapAction.value = it } }
+        }
+        twoFingerDoubleTapActionFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _twoFingerDoubleTapAction.value = it } }
+        }
+        threeFingerDoubleTapActionFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _threeFingerDoubleTapAction.value = it } }
+        }
         // Pre-download the handwriting model so the first /Q is fast.
         recognizer?.let { viewModelScope.launch { it.warmUp() } }
 
@@ -538,11 +586,44 @@ class CanvasViewModel(
     }
 
     fun selectTool(tool: CanvasTool) {
+        // Remember the tool being left so the FA-19 "last tool swap" gesture can restore it.
+        if (tool != _tool.value) previousTool = _tool.value
         _tool.value = tool
         // The lasso tool's transient state (selection + clipboard) lives only while it's active.
         if (tool != CanvasTool.LASSO) {
             clearSelection()
             clearClipboard()
+        }
+    }
+
+    /**
+     * True when the double-tap for [fingerCount] (2 or 3) fingers is bound to an action. InkCanvas
+     * reads this so it can fire a single tap instantly when its double is unbound, rather than
+     * always waiting out the double-tap window just to rule out a double that does nothing (FA-19).
+     */
+    fun isDoubleTapBound(fingerCount: Int): Boolean = when (fingerCount) {
+        2 -> _twoFingerDoubleTapAction.value != FingerGestureAction.NONE
+        3 -> _threeFingerDoubleTapAction.value != FingerGestureAction.NONE
+        else -> false
+    }
+
+    /** Performs the user-bound action for a detected finger gesture (FA-19). */
+    fun onFingerGesture(gesture: FingerGesture) {
+        val action = when (gesture) {
+            FingerGesture.TwoFingerTap -> _twoFingerTapAction.value
+            FingerGesture.ThreeFingerTap -> _threeFingerTapAction.value
+            FingerGesture.TwoFingerDoubleTap -> _twoFingerDoubleTapAction.value
+            FingerGesture.ThreeFingerDoubleTap -> _threeFingerDoubleTapAction.value
+        }
+        when (action) {
+            FingerGestureAction.NONE -> Unit
+            FingerGestureAction.UNDO -> undo()
+            FingerGestureAction.REDO -> redo()
+            FingerGestureAction.LAST_TOOL_SWAP -> selectTool(previousTool)
+            FingerGestureAction.SELECT_PEN -> selectTool(CanvasTool.PEN)
+            FingerGestureAction.SELECT_ERASER -> selectTool(CanvasTool.ERASER)
+            FingerGestureAction.SELECT_LASSO -> selectTool(CanvasTool.LASSO)
+            FingerGestureAction.SELECT_HAND -> setStylusOnly(false)
         }
     }
 
