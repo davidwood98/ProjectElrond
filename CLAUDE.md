@@ -1434,6 +1434,9 @@ build on the WSL Linux SDK. **No schema change — DB stays v10** (all new prefs
 touch/`MotionEvent` detection (the trackers, the button observer) is **device/manual-verified** like
 the other ink flows; the binding/dispatch logic + settings round-trips are JVM-tested. Scope (which
 gestures, defaults, gating, hold semantics, detection mechanism) was confirmed with the user up front.
+**Device-confirmed on a Galaxy Tab S (2026-06-28):** all finger-tap and S Pen-button gestures pass —
+including the double-click tool toggle and hold-to-erase **from the Lasso tool** (the shared-tracker +
+top-level button observer routing) and the 150ms hold threshold (clicks register cleanly).
 
 - **Shared action enum.** `domain/FingerGestureAction` (Compose-free, `fromName`): `NONE / UNDO /
   REDO / LAST_TOOL_SWAP / SELECT_PEN / SELECT_ERASER / SELECT_LASSO / SELECT_HAND`. `SELECT_HAND`
