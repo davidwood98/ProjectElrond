@@ -120,9 +120,15 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
     }
     val predictor = MotionEventPredictor.newInstance(rootView)
     val fingerGestureTracker = FingerGestureTracker(viewModel)
+    val stylusButtonTracker = StylusButtonTracker(viewModel)
     rootView.setOnTouchListener(
-        createTouchListener(inProgressStrokesView, viewModel, predictor, fingerGestureTracker),
+        createTouchListener(
+            inProgressStrokesView, viewModel, predictor, fingerGestureTracker, stylusButtonTracker,
+        ),
     )
+    // The S Pen side button fires while the pen hovers (not touching), which arrives as a generic
+    // motion event, not a touch event — feed those to the button tracker too (FA-19).
+    rootView.setOnGenericMotionListener { _, event -> stylusButtonTracker.onMotionEvent(event) }
     // Dry layer (bottom), wet ink on top. The lasso-selected strokes (live move/scale + the faded
     // origin ghost) are drawn by the Compose SelectionLayer overlay, NOT here: the wet-ink view is a
     // front-buffered SurfaceView composited on top of the whole window, and a plain sibling View
@@ -176,6 +182,7 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
                 job?.cancel()
                 job = null
                 fingerGestureTracker.dispose()
+                stylusButtonTracker.dispose()
             }
         },
     )
@@ -187,6 +194,7 @@ private fun createTouchListener(
     viewModel: CanvasViewModel,
     predictor: MotionEventPredictor,
     fingerGestureTracker: FingerGestureTracker,
+    stylusButtonTracker: StylusButtonTracker,
 ): View.OnTouchListener {
     var currentPointerId: Int? = null
     var currentStrokeId: InProgressStrokeId? = null
@@ -201,6 +209,10 @@ private fun createTouchListener(
         // Feed the multi-finger gesture detector first — it runs independently of palm rejection,
         // so 2-/3-finger taps fire whether stylus-only mode is on or off (FA-19).
         fingerGestureTracker.onTouchEvent(event)
+        // Track the S Pen side button while the pen is touching. We don't consume here (the return
+        // is ignored) so drawing continues — the dedicated button-press/release events that carry
+        // no draw data are consumed by the generic-motion listener instead (FA-19).
+        stylusButtonTracker.onMotionEvent(event)
 
         predictor.record(event)
         val predictedEvent = predictor.predict()
@@ -444,5 +456,122 @@ private class FingerGestureTracker(private val viewModel: CanvasViewModel) {
 
         fun doubleGesture(count: Int): FingerGesture =
             if (count == 3) FingerGesture.ThreeFingerDoubleTap else FingerGesture.TwoFingerDoubleTap
+    }
+}
+
+/**
+ * Detects S Pen side-button gestures (FA-19) — press-and-hold (momentary), single click, and double
+ * click — from the [MotionEvent.BUTTON_STYLUS_PRIMARY] state, and dispatches them to the
+ * [CanvasViewModel]. Fed from both the touch listener (button pressed while drawing) and the
+ * generic-motion listener (button pressed while hovering, the pen not touching the screen).
+ *
+ * Edge-detected on `buttonState` rather than relying solely on [MotionEvent.ACTION_BUTTON_PRESS], so
+ * it works whether the device reports the change via the dedicated button action or via the button
+ * bits on a hover/move event. A hold begins after [HOLD_THRESHOLD_MS] of the button staying down; a
+ * release before that is a click. A single click waits out [DOUBLE_CLICK_WINDOW_MS] to rule out a
+ * double — but only when a double click is bound (else it fires immediately). If the pen leaves
+ * range with the button still down (hover exit), the hold is ended so it can't get stuck.
+ *
+ * Device/manual-verified like the other ink flows (touches [MotionEvent]); the bound actions it
+ * calls are unit-tested on the ViewModel.
+ */
+private class StylusButtonTracker(private val viewModel: CanvasViewModel) {
+    private val handler = Handler(Looper.getMainLooper())
+
+    private var buttonDown = false
+    private var holdActive = false
+    private var pendingHold: Runnable? = null
+
+    private var lastClickTime = 0L
+    private var pendingSingleClick: Runnable? = null
+
+    /** Returns true when a button-only event was consumed (so the generic listener can claim it). */
+    fun onMotionEvent(event: MotionEvent): Boolean {
+        if (!viewModel.stylusButtonEnabled.value) {
+            if (buttonDown || holdActive) reset()
+            return false
+        }
+        // The pen left detection range — end any momentary hold so it can't stick down.
+        if (event.actionMasked == MotionEvent.ACTION_HOVER_EXIT && buttonDown) {
+            onButtonUp(event.eventTime)
+            buttonDown = false
+            return false
+        }
+        val nowDown = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+        if (nowDown != buttonDown) {
+            buttonDown = nowDown
+            if (nowDown) onButtonDown(event.eventTime) else onButtonUp(event.eventTime)
+        }
+        // Consume the dedicated button actions (no draw payload) to suppress any system default.
+        return event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS ||
+            event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE
+    }
+
+    fun dispose() {
+        pendingHold?.let { handler.removeCallbacks(it) }
+        pendingSingleClick?.let { handler.removeCallbacks(it) }
+        pendingHold = null
+        pendingSingleClick = null
+        if (holdActive) viewModel.onStylusHoldEnd()
+        holdActive = false
+    }
+
+    private fun onButtonDown(@Suppress("UNUSED_PARAMETER") downTime: Long) {
+        val runnable = Runnable {
+            pendingHold = null
+            holdActive = true
+            viewModel.onStylusHoldStart()
+        }
+        pendingHold = runnable
+        handler.postDelayed(runnable, HOLD_THRESHOLD_MS)
+    }
+
+    private fun onButtonUp(upTime: Long) {
+        pendingHold?.let { handler.removeCallbacks(it) }
+        pendingHold = null
+        if (holdActive) {
+            // It was a hold, not a click — end the momentary tool, swallow any click state.
+            holdActive = false
+            lastClickTime = 0L
+            viewModel.onStylusHoldEnd()
+            return
+        }
+        // A quick press-release: a click. Disambiguate single vs double.
+        if (lastClickTime != 0L && upTime - lastClickTime < DOUBLE_CLICK_WINDOW_MS) {
+            pendingSingleClick?.let { handler.removeCallbacks(it) }
+            pendingSingleClick = null
+            lastClickTime = 0L
+            viewModel.onStylusClick(doubleClick = true)
+            return
+        }
+        lastClickTime = upTime
+        if (!viewModel.isStylusDoubleClickBound()) {
+            lastClickTime = 0L
+            viewModel.onStylusClick(doubleClick = false)
+            return
+        }
+        val runnable = Runnable {
+            pendingSingleClick = null
+            lastClickTime = 0L
+            viewModel.onStylusClick(doubleClick = false)
+        }
+        pendingSingleClick = runnable
+        handler.postDelayed(runnable, DOUBLE_CLICK_WINDOW_MS)
+    }
+
+    private fun reset() {
+        pendingHold?.let { handler.removeCallbacks(it) }
+        pendingSingleClick?.let { handler.removeCallbacks(it) }
+        pendingHold = null
+        pendingSingleClick = null
+        lastClickTime = 0L
+        if (holdActive) viewModel.onStylusHoldEnd()
+        holdActive = false
+        buttonDown = false
+    }
+
+    private companion object {
+        const val HOLD_THRESHOLD_MS = 350L
+        const val DOUBLE_CLICK_WINDOW_MS = 300L
     }
 }

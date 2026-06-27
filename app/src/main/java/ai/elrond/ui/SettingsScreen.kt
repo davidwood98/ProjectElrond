@@ -5,6 +5,7 @@ import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.PaperStyle
+import ai.elrond.domain.StylusHoldTool
 import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.TriggerMode
 import ai.elrond.data.CalendarProviderType
@@ -94,6 +95,10 @@ fun SettingsScreen(
     val threeFingerTap by viewModel.threeFingerTapAction.collectAsStateWithLifecycle()
     val twoFingerDoubleTap by viewModel.twoFingerDoubleTapAction.collectAsStateWithLifecycle()
     val threeFingerDoubleTap by viewModel.threeFingerDoubleTapAction.collectAsStateWithLifecycle()
+    val stylusButtonEnabled by viewModel.stylusButtonEnabled.collectAsStateWithLifecycle()
+    val stylusHoldTool by viewModel.stylusHoldTool.collectAsStateWithLifecycle()
+    val stylusDoubleClick by viewModel.stylusDoubleClickAction.collectAsStateWithLifecycle()
+    val stylusSingleClick by viewModel.stylusSingleClickAction.collectAsStateWithLifecycle()
     val toolTreatment by viewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
     val aiSelectedOnCreate by viewModel.aiNoteSelectedOnCreate.collectAsStateWithLifecycle()
     val autoExtraction by viewModel.autoExtractionEnabled.collectAsStateWithLifecycle()
@@ -281,6 +286,41 @@ fun SettingsScreen(
                         title = "Three-finger double tap",
                         action = threeFingerDoubleTap,
                         onAction = viewModel::setThreeFingerDoubleTapAction,
+                    )
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text("S Pen button", style = MaterialTheme.typography.titleMedium)
+            SettingRow(
+                title = "S Pen button",
+                subtitle = "Use the pen's side button for quick actions. Works while the pen is on " +
+                    "or hovering just above the screen.",
+                checked = stylusButtonEnabled,
+                onCheckedChange = viewModel::setStylusButtonEnabled,
+            )
+            AnimatedVisibility(visible = stylusButtonEnabled) {
+                Column(modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 4.dp)) {
+                    StylusHoldRow(
+                        title = "Press and hold",
+                        tool = stylusHoldTool,
+                        onTool = viewModel::setStylusHoldTool,
+                    )
+                    Text(
+                        "Held only while the button is down, then reverts.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FingerGestureRow(
+                        title = "Double click",
+                        action = stylusDoubleClick,
+                        onAction = viewModel::setStylusDoubleClickAction,
+                    )
+                    FingerGestureRow(
+                        title = "Single click",
+                        action = stylusSingleClick,
+                        onAction = viewModel::setStylusSingleClickAction,
                     )
                 }
             }
@@ -886,13 +926,55 @@ private fun FingerGestureAction.label(): String = when (this) {
     FingerGestureAction.SELECT_HAND -> "Enable finger draw"
 }
 
+/** Human-readable label for a momentary stylus-hold tool (FA-19). */
+private fun StylusHoldTool.label(): String = when (this) {
+    StylusHoldTool.NONE -> "Off"
+    StylusHoldTool.PEN -> "Pen"
+    StylusHoldTool.ERASER -> "Eraser"
+    StylusHoldTool.LASSO -> "Lasso"
+}
+
 /** A "<gesture> → <action>" row: a label and a dropdown to bind one of the [FingerGestureAction]s. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FingerGestureRow(
     title: String,
     action: FingerGestureAction,
     onAction: (FingerGestureAction) -> Unit,
+) {
+    GestureDropdownRow(
+        title = title,
+        selectedLabel = action.label(),
+        options = FingerGestureAction.entries,
+        optionLabel = { it.label() },
+        onSelect = onAction,
+    )
+}
+
+/** A "press and hold → tool" row binding the momentary [StylusHoldTool] (FA-19). */
+@Composable
+private fun StylusHoldRow(
+    title: String,
+    tool: StylusHoldTool,
+    onTool: (StylusHoldTool) -> Unit,
+) {
+    GestureDropdownRow(
+        title = title,
+        selectedLabel = tool.label(),
+        options = StylusHoldTool.entries,
+        optionLabel = { it.label() },
+        onSelect = onTool,
+    )
+}
+
+/** A labelled row with a readonly dropdown to bind a gesture/button to one of [options]. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun <T> GestureDropdownRow(
+    title: String,
+    selectedLabel: String,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onSelect: (T) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Row(
@@ -903,7 +985,7 @@ private fun FingerGestureRow(
         Spacer(modifier = Modifier.width(16.dp))
         ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
             OutlinedTextField(
-                value = action.label(),
+                value = selectedLabel,
                 onValueChange = {},
                 readOnly = true,
                 singleLine = true,
@@ -911,11 +993,11 @@ private fun FingerGestureRow(
                 modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).width(200.dp),
             )
             ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                FingerGestureAction.entries.forEach { option ->
+                options.forEach { option ->
                     DropdownMenuItem(
-                        text = { Text(option.label()) },
+                        text = { Text(optionLabel(option)) },
                         onClick = {
-                            onAction(option)
+                            onSelect(option)
                             expanded = false
                         },
                     )

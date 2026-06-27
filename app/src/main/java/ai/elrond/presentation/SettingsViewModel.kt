@@ -5,6 +5,7 @@ import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.NoteTabsMode
+import ai.elrond.domain.StylusHoldTool
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.ToolSelectedTreatment
@@ -123,6 +124,40 @@ class SettingsViewModel @Inject constructor(
 
     fun setThreeFingerDoubleTapAction(action: FingerGestureAction) {
         viewModelScope.launch { repository.setThreeFingerDoubleTapAction(action) }
+    }
+
+    // --- S Pen button (FA-19) ---
+
+    val stylusButtonEnabled: StateFlow<Boolean> = repository.stylusButtonEnabled
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_STYLUS_BUTTON_ENABLED,
+        )
+
+    fun setStylusButtonEnabled(enabled: Boolean) {
+        viewModelScope.launch { repository.setStylusButtonEnabled(enabled) }
+    }
+
+    val stylusHoldTool: StateFlow<StylusHoldTool> = repository.stylusHoldTool
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_STYLUS_HOLD_TOOL)
+
+    fun setStylusHoldTool(tool: StylusHoldTool) {
+        viewModelScope.launch { repository.setStylusHoldTool(tool) }
+    }
+
+    val stylusDoubleClickAction: StateFlow<FingerGestureAction> = repository.stylusDoubleClickAction
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_STYLUS_DOUBLE_CLICK_ACTION)
+
+    fun setStylusDoubleClickAction(action: FingerGestureAction) {
+        viewModelScope.launch { repository.setStylusDoubleClickAction(action) }
+    }
+
+    val stylusSingleClickAction: StateFlow<FingerGestureAction> = repository.stylusSingleClickAction
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_STYLUS_SINGLE_CLICK_ACTION)
+
+    fun setStylusSingleClickAction(action: FingerGestureAction) {
+        viewModelScope.launch { repository.setStylusSingleClickAction(action) }
     }
 
     /** Active-tool highlight style shown in the note toolbar (default A · soft tile). */

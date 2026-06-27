@@ -3,6 +3,7 @@ package ai.elrond.canvas
 import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.FingerGesture
 import ai.elrond.domain.FingerGestureAction
+import ai.elrond.domain.StylusHoldTool
 import ai.elrond.presentation.CanvasViewModel
 import androidx.ink.strokes.Stroke
 import io.mockk.mockk
@@ -112,5 +113,60 @@ class CanvasViewModelGestureTest {
         assertTrue(vm.isDoubleTapBound(2)) // 2x2 = LAST_TOOL_SWAP
         assertFalse(vm.isDoubleTapBound(3)) // 2x3 = NONE
         assertFalse(vm.isDoubleTapBound(1)) // not a gesture count
+    }
+
+    // --- S Pen button ---
+
+    @Test
+    fun `stylus double click selects the lasso by default`() {
+        val vm = CanvasViewModel()
+
+        vm.onStylusClick(doubleClick = true) // default SELECT_LASSO
+
+        assertEquals(CanvasTool.LASSO, vm.tool.value)
+        assertTrue(vm.isStylusDoubleClickBound())
+    }
+
+    @Test
+    fun `stylus single click is unbound by default`() {
+        val vm = CanvasViewModel()
+        vm.selectTool(CanvasTool.ERASER)
+
+        vm.onStylusClick(doubleClick = false) // default NONE
+
+        assertEquals(CanvasTool.ERASER, vm.tool.value)
+    }
+
+    @Test
+    fun `momentary hold springs to the eraser and reverts on release`() {
+        val vm = CanvasViewModel()
+        vm.selectTool(CanvasTool.LASSO)
+
+        vm.onStylusHoldStart() // default hold tool = ERASER
+        assertEquals(CanvasTool.ERASER, vm.tool.value)
+
+        vm.onStylusHoldEnd()
+        assertEquals(CanvasTool.LASSO, vm.tool.value) // reverts to the tool active when it began
+    }
+
+    @Test
+    fun `hold end without a hold start is a no-op`() {
+        val vm = CanvasViewModel()
+        vm.selectTool(CanvasTool.ERASER)
+
+        vm.onStylusHoldEnd()
+
+        assertEquals(CanvasTool.ERASER, vm.tool.value)
+    }
+
+    @Test
+    fun `a None hold tool does not change the tool`() = runTest {
+        val vm = CanvasViewModel(stylusHoldToolFlow = MutableStateFlow(StylusHoldTool.NONE))
+        advanceUntilIdle()
+        vm.selectTool(CanvasTool.PEN)
+
+        vm.onStylusHoldStart()
+
+        assertEquals(CanvasTool.PEN, vm.tool.value)
     }
 }

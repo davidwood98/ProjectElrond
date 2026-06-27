@@ -12,6 +12,7 @@ import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.CanvasStroke
 import ai.elrond.domain.FingerGesture
 import ai.elrond.domain.FingerGestureAction
+import ai.elrond.domain.StylusHoldTool
 import ai.elrond.BuildConfig
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.GestureTriggerDetector
@@ -146,6 +147,14 @@ class CanvasViewModel(
     twoFingerDoubleTapActionFlow: Flow<FingerGestureAction>? = null,
     /** Action bound to a double three-finger tap; null keeps the default (none). */
     threeFingerDoubleTapActionFlow: Flow<FingerGestureAction>? = null,
+    /** S Pen button master switch (FA-19); null keeps the default (on). */
+    stylusButtonEnabledFlow: Flow<Boolean>? = null,
+    /** Tool the S Pen button springs to while held; null keeps the default (Eraser). */
+    stylusHoldToolFlow: Flow<StylusHoldTool>? = null,
+    /** Action bound to a double S Pen button click; null keeps the default (select Lasso). */
+    stylusDoubleClickActionFlow: Flow<FingerGestureAction>? = null,
+    /** Action bound to a single S Pen button click; null keeps the default (none). */
+    stylusSingleClickActionFlow: Flow<FingerGestureAction>? = null,
     /** Write-through for the palm-rejection preference (null in tests). */
     private val persistStylusOnly: (suspend (Boolean) -> Unit)? = null,
     /**
@@ -203,6 +212,10 @@ class CanvasViewModel(
         threeFingerTapActionFlow = settings.threeFingerTapAction,
         twoFingerDoubleTapActionFlow = settings.twoFingerDoubleTapAction,
         threeFingerDoubleTapActionFlow = settings.threeFingerDoubleTapAction,
+        stylusButtonEnabledFlow = settings.stylusButtonEnabled,
+        stylusHoldToolFlow = settings.stylusHoldTool,
+        stylusDoubleClickActionFlow = settings.stylusDoubleClickAction,
+        stylusSingleClickActionFlow = settings.stylusSingleClickAction,
         persistStylusOnly = { settings.setStylusOnly(it) },
         // Real generator: render the page's normalized polylines (the same data the card draws) to a
         // bitmap off-thread and cache it; an empty page drops any stale file so the card shows blank.
@@ -256,6 +269,20 @@ class CanvasViewModel(
     private val _threeFingerTapAction = MutableStateFlow(FingerGestureAction.REDO)
     private val _twoFingerDoubleTapAction = MutableStateFlow(FingerGestureAction.LAST_TOOL_SWAP)
     private val _threeFingerDoubleTapAction = MutableStateFlow(FingerGestureAction.NONE)
+
+    // ── S Pen button (FA-19) ──────────────────────────────────────────────────────────────────
+    // [stylusButtonEnabled] gates detection in InkCanvas; click actions are read via
+    // [isStylusDoubleClickBound] / [onStylusClick]; the momentary hold uses [stylusHoldTool].
+
+    private val _stylusButtonEnabled = MutableStateFlow(true)
+    val stylusButtonEnabled: StateFlow<Boolean> = _stylusButtonEnabled.asStateFlow()
+
+    private val _stylusHoldTool = MutableStateFlow(StylusHoldTool.ERASER)
+    private val _stylusDoubleClickAction = MutableStateFlow(FingerGestureAction.SELECT_LASSO)
+    private val _stylusSingleClickAction = MutableStateFlow(FingerGestureAction.NONE)
+
+    /** Tool active before a momentary button-hold began, restored on release; null when not held. */
+    private var toolBeforeHold: CanvasTool? = null
 
     private val _aiState = MutableStateFlow<AiUiState>(AiUiState.Idle)
     val aiState: StateFlow<AiUiState> = _aiState.asStateFlow()
@@ -431,6 +458,18 @@ class CanvasViewModel(
         }
         threeFingerDoubleTapActionFlow?.let { flow ->
             viewModelScope.launch { flow.collect { _threeFingerDoubleTapAction.value = it } }
+        }
+        stylusButtonEnabledFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _stylusButtonEnabled.value = it } }
+        }
+        stylusHoldToolFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _stylusHoldTool.value = it } }
+        }
+        stylusDoubleClickActionFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _stylusDoubleClickAction.value = it } }
+        }
+        stylusSingleClickActionFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _stylusSingleClickAction.value = it } }
         }
         // Pre-download the handwriting model so the first /Q is fast.
         recognizer?.let { viewModelScope.launch { it.warmUp() } }
@@ -615,6 +654,10 @@ class CanvasViewModel(
             FingerGesture.TwoFingerDoubleTap -> _twoFingerDoubleTapAction.value
             FingerGesture.ThreeFingerDoubleTap -> _threeFingerDoubleTapAction.value
         }
+        performGestureAction(action)
+    }
+
+    private fun performGestureAction(action: FingerGestureAction) {
         when (action) {
             FingerGestureAction.NONE -> Unit
             FingerGestureAction.UNDO -> undo()
@@ -625,6 +668,37 @@ class CanvasViewModel(
             FingerGestureAction.SELECT_LASSO -> selectTool(CanvasTool.LASSO)
             FingerGestureAction.SELECT_HAND -> setStylusOnly(false)
         }
+    }
+
+    // ── S Pen button gestures (FA-19) ─────────────────────────────────────────────────────────
+
+    /** True when a double S Pen button click is bound — InkCanvas uses this to skip the wait. */
+    fun isStylusDoubleClickBound(): Boolean = _stylusDoubleClickAction.value != FingerGestureAction.NONE
+
+    /** Performs the user-bound action for a single or double S Pen button click. */
+    fun onStylusClick(doubleClick: Boolean) {
+        performGestureAction(
+            if (doubleClick) _stylusDoubleClickAction.value else _stylusSingleClickAction.value,
+        )
+    }
+
+    /**
+     * Begins a momentary button-hold: springs to the bound tool ([stylusHoldTool]) and remembers the
+     * tool to revert to on [onStylusHoldEnd]. No-op when the gesture is disabled (NONE) or a hold is
+     * already active.
+     */
+    fun onStylusHoldStart() {
+        if (toolBeforeHold != null) return
+        val target = _stylusHoldTool.value.toCanvasTool() ?: return
+        toolBeforeHold = _tool.value
+        selectTool(target)
+    }
+
+    /** Ends a momentary button-hold: reverts to the tool active before the hold began. */
+    fun onStylusHoldEnd() {
+        val revert = toolBeforeHold ?: return
+        toolBeforeHold = null
+        selectTool(revert)
     }
 
     fun setStylusOnly(enabled: Boolean) {

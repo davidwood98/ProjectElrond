@@ -5,6 +5,7 @@ import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.NoteTabsMode
+import ai.elrond.domain.StylusHoldTool
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.ToolSelectedTreatment
@@ -92,6 +93,22 @@ class SettingsRepositoryTest {
         assertEquals(FingerGestureAction.SELECT_ERASER, repo.threeFingerTapAction.first())
         assertEquals(FingerGestureAction.SELECT_HAND, repo.twoFingerDoubleTapAction.first())
         assertEquals(FingerGestureAction.REDO, repo.threeFingerDoubleTapAction.first())
+
+        // FA-19 S Pen button: defaults (on; hold→Eraser, double→Lasso, single→none), then round-trip.
+        assertTrue(repo.stylusButtonEnabled.first())
+        assertEquals(StylusHoldTool.ERASER, repo.stylusHoldTool.first())
+        assertEquals(FingerGestureAction.SELECT_LASSO, repo.stylusDoubleClickAction.first())
+        assertEquals(FingerGestureAction.NONE, repo.stylusSingleClickAction.first())
+
+        repo.setStylusButtonEnabled(false)
+        repo.setStylusHoldTool(StylusHoldTool.LASSO)
+        repo.setStylusDoubleClickAction(FingerGestureAction.UNDO)
+        repo.setStylusSingleClickAction(FingerGestureAction.SELECT_PEN)
+
+        assertFalse(repo.stylusButtonEnabled.first())
+        assertEquals(StylusHoldTool.LASSO, repo.stylusHoldTool.first())
+        assertEquals(FingerGestureAction.UNDO, repo.stylusDoubleClickAction.first())
+        assertEquals(FingerGestureAction.SELECT_PEN, repo.stylusSingleClickAction.first())
 
         // Prefix-mode trigger mode round-trips (third activation option).
         repo.setTriggerMode(TriggerMode.PREFIX_COMMAND)

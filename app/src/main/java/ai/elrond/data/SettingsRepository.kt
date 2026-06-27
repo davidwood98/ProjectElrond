@@ -5,6 +5,7 @@ import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.NoteTabsMode
+import ai.elrond.domain.StylusHoldTool
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.ToolSelectedTreatment
@@ -139,6 +140,42 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setThreeFingerDoubleTapAction(action: FingerGestureAction) {
         context.settingsDataStore.edit { it[THREE_FINGER_DOUBLE_TAP_KEY] = action.name }
+    }
+
+    // --- S Pen button (FA-19) ---
+    // The stylus side button (BUTTON_STYLUS_PRIMARY). Press-and-hold is momentary (springs to a
+    // tool while held); single/double click fire a discrete action like the finger gestures.
+
+    /** Master switch for S Pen button gestures (default on). */
+    val stylusButtonEnabled: Flow<Boolean> = context.settingsDataStore.data
+        .map { it[STYLUS_BUTTON_ENABLED_KEY] ?: DEFAULT_STYLUS_BUTTON_ENABLED }
+
+    suspend fun setStylusButtonEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[STYLUS_BUTTON_ENABLED_KEY] = enabled }
+    }
+
+    /** Tool the button springs to while held, reverting on release (default Eraser). */
+    val stylusHoldTool: Flow<StylusHoldTool> = context.settingsDataStore.data
+        .map { it[STYLUS_HOLD_TOOL_KEY]?.let(StylusHoldTool::fromName) ?: DEFAULT_STYLUS_HOLD_TOOL }
+
+    suspend fun setStylusHoldTool(tool: StylusHoldTool) {
+        context.settingsDataStore.edit { it[STYLUS_HOLD_TOOL_KEY] = tool.name }
+    }
+
+    /** Action bound to a double button click (default select Lasso). */
+    val stylusDoubleClickAction: Flow<FingerGestureAction> = context.settingsDataStore.data
+        .map { it[STYLUS_DOUBLE_CLICK_KEY]?.let(FingerGestureAction::fromName) ?: DEFAULT_STYLUS_DOUBLE_CLICK_ACTION }
+
+    suspend fun setStylusDoubleClickAction(action: FingerGestureAction) {
+        context.settingsDataStore.edit { it[STYLUS_DOUBLE_CLICK_KEY] = action.name }
+    }
+
+    /** Action bound to a single button click (default none). */
+    val stylusSingleClickAction: Flow<FingerGestureAction> = context.settingsDataStore.data
+        .map { it[STYLUS_SINGLE_CLICK_KEY]?.let(FingerGestureAction::fromName) ?: DEFAULT_STYLUS_SINGLE_CLICK_ACTION }
+
+    suspend fun setStylusSingleClickAction(action: FingerGestureAction) {
+        context.settingsDataStore.edit { it[STYLUS_SINGLE_CLICK_KEY] = action.name }
     }
 
     /** How the active note-tool is highlighted in the toolbar (A soft tile / B filled / C underline). */
@@ -348,6 +385,12 @@ class SettingsRepository(private val context: Context) {
         val DEFAULT_TWO_FINGER_DOUBLE_TAP_ACTION = FingerGestureAction.LAST_TOOL_SWAP
         val DEFAULT_THREE_FINGER_DOUBLE_TAP_ACTION = FingerGestureAction.NONE
 
+        /** FA-19 S Pen button: master on; hold→Eraser (momentary), double-click→Lasso, single→none. */
+        const val DEFAULT_STYLUS_BUTTON_ENABLED = true
+        val DEFAULT_STYLUS_HOLD_TOOL = StylusHoldTool.ERASER
+        val DEFAULT_STYLUS_DOUBLE_CLICK_ACTION = FingerGestureAction.SELECT_LASSO
+        val DEFAULT_STYLUS_SINGLE_CLICK_ACTION = FingerGestureAction.NONE
+
         /** Lasso-move snap-back: default 2.5% of the canvas size, capped at 10%; on by default. */
         const val DEFAULT_LASSO_SNAP_BACK_THRESHOLD = 0.025f
         const val MAX_LASSO_SNAP_BACK_THRESHOLD = 0.10f
@@ -372,6 +415,10 @@ class SettingsRepository(private val context: Context) {
         private val THREE_FINGER_TAP_KEY = stringPreferencesKey("three_finger_tap_action")
         private val TWO_FINGER_DOUBLE_TAP_KEY = stringPreferencesKey("two_finger_double_tap_action")
         private val THREE_FINGER_DOUBLE_TAP_KEY = stringPreferencesKey("three_finger_double_tap_action")
+        private val STYLUS_BUTTON_ENABLED_KEY = booleanPreferencesKey("stylus_button_enabled")
+        private val STYLUS_HOLD_TOOL_KEY = stringPreferencesKey("stylus_hold_tool")
+        private val STYLUS_DOUBLE_CLICK_KEY = stringPreferencesKey("stylus_double_click_action")
+        private val STYLUS_SINGLE_CLICK_KEY = stringPreferencesKey("stylus_single_click_action")
         private val TOOL_TREATMENT_KEY = stringPreferencesKey("tool_selected_treatment")
         private val PEN_ICON_STYLE_KEY = stringPreferencesKey("pen_icon_style")
         private val AI_LOADER_STYLE_KEY = stringPreferencesKey("ai_loader_style")
