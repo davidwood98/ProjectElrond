@@ -55,7 +55,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import android.view.View
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -78,6 +80,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
@@ -131,6 +134,12 @@ fun NoteCanvasScreen(
     var showPages by remember { mutableStateOf(false) }
     var showLibrary by remember { mutableStateOf(false) }
 
+    // S Pen side-button gestures (FA-19). One shared tracker, fed by both the InkCanvas (while
+    // drawing) and an always-present top-level observer below — so the button keeps working in
+    // every tool mode, including Lasso where the selection overlay otherwise owns input.
+    val stylusButtonTracker = remember(viewModel) { StylusButtonTracker(viewModel) }
+    DisposableEffect(stylusButtonTracker) { onDispose { stylusButtonTracker.dispose() } }
+
     // AI-box selection lives in the UI (not persisted). When the "edit mode on creation"
     // setting is on (default) a freshly created note starts selected; loaded notes always
     // start deselected (part of the note flow). Deselect by tapping anywhere off the box.
@@ -180,6 +189,7 @@ fun NoteCanvasScreen(
         InkCanvas(
             viewModel = viewModel,
             modifier = Modifier.fillMaxSize(),
+            stylusButtonTracker = stylusButtonTracker,
         )
 
         // Tap anywhere off a selected AI box to deselect it (place it into the note flow).
@@ -228,6 +238,23 @@ fun NoteCanvasScreen(
         if (tool == CanvasTool.LASSO) {
             SelectionLayer(viewModel = viewModel, modifier = Modifier.fillMaxSize())
         }
+
+        // Always-present S Pen button observer (FA-19). A transparent top View that watches the
+        // side button via generic-motion events (which carry the real BUTTON_STYLUS_PRIMARY bits and
+        // fire while the pen hovers) and feeds the shared tracker — so the button works in every tool
+        // mode, even when the Lasso overlay owns touch. It only handles GENERIC motion (returns
+        // false) and never the touch stream, so drawing / lasso / toolbar input pass straight through.
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                View(ctx).apply {
+                    setOnGenericMotionListener { _, event ->
+                        stylusButtonTracker.onMotionEvent(event)
+                        false // observe only — let the event continue to the layers below
+                    }
+                }
+            },
+        )
 
         // ── Leap note toolbar (Claude Design "Note Tool Icons" handoff) ──────────────────────
         // Left pod: exit the page, plus Pages + Library overlays (FA-14).

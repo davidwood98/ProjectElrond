@@ -17,6 +17,7 @@ import android.widget.FrameLayout
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.ink.authoring.InProgressStrokeId
@@ -61,14 +62,15 @@ import kotlin.math.hypot
  * selection overlay owns input, so this listener never draws ink.
  */
 @Composable
-fun InkCanvas(
+internal fun InkCanvas(
     viewModel: CanvasViewModel,
     modifier: Modifier = Modifier,
+    stylusButtonTracker: StylusButtonTracker = remember(viewModel) { StylusButtonTracker(viewModel) },
 ) {
     Box(modifier = modifier) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
-            factory = { context -> createInkView(context, viewModel) },
+            factory = { context -> createInkView(context, viewModel, stylusButtonTracker) },
         )
     }
 }
@@ -100,7 +102,11 @@ private class DryStrokesView(context: Context) : View(context) {
 }
 
 @SuppressLint("ClickableViewAccessibility")
-private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
+private fun createInkView(
+    context: Context,
+    viewModel: CanvasViewModel,
+    stylusButtonTracker: StylusButtonTracker,
+): View {
     val rootView = FrameLayout(context)
     val matchParent = FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.MATCH_PARENT,
@@ -120,7 +126,6 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
     }
     val predictor = MotionEventPredictor.newInstance(rootView)
     val fingerGestureTracker = FingerGestureTracker(viewModel)
-    val stylusButtonTracker = StylusButtonTracker(viewModel)
     rootView.setOnTouchListener(
         createTouchListener(
             inProgressStrokesView, viewModel, predictor, fingerGestureTracker, stylusButtonTracker,
@@ -182,7 +187,8 @@ private fun createInkView(context: Context, viewModel: CanvasViewModel): View {
                 job?.cancel()
                 job = null
                 fingerGestureTracker.dispose()
-                stylusButtonTracker.dispose()
+                // stylusButtonTracker is owned (and disposed) by the caller — it's shared with the
+                // always-present button observer so it keeps working across tool/overlay changes.
             }
         },
     )
@@ -202,17 +208,14 @@ private fun createTouchListener(
     var erasing = false
 
     return View.OnTouchListener { view, event ->
+        // Track finger + S Pen-button gestures BEFORE the lasso bail-out, so they keep working in
+        // every tool mode (FA-19). They run independently of palm rejection and of drawing.
+        fingerGestureTracker.onTouchEvent(event)
+        stylusButtonTracker.onMotionEvent(event)
+
         // In lasso-select mode the Compose selection overlay owns all input (it sits above this
         // view and consumes the gesture); never draw ink here. This is a belt-and-braces guard.
         if (viewModel.tool.value == CanvasTool.LASSO) return@OnTouchListener false
-
-        // Feed the multi-finger gesture detector first — it runs independently of palm rejection,
-        // so 2-/3-finger taps fire whether stylus-only mode is on or off (FA-19).
-        fingerGestureTracker.onTouchEvent(event)
-        // Track the S Pen side button while the pen is touching. We don't consume here (the return
-        // is ignored) so drawing continues — the dedicated button-press/release events that carry
-        // no draw data are consumed by the generic-motion listener instead (FA-19).
-        stylusButtonTracker.onMotionEvent(event)
 
         predictor.record(event)
         val predictedEvent = predictor.predict()
@@ -475,7 +478,7 @@ private class FingerGestureTracker(private val viewModel: CanvasViewModel) {
  * Device/manual-verified like the other ink flows (touches [MotionEvent]); the bound actions it
  * calls are unit-tested on the ViewModel.
  */
-private class StylusButtonTracker(private val viewModel: CanvasViewModel) {
+internal class StylusButtonTracker(private val viewModel: CanvasViewModel) {
     private val handler = Handler(Looper.getMainLooper())
 
     private var buttonDown = false
@@ -517,6 +520,9 @@ private class StylusButtonTracker(private val viewModel: CanvasViewModel) {
     }
 
     private fun onButtonDown(@Suppress("UNUSED_PARAMETER") downTime: Long) {
+        // If a click is already pending, this press is the second half of a (potential) double
+        // click — don't arm a hold for it, or the short hold threshold could swallow the double.
+        if (lastClickTime != 0L) return
         val runnable = Runnable {
             pendingHold = null
             holdActive = true
