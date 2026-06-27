@@ -1425,6 +1425,68 @@ retention, context inclusion) was confirmed with the user up front.
   removes trigger+prompt but not earlier ink, 2s no-prompt timeout leaves the ink), `SettingsRepositoryTest`
   (+both Long prefs: defaults, round-trip, clamp). The indicator/slider Compose visuals are device-verified.
 
+## FA-19 — configurable finger gestures + S Pen button (2026-06-27)
+
+User-configurable canvas gestures: multi-finger taps and the S Pen side button, each bound to a
+canvas action in Settings. On branch **`fa-19-finger-commands`**. **323 app + 24 aibackend
+JVM/Robolectric tests pass** (0 failures; was 304+24); `:app:testDebugUnitTest` + `:aibackend:test`
+build on the WSL Linux SDK. **No schema change — DB stays v10** (all new prefs are DataStore). The raw
+touch/`MotionEvent` detection (the trackers, the button observer) is **device/manual-verified** like
+the other ink flows; the binding/dispatch logic + settings round-trips are JVM-tested. Scope (which
+gestures, defaults, gating, hold semantics, detection mechanism) was confirmed with the user up front.
+
+- **Shared action enum.** `domain/FingerGestureAction` (Compose-free, `fromName`): `NONE / UNDO /
+  REDO / LAST_TOOL_SWAP / SELECT_PEN / SELECT_ERASER / SELECT_LASSO / SELECT_HAND`. `SELECT_HAND`
+  toggles finger-draw (`setStylusOnly(false)`) — "finger draw" is the palm-rejection setting inverted,
+  not a `CanvasTool`. Reused by both finger taps and stylus clicks. `CanvasViewModel.performGestureAction`
+  is the one dispatch site (a `toggleTool` flag, see double-click below); `selectTool` now records
+  `previousTool` so `LAST_TOOL_SWAP` works.
+- **Finger gestures (`domain/FingerGesture` sealed: Two/Three-finger × single/double tap).** Defaults
+  (notation *taps × fingers*): **1×2 Undo, 1×3 Redo, 2×2 last-tool swap, 2×3 unbound**. A master
+  `fingerGesturesEnabled` switch (default on) heads its own Settings section with four action dropdowns.
+  **Fully decoupled from palm rejection** — a deliberate 2-/3-finger tap is detected whether stylus-only
+  is on or off (it's distinguishable from a resting palm), and multi-finger taps never draw; in
+  finger-draw mode a nascent finger stroke is cancelled the instant a 2nd finger lands. Single taps fire
+  instantly when that finger-count's double-tap is unbound, else wait the ~300ms double-tap window.
+  Detected by `InkCanvas.FingerGestureTracker` (manual multi-pointer state machine — max-finger-count +
+  duration + movement gates; `GestureDetector` can't do multi-pointer tap counts).
+- **S Pen side button (`domain/StylusHoldTool`: NONE/PEN/ERASER/LASSO + `toCanvasTool`).** Standard
+  Android stylus button (`BUTTON_STYLUS_PRIMARY`) — **no new dependency**; works while the pen is on or
+  hovering just above the screen. Master `stylusButtonEnabled` (default on) + three bindings:
+  **press-and-hold → tool (default Eraser, momentary** — springs to the tool while held, reverts on
+  release via `toolBeforeHold`, so it binds to a tool not the full action list); **double-click →
+  action (default Lasso)**; **single-click → action (default off)**. The **double-click toggles** a tool
+  binding: clicking again while already on the bound tool cycles back to the previous tool
+  (Lasso → previous → Lasso). Detected by `InkCanvas.StylusButtonTracker` (edge-detects the button on
+  `buttonState`, robust to `ACTION_BUTTON_PRESS` vs hover/move reporting; hold threshold **150ms** so
+  erase engages quickly; a pending click never arms a hold so a short threshold can't swallow a
+  double-click; ends a stuck hold on hover-exit/detach).
+- **Works in every tool mode (incl. Lasso).** In Lasso mode the full-screen `SelectionLayer` overlay
+  owns input and the InkCanvas touch listener early-returns, so the button tracker would miss events.
+  Fix: **one shared `StylusButtonTracker`** (hoisted to `NoteCanvasScreen`, owned via `DisposableEffect`)
+  is fed by **both** InkCanvas **and** an always-present transparent top-level observer `View` that
+  watches the button via generic-motion (hover) events — a real `View`, so it carries the true
+  `BUTTON_STYLUS_PRIMARY` bits (a Compose-reconstructed event would not). The observer handles generic
+  motion only (returns false), so drawing / lasso / toolbar touch passes through. Edge-detection on
+  `buttonState` dedupes the two feed paths. The finger + button trackers are also fed before the lasso
+  early-return.
+- **Settings.** Removed the duplicate **stylus-only (palm rejection) row** — the toolbar finger-draw
+  button stays the live control (the underlying `stylusOnly` pref + logic are untouched). New **Finger
+  gestures** and **S Pen button** sections; the action picker is a generalised `GestureDropdownRow`
+  (reused for finger taps, stylus clicks, and the hold-tool). New DataStore prefs:
+  `fingerGesturesEnabled` + four finger-action keys + `stylusButtonEnabled` + `stylusHoldTool` +
+  `stylus{Double,Single}ClickAction` (string-backed enums, mirroring `triggerMode`).
+- **DI / test seams.** `CanvasViewModel` gains nullable flow params for all of the above (collected into
+  `MutableStateFlow`/vars, defaulted to the documented defaults so JVM tests are deterministic without
+  flows); the `@Inject` secondary ctor wires them from `SettingsRepository`. Public `fingerGesturesEnabled`
+  / `stylusButtonEnabled` StateFlows + `isDoubleTapBound` / `isStylusDoubleClickBound` are read by the
+  InkCanvas trackers to gate detection.
+- New/updated tests: `FingerGestureActionTest` (`FingerGestureAction` + `StylusHoldTool` parsing/mapping),
+  `CanvasViewModelGestureTest` (finger dispatch incl. default bindings + a SELECT_HAND/SELECT_LASSO flow;
+  stylus click dispatch, double-click tool toggle, momentary hold spring+revert, None-hold no-op),
+  `SettingsRepositoryTest` (+all nine new pref round-trips). The trackers' raw-`MotionEvent` detection and
+  the Lasso-mode observer routing are device-verified.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
