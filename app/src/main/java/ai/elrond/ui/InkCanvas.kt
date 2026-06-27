@@ -571,7 +571,8 @@ private class StylusButtonTracker(private val viewModel: CanvasViewModel) {
     }
 
     private companion object {
-        const val HOLD_THRESHOLD_MS = 350L
+        // Short so the eraser engages quickly on hold — a click just has to release faster than this.
+        const val HOLD_THRESHOLD_MS = 150L
         const val DOUBLE_CLICK_WINDOW_MS = 300L
     }
 }

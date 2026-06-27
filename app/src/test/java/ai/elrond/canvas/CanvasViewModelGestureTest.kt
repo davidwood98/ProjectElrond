@@ -128,6 +128,20 @@ class CanvasViewModelGestureTest {
     }
 
     @Test
+    fun `stylus double click toggles back to the previous tool on repeat`() {
+        val vm = CanvasViewModel() // double-click default SELECT_LASSO, starts on PEN
+
+        vm.onStylusClick(doubleClick = true)
+        assertEquals(CanvasTool.LASSO, vm.tool.value)
+
+        vm.onStylusClick(doubleClick = true) // already on Lasso → cycle back to Pen
+        assertEquals(CanvasTool.PEN, vm.tool.value)
+
+        vm.onStylusClick(doubleClick = true) // and back to Lasso
+        assertEquals(CanvasTool.LASSO, vm.tool.value)
+    }
+
+    @Test
     fun `stylus single click is unbound by default`() {
         val vm = CanvasViewModel()
         vm.selectTool(CanvasTool.ERASER)

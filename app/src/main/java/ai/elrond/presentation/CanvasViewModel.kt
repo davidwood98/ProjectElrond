@@ -657,7 +657,22 @@ class CanvasViewModel(
         performGestureAction(action)
     }
 
-    private fun performGestureAction(action: FingerGestureAction) {
+    /**
+     * Runs a bound gesture action. When [toggleTool] is set and the action selects a tool the
+     * canvas is *already* on, it cycles back to the previous tool instead — so a repeat of the same
+     * gesture leaves the tool it entered (used by the S Pen double-click).
+     */
+    private fun performGestureAction(action: FingerGestureAction, toggleTool: Boolean = false) {
+        val targetTool = when (action) {
+            FingerGestureAction.SELECT_PEN -> CanvasTool.PEN
+            FingerGestureAction.SELECT_ERASER -> CanvasTool.ERASER
+            FingerGestureAction.SELECT_LASSO -> CanvasTool.LASSO
+            else -> null
+        }
+        if (toggleTool && targetTool != null && _tool.value == targetTool) {
+            selectTool(previousTool)
+            return
+        }
         when (action) {
             FingerGestureAction.NONE -> Unit
             FingerGestureAction.UNDO -> undo()
@@ -675,11 +690,17 @@ class CanvasViewModel(
     /** True when a double S Pen button click is bound — InkCanvas uses this to skip the wait. */
     fun isStylusDoubleClickBound(): Boolean = _stylusDoubleClickAction.value != FingerGestureAction.NONE
 
-    /** Performs the user-bound action for a single or double S Pen button click. */
+    /**
+     * Performs the user-bound action for a single or double S Pen button click. A double click
+     * *toggles* a tool binding: clicking again while already on the bound tool cycles back to the
+     * previous tool (Lasso → previous → Lasso …), so the same gesture both enters and leaves it.
+     */
     fun onStylusClick(doubleClick: Boolean) {
-        performGestureAction(
-            if (doubleClick) _stylusDoubleClickAction.value else _stylusSingleClickAction.value,
-        )
+        if (doubleClick) {
+            performGestureAction(_stylusDoubleClickAction.value, toggleTool = true)
+        } else {
+            performGestureAction(_stylusSingleClickAction.value)
+        }
     }
 
     /**
