@@ -101,7 +101,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -181,13 +183,15 @@ fun PaperBackground(
 
             drawRect(color = sheet, topLeft = Offset(pageLeft, pageTop), size = Size(pageWidth, pageHeight))
 
-            // Lattice, clipped to the sheet so it moves with the page.
+            // Lattice, clipped to the sheet so it moves with the page. The spacing + mark size scale
+            // with the zoom ([scale]) so the grid/lines/dots stay fixed to the PAGE (usable as stroke
+            // references) rather than the screen — zooming in spreads them out 1:1 with the ink (FA-20).
             clipRect(left = pageLeft, top = pageTop, right = pageRight, bottom = pageBottom) {
                 when (paper) {
                     PaperStyle.PLAIN -> Unit
                     PaperStyle.DOTS -> {
-                        val step = 26.dp.toPx() * densityFactor
-                        val r = 1.4.dp.toPx()
+                        val step = 26.dp.toPx() * densityFactor * scale
+                        val r = 1.4.dp.toPx() * scale
                         var y = pageTop + step
                         while (y < pageBottom) {
                             var x = pageLeft + step
@@ -199,8 +203,8 @@ fun PaperBackground(
                         }
                     }
                     PaperStyle.RULED -> {
-                        val step = 34.dp.toPx() * densityFactor
-                        val w = 1.dp.toPx()
+                        val step = 34.dp.toPx() * densityFactor * scale
+                        val w = 1.dp.toPx() * scale
                         var y = pageTop + step
                         while (y < pageBottom) {
                             drawLine(color = mark, start = Offset(pageLeft, y), end = Offset(pageRight, y), strokeWidth = w)
@@ -208,8 +212,8 @@ fun PaperBackground(
                         }
                     }
                     PaperStyle.GRID -> {
-                        val step = 28.dp.toPx() * densityFactor
-                        val w = 1.dp.toPx()
+                        val step = 28.dp.toPx() * densityFactor * scale
+                        val w = 1.dp.toPx() * scale
                         var y = pageTop + step
                         while (y < pageBottom) {
                             drawLine(color = mark, start = Offset(pageLeft, y), end = Offset(pageRight, y), strokeWidth = w)
@@ -419,31 +423,36 @@ fun EditorHeader(
         )
         if (editing) {
             val focusRequester = remember { FocusRequester() }
-            var text by remember(title) { mutableStateOf(title) }
+            // Start with the whole title selected, so the first key typed (before the user taps to
+            // place a cursor) replaces the title outright; tapping to position the cursor instead
+            // collapses the selection and edits in place (FA-20 user flow).
+            var value by remember(title) {
+                mutableStateOf(TextFieldValue(title, TextRange(0, title.length)))
+            }
             // Only commit on focus-LOSS once the field has actually GAINED focus. On first
             // composition Compose delivers an initial onFocusChanged(isFocused = false) before
             // requestFocus() runs — without this guard that closed the editor the instant it opened.
             var hasFocused by remember { mutableStateOf(false) }
             BasicTextField(
-                value = text,
-                onValueChange = { text = it },
+                value = value,
+                onValueChange = { value = it },
                 singleLine = true,
                 textStyle = titleStyle,
                 cursorBrush = SolidColor(accent),
                 modifier = Modifier
                     .widthIn(max = 320.dp)
                     .focusRequester(focusRequester)
-                    // Commit when focus is lost (tap away), not only on the IME Done action.
+                    // Commit when focus is lost (tap a blank space), not only on the IME Done action.
                     .onFocusChanged {
                         if (it.isFocused) {
                             hasFocused = true
                         } else if (hasFocused && editing) {
-                            onRename(text)
+                            onRename(value.text)
                             editing = false
                         }
                     },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { onRename(text); editing = false }),
+                keyboardActions = KeyboardActions(onDone = { onRename(value.text); editing = false }),
             )
             // Focus + raise the keyboard immediately so the user can type on the first tap.
             LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -922,18 +931,18 @@ private fun AddPageTile(onClick: () -> Unit) {
 @Composable
 fun LibraryOverlay(
     subjectTree: List<SubjectNode>,
-    notesBySubject: Map<String?, List<NotePage>>,
+    notebooksBySubject: Map<String?, List<NotebookSummary>>,
     expandedIds: Set<String>,
-    currentPageId: String,
+    currentNotebookId: String?,
     onToggleSubject: (String) -> Unit,
     onLocateCurrent: () -> Unit,
     onOpenNote: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // Which note to flash as "you are here" — set when the locate button reveals the current note.
+    // Which notebook to flash as "you are here" — set when the locate button reveals the open notebook.
     var highlighted by remember { mutableStateOf<String?>(null) }
-    val unfiled = notesBySubject[null].orEmpty()
-    val isEmpty = subjectTree.isEmpty() && notesBySubject.values.all { it.isEmpty() }
+    val unfiled = notebooksBySubject[null].orEmpty()
+    val isEmpty = subjectTree.isEmpty() && notebooksBySubject.values.all { it.isEmpty() }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
@@ -982,7 +991,7 @@ fun LibraryOverlay(
                         modifier = Modifier.weight(1f),
                     )
                     IconButton(
-                        onClick = { onLocateCurrent(); highlighted = currentPageId },
+                        onClick = { onLocateCurrent(); highlighted = currentNotebookId },
                         modifier = Modifier.size(30.dp),
                     ) {
                         Icon(
@@ -1007,26 +1016,26 @@ fun LibraryOverlay(
                             modifier = Modifier.padding(start = 12.dp, top = 2.dp, bottom = 8.dp),
                         )
                     }
-                    // The subject tree, with each subject's notes nested inside it (file-explorer style).
+                    // The subject tree, with each subject's notebooks nested inside it (file-explorer style).
                     subjectTree.forEach { node ->
                         QuickNavSubject(
                             node = node,
-                            notesBySubject = notesBySubject,
+                            notebooksBySubject = notebooksBySubject,
                             expandedIds = expandedIds,
-                            highlightedNoteId = highlighted,
+                            highlightedNotebookId = highlighted,
                             depth = 0,
                             onToggle = onToggleSubject,
                             onOpenNote = onOpenNote,
                         )
                     }
-                    // Notes that aren't filed into any subject sit at the root, under an "Unfiled" label.
+                    // Notebooks that aren't filed into any subject sit at the root, under "Unfiled".
                     if (unfiled.isNotEmpty()) {
                         SectionLabel("Unfiled")
-                        unfiled.forEach { page ->
-                            QuickNavNote(
-                                page = page,
+                        unfiled.forEach { notebook ->
+                            QuickNavNotebook(
+                                notebook = notebook,
                                 depth = 0,
-                                highlighted = page.id == highlighted,
+                                highlighted = notebook.notebookId == highlighted,
                                 onOpenNote = onOpenNote,
                             )
                         }
@@ -1037,20 +1046,20 @@ fun LibraryOverlay(
     }
 }
 
-/** One subject row in Quick Nav; when expanded it reveals its child subjects then its notes. */
+/** One subject row in Quick Nav; when expanded it reveals its child subjects then its notebooks. */
 @Composable
 private fun QuickNavSubject(
     node: SubjectNode,
-    notesBySubject: Map<String?, List<NotePage>>,
+    notebooksBySubject: Map<String?, List<NotebookSummary>>,
     expandedIds: Set<String>,
-    highlightedNoteId: String?,
+    highlightedNotebookId: String?,
     depth: Int,
     onToggle: (String) -> Unit,
     onOpenNote: (String) -> Unit,
 ) {
     val subject = node.subject
-    val notes = notesBySubject[subject.id].orEmpty()
-    val expandable = node.children.isNotEmpty() || notes.isNotEmpty()
+    val notebooks = notebooksBySubject[subject.id].orEmpty()
+    val expandable = node.children.isNotEmpty() || notebooks.isNotEmpty()
     val expanded = subject.id in expandedIds
     Row(
         modifier = Modifier
@@ -1086,29 +1095,32 @@ private fun QuickNavSubject(
         node.children.forEach { child ->
             QuickNavSubject(
                 node = child,
-                notesBySubject = notesBySubject,
+                notebooksBySubject = notebooksBySubject,
                 expandedIds = expandedIds,
-                highlightedNoteId = highlightedNoteId,
+                highlightedNotebookId = highlightedNotebookId,
                 depth = depth + 1,
                 onToggle = onToggle,
                 onOpenNote = onOpenNote,
             )
         }
-        notes.forEach { page ->
-            QuickNavNote(
-                page = page,
+        notebooks.forEach { notebook ->
+            QuickNavNotebook(
+                notebook = notebook,
                 depth = depth + 1,
-                highlighted = page.id == highlightedNoteId,
+                highlighted = notebook.notebookId == highlightedNotebookId,
                 onOpenNote = onOpenNote,
             )
         }
     }
 }
 
-/** A note leaf in Quick Nav; tapping it opens the note in a canvas tab. */
+/**
+ * A notebook leaf in Quick Nav (FA-20). Shows the NOTEBOOK title (tracks renames) — never individual
+ * pages — and tapping it opens the notebook at its last-viewed page.
+ */
 @Composable
-private fun QuickNavNote(
-    page: NotePage,
+private fun QuickNavNotebook(
+    notebook: NotebookSummary,
     depth: Int,
     highlighted: Boolean,
     onOpenNote: (String) -> Unit,
@@ -1118,8 +1130,8 @@ private fun QuickNavNote(
             .fillMaxWidth()
             .clip(RoundedCornerShape(9.dp))
             .background(if (highlighted) LeapTheme.tokens.accentSoft else Color.Transparent)
-            .clickable { onOpenNote(page.id) }
-            // Align the note text with subject names one level shallower (chevron + dot ≈ 27dp).
+            .clickable { onOpenNote(notebook.lastViewedPageId) }
+            // Align the notebook text with subject names one level shallower (chevron + dot ≈ 27dp).
             .padding(start = (8 + depth * 16 + 27).dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1131,7 +1143,7 @@ private fun QuickNavNote(
         )
         Spacer(Modifier.width(9.dp))
         Text(
-            page.displayTitle(),
+            notebook.title,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (highlighted) FontWeight.Bold else FontWeight.Normal,
             color = if (highlighted) LeapTheme.tokens.accentStrong else LeapGrey,

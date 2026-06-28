@@ -175,16 +175,18 @@ fun NoteCanvasScreen(
     val penIconStyle by settingsViewModel.penIconStyle.collectAsStateWithLifecycle()
     val pageTitle by viewModel.pageTitle.collectAsStateWithLifecycle()
     val pageDateLabel by viewModel.pageDateLabel.collectAsStateWithLifecycle()
-    val libraryNotes by noteListViewModel.pages.collectAsStateWithLifecycle()
+    // Quick Nav lists NOTEBOOKS (one per notebook, titled by the notebook name so renames show), never
+    // individual pages (FA-20).
+    val libraryNotebooks by noteListViewModel.notebooks.collectAsStateWithLifecycle()
     // The editor tabs show notebooks opened in the current foreground session (FA-20).
     val sessionNotebooks by noteListViewModel.sessionNotebooks.collectAsStateWithLifecycle()
-    // Quick Nav (FA-16): the read-only subject tree with each subject's notes nested inside it.
+    // Quick Nav (FA-16): the read-only subject tree with each subject's notebooks nested inside it.
     val subjectTree by subjectViewModel.tree.collectAsStateWithLifecycle()
     val subjectExpandedIds by subjectViewModel.expandedIds.collectAsStateWithLifecycle()
     val noteSubjects by subjectViewModel.noteSubjects.collectAsStateWithLifecycle()
-    // subjectId → its notes (null key = unfiled), so the Quick Nav tree can render notes under subjects.
-    val notesBySubject = remember(libraryNotes, noteSubjects) {
-        libraryNotes.groupBy { noteSubjects[it.notebookId] }
+    // subjectId → its notebooks (null key = unfiled), so the Quick Nav tree nests notebooks under subjects.
+    val notebooksBySubject = remember(libraryNotebooks, noteSubjects) {
+        libraryNotebooks.groupBy { noteSubjects[it.notebookId] }
     }
     var showPages by remember { mutableStateOf(false) }
     var showLibrary by remember { mutableStateOf(false) }
@@ -624,9 +626,9 @@ fun NoteCanvasScreen(
         if (showLibrary) {
             LibraryOverlay(
                 subjectTree = subjectTree,
-                notesBySubject = notesBySubject,
+                notebooksBySubject = notebooksBySubject,
                 expandedIds = subjectExpandedIds,
-                currentPageId = pageId,
+                currentNotebookId = currentNotebookId,
                 onToggleSubject = subjectViewModel::toggleExpanded,
                 onLocateCurrent = {
                     currentNotebookId?.let { nb -> noteSubjects[nb] }?.let { subjectViewModel.expandToSubject(it) }

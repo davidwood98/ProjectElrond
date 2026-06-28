@@ -726,9 +726,15 @@ class CanvasViewModel(
             scrollBy(0f)
         }
         if (modeChanged) {
-            // Switching to vertical needs the other pages loaded; either way the document re-lays out.
-            if (newMode == PageNavigationMode.VERTICAL) loadOtherPages(_notebookPages.value)
-            else rebuildPageLayers()
+            // Switching to vertical: reload the other pages fresh from storage (drop any stale state
+            // from the horizontal session, where each page was its own route) so they render at their
+            // own doc-tops, not overlaid; either way the document re-lays out.
+            if (newMode == PageNavigationMode.VERTICAL) {
+                otherPageStrokes.clear()
+                loadOtherPages(_notebookPages.value)
+            } else {
+                rebuildPageLayers()
+            }
             scrollBy(0f)
         }
     }
@@ -1008,12 +1014,19 @@ class CanvasViewModel(
             otherPageStrokes.keys.retainAll { it in ids }
             rebuildPageLayers()
             applyInitialPageScroll()
+            // Entering a notebook whose last page already has ink → ensure a trailing blank page is
+            // present so the next page is scrollable straight away, not only after the first stroke.
+            ensureTrailingBlankPage()
         }
     }
 
     /** Rebuilds [_pageLayers] from the current pages + each page's strokes (open page = [_finishedStrokes]). */
     private fun rebuildPageLayers() {
         val pages = _notebookPages.value
+        // Keep the document height current with the page count so the dry-ink view is always laid out
+        // tall enough — otherwise a freshly added/loaded page's ink falls outside the (stale) view
+        // bounds and is clipped away (FA-20: page-2+ strokes vanishing).
+        _documentHeightPx.value = documentContentHeightPx()
         if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) {
             // Horizontal mode renders only the open page at the document origin.
             val idx = pages.indexOfFirst { it.id == pageId }.coerceAtLeast(0)
@@ -1060,12 +1073,21 @@ class CanvasViewModel(
         if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) {
             return pageId?.let { PageHit(it, t.offsetX, t.offsetY, t.scale) }
         }
+        val layers = _pageLayers.value
+        if (layers.isEmpty()) return pageId?.let { PageHit(it, t.offsetX, t.offsetY, t.scale) }
         val pageH = pageContentHeightPx() * t.scale
-        _pageLayers.value.forEach { layer ->
+        // The page whose band contains the point, else the NEAREST page (a touch in a margin gap snaps
+        // to the closest sheet) so a stroke is never silently dropped (FA-20).
+        var best = layers.first()
+        var bestDist = Float.MAX_VALUE
+        layers.forEach { layer ->
             val top = t.offsetY + layer.docTopPx * t.scale
             if (screenY in top..(top + pageH)) return PageHit(layer.pageId, t.offsetX, top, t.scale)
+            val dist = if (screenY < top) top - screenY else screenY - (top + pageH)
+            if (dist < bestDist) { bestDist = dist; best = layer }
         }
-        return null
+        val bestTop = t.offsetY + best.docTopPx * t.scale
+        return PageHit(best.pageId, t.offsetX, bestTop, t.scale)
     }
 
     /** Records which page the next finished wet stroke belongs to (set by the ink view on pen-down). */
