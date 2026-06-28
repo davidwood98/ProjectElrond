@@ -80,6 +80,7 @@ fun AiInkNoteView(
     onResize: (dWidth: Float, dHeight: Float) -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
+    scrollPx: Float = 0f,
 ) {
     val density = LocalDensity.current
     val widthDp = with(density) { note.widthPx.toDp() }
@@ -91,7 +92,7 @@ fun AiInkNoteView(
 
     Box(
         modifier = modifier
-            .offset { IntOffset(note.x.roundToInt(), note.y.roundToInt()) }
+            .offset { IntOffset(note.x.roundToInt(), (note.y - scrollPx).roundToInt()) }
             .width(widthDp)
             .then(heightModifier)
             .then(

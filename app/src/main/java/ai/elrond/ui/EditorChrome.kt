@@ -83,7 +83,7 @@ import androidx.compose.ui.window.Dialog
 
 /** Paper background drawn behind the ink: Ruled / Plain / Dots (from the paper-style setting). */
 @Composable
-fun PaperBackground(paper: PaperStyle, modifier: Modifier = Modifier) {
+fun PaperBackground(paper: PaperStyle, modifier: Modifier = Modifier, scrollPx: Float = 0f) {
     val surface = MaterialTheme.colorScheme.surface
     val mark = Neutral200
     Canvas(modifier = modifier.fillMaxSize().background(surface)) {
@@ -92,7 +92,8 @@ fun PaperBackground(paper: PaperStyle, modifier: Modifier = Modifier) {
             PaperStyle.DOTS -> {
                 val step = 26.dp.toPx()
                 val r = 1.4.dp.toPx()
-                var y = step
+                // Offset the lattice by the page scroll so the paper moves with the ink (FA-20).
+                var y = step - scrollPx.mod(step)
                 while (y < size.height) {
                     var x = step
                     while (x < size.width) {
@@ -105,7 +106,7 @@ fun PaperBackground(paper: PaperStyle, modifier: Modifier = Modifier) {
             PaperStyle.RULED -> {
                 val step = 34.dp.toPx()
                 val w = 1.dp.toPx()
-                var y = step
+                var y = step - scrollPx.mod(step)
                 while (y < size.height) {
                     drawLine(color = mark, start = Offset(0f, y), end = Offset(size.width, y), strokeWidth = w)
                     y += step

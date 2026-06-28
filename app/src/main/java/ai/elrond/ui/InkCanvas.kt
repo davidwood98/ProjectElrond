@@ -79,7 +79,9 @@ internal fun InkCanvas(
 @SuppressLint("ViewConstructor")
 private class DryStrokesView(context: Context) : View(context) {
     private val renderer = CanvasStrokeRenderer.create()
-    private val identityTransform = Matrix()
+    // Page(world) → screen transform: a vertical translate by -scroll (FA-20). Fit-width keeps the
+    // scale at 1, so this is the only adjustment between stored page coords and screen pixels.
+    private val screenTransform = Matrix()
     private var strokes: List<Stroke> = emptyList()
 
     init {
@@ -93,10 +95,16 @@ private class DryStrokesView(context: Context) : View(context) {
         invalidate()
     }
 
+    /** Update the page scroll offset (px) and repaint at the new vertical position. */
+    fun setScroll(scrollPx: Float) {
+        screenTransform.setTranslate(0f, -scrollPx)
+        invalidate()
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         strokes.forEach { stroke ->
-            renderer.draw(canvas = canvas, stroke = stroke, strokeToScreenTransform = identityTransform)
+            renderer.draw(canvas = canvas, stroke = stroke, strokeToScreenTransform = screenTransform)
         }
     }
 }
@@ -162,9 +170,15 @@ private fun createInkView(
                         // stroke list or the selected set actually changes.
                         var splitKeyStrokes: List<CanvasStroke>? = null
                         var splitKeyIds: Set<String> = emptySet()
-                        combine(viewModel.finishedStrokes, viewModel.selection) { strokes, sel ->
-                            strokes to sel
-                        }.collect { (strokes, sel) ->
+                        combine(
+                            viewModel.finishedStrokes,
+                            viewModel.selection,
+                            viewModel.pageScrollPx,
+                        ) { strokes, sel, scroll ->
+                            Triple(strokes, sel, scroll)
+                        }.collect { (strokes, sel, scroll) ->
+                            // Track the scroll offset every emission (cheap translate + invalidate).
+                            dryStrokesView.setScroll(scroll)
                             val selectedIds = sel?.ids ?: emptySet()
                             // setStrokes() invalidate()s, which repaints every dry stroke from scratch
                             // via CanvasStrokeRenderer.draw. The combine also fires on every
@@ -206,6 +220,9 @@ private fun createTouchListener(
     var currentStrokeId: InProgressStrokeId? = null
     var currentIsFinger = false
     var erasing = false
+    // A lone finger drag scrolls the page vertically (FA-20); tracked separately from drawing.
+    var scrollPointerId: Int? = null
+    var lastScrollY = 0f
 
     return View.OnTouchListener { view, event ->
         // Track finger + S Pen-button gestures BEFORE the lasso bail-out, so they keep working in
@@ -248,8 +265,16 @@ private fun createTouchListener(
                         erasing = false
                         return@OnTouchListener true
                     }
-                    // Swallow a rejected finger pointer without disturbing any active stroke.
-                    if (rejectFinger) return@OnTouchListener true
+                    // Swallow a rejected finger pointer; a lone finger drag scrolls the page (FA-20).
+                    if (rejectFinger) {
+                        if (currentPointerId == null && scrollPointerId == null &&
+                            event.actionMasked == MotionEvent.ACTION_DOWN
+                        ) {
+                            scrollPointerId = event.getPointerId(event.actionIndex)
+                            lastScrollY = event.getY(event.actionIndex)
+                        }
+                        return@OnTouchListener true
+                    }
                     // Single active stroke: ignore additional pointers while one is down.
                     if (currentPointerId != null) return@OnTouchListener true
                     view.requestUnbufferedDispatch(event)
@@ -265,13 +290,31 @@ private fun createTouchListener(
                         // Pen down: hold off any prefix-/Q inactivity send until this stroke finishes,
                         // so the AI never answers mid-writing (and always gets the full question).
                         viewModel.onWritingStarted()
-                        currentStrokeId =
-                            inProgressStrokesView.startStroke(event, pointerId, viewModel.penBrush)
+                        // Capture in page coords: motionEventToWorldTransform shifts the stored input
+                        // down by the scroll, so the finished stroke lands at (x, y + scroll). The wet
+                        // stroke still renders at the pen tip (motionEventToViewTransform = identity).
+                        currentStrokeId = inProgressStrokesView.startStroke(
+                            event,
+                            pointerId,
+                            viewModel.penBrush,
+                            Matrix().apply { setTranslate(0f, viewModel.pageScrollPx.value) },
+                            Matrix(),
+                        )
                     }
                     true
                 }
 
                 MotionEvent.ACTION_MOVE -> {
+                    // A lone finger drag scrolls the page (FA-20), before any stylus handling.
+                    scrollPointerId?.let { sid ->
+                        val si = event.findPointerIndex(sid)
+                        if (si >= 0) {
+                            val y = event.getY(si)
+                            viewModel.scrollBy(y - lastScrollY)
+                            lastScrollY = y
+                        }
+                        return@OnTouchListener true
+                    }
                     // Only the tracked (stylus) pointer advances the stroke; finger pointers in
                     // the same event are ignored. Keep consuming so the gesture stays alive.
                     val pointerId = currentPointerId ?: return@OnTouchListener true
@@ -289,6 +332,7 @@ private fun createTouchListener(
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                     // Only finish when the tracked pointer lifts; a finger lifting is ignored.
                     val pointerId = event.getPointerId(event.actionIndex)
+                    if (pointerId == scrollPointerId) scrollPointerId = null
                     if (pointerId == currentPointerId) {
                         currentStrokeId?.let { strokeId ->
                             inProgressStrokesView.finishStroke(event, pointerId, strokeId)
@@ -308,6 +352,7 @@ private fun createTouchListener(
                     currentStrokeId = null
                     currentIsFinger = false
                     erasing = false
+                    scrollPointerId = null
                     true
                 }
 

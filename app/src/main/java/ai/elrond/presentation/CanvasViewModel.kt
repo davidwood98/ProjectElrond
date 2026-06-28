@@ -23,6 +23,7 @@ import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.QueryTriggerDetector
 import ai.elrond.domain.TriggerMode
 import ai.elrond.domain.UnitSystem
+import ai.elrond.domain.PageTransform
 import ai.elrond.domain.defaultAiNotePosition
 import ai.elrond.domain.groupStrokesIntoLines
 import ai.elrond.domain.selectQuestionLines
@@ -372,6 +373,16 @@ class CanvasViewModel(
     /** Latest canvas height in px, reported by the UI; used to normalise the snap-back distance. */
     private var canvasHeightPx: Float = 0f
 
+    private val _pageScrollPx = MutableStateFlow(0f)
+    /**
+     * Vertical scroll offset (px) within the current page; 0 = top (FA-20). The page is fit to the
+     * viewport width and is taller than the viewport (A-ratio), so it scrolls vertically. Strokes are
+     * stored in page coordinates (screen x, screen y + scroll); the canvas renders/captures through
+     * this offset. (Scale stays 1 — fit-width — so the AI-box and lasso geometry are unaffected;
+     * full logical scaling is the deferred pinch-zoom phase.)
+     */
+    val pageScrollPx: StateFlow<Float> = _pageScrollPx
+
     /** Lasso-move snap-back threshold (fraction of canvas size), kept in sync with settings. */
     @Volatile
     private var lassoSnapBackThreshold: Float = SettingsRepository.DEFAULT_LASSO_SNAP_BACK_THRESHOLD
@@ -526,6 +537,20 @@ class CanvasViewModel(
     fun setCanvasSize(widthPx: Float, heightPx: Float) {
         canvasWidthPx = widthPx
         canvasHeightPx = heightPx
+        // Re-clamp the scroll if the viewport grew (e.g. rotation) so we never sit past the bottom.
+        scrollBy(0f)
+    }
+
+    /**
+     * Scrolls the page vertically by a finger-drag delta (px), clamped to the page bounds (FA-20).
+     * The page height is the fit-to-width A-ratio height (width × √2); content above the viewport
+     * top is at scroll &gt; 0.
+     */
+    fun scrollBy(dragDeltaY: Float) {
+        if (canvasWidthPx <= 0f) return
+        val contentHeight = canvasWidthPx * PageTransform.ASPECT_RATIO
+        val maxScroll = (contentHeight - canvasHeightPx).coerceAtLeast(0f)
+        _pageScrollPx.value = (_pageScrollPx.value - dragDeltaY).coerceIn(0f, maxScroll)
     }
 
     private fun defaultNoteWidth(): Float {
@@ -770,9 +795,11 @@ class CanvasViewModel(
 
     /** Erase any stroke whose geometry intersects the eraser position. */
     fun eraseAt(x: Float, y: Float, radius: Float = ERASER_RADIUS) {
+        // The eraser arrives in screen coords; strokes are stored in page coords (y + scroll). FA-20.
+        val worldY = y + _pageScrollPx.value
         val before = _finishedStrokes.value
         val eraserBox = ImmutableBox.fromCenterAndDimensions(
-            ImmutableVec(x, y),
+            ImmutableVec(x, worldY),
             radius * 2,
             radius * 2,
         )

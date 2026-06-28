@@ -104,6 +104,8 @@ fun NoteCanvasScreen(
     val aiNotes by viewModel.aiNotes.collectAsStateWithLifecycle()
     val canUndo by viewModel.canUndo.collectAsStateWithLifecycle()
     val canRedo by viewModel.canRedo.collectAsStateWithLifecycle()
+    // Vertical scroll within the page (FA-20); the page is fit-to-width and taller than the viewport.
+    val pageScrollPx by viewModel.pageScrollPx.collectAsStateWithLifecycle()
     val pendingExtraction by viewModel.pendingExtraction.collectAsStateWithLifecycle()
     val todoCount by todoViewModel.activeCount.collectAsStateWithLifecycle()
     var showTodoPanel by remember { mutableStateOf(false) }
@@ -183,8 +185,8 @@ fun NoteCanvasScreen(
         // its offset is derived from topGap so the toolbar→title spacing stays constant.
         val headerTop = topGap + 62.dp * toolbarScale + 6.dp
 
-        // Paper background (Ruled / Plain / Dots) behind the transparent ink layers.
-        PaperBackground(paper = paperStyle, modifier = Modifier.fillMaxSize())
+        // Paper background (Ruled / Plain / Dots) behind the transparent ink layers; scrolls with ink.
+        PaperBackground(paper = paperStyle, scrollPx = pageScrollPx, modifier = Modifier.fillMaxSize())
 
         InkCanvas(
             viewModel = viewModel,
@@ -216,6 +218,7 @@ fun NoteCanvasScreen(
                         onMove = { dx, dy -> viewModel.moveAiNote(note.id, dx, dy) },
                         onResize = { dW, dH -> viewModel.resizeAiNote(note.id, dW, dH) },
                         onRemove = { viewModel.removeAiNote(note.id) },
+                        scrollPx = pageScrollPx,
                     )
                 }
             }
@@ -223,11 +226,11 @@ fun NoteCanvasScreen(
 
         // On-canvas AI activity: loading dots while thinking, red ink on failure.
         when (val state = aiState) {
-            is AiUiState.Thinking -> AiLoadingIndicator(x = state.x, y = state.y)
+            is AiUiState.Thinking -> AiLoadingIndicator(x = state.x, y = state.y - pageScrollPx)
             is AiUiState.Error -> AiErrorInk(
                 message = state.message,
                 x = state.x,
-                y = state.y,
+                y = state.y - pageScrollPx,
                 onDismiss = viewModel::dismissAiResponse,
             )
             AiUiState.Idle -> Unit
