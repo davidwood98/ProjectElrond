@@ -4,6 +4,7 @@ import ai.elrond.data.CalendarEvent
 import ai.elrond.domain.CalendarGrid
 import ai.elrond.domain.DayActivity
 import ai.elrond.presentation.CalendarViewModel
+import ai.elrond.presentation.DayNotebook
 import ai.elrond.presentation.EventsUiState
 import ai.elrond.presentation.EventsViewModel
 import ai.elrond.presentation.NoteListViewModel
@@ -45,6 +46,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -184,8 +187,8 @@ fun CalendarScreen(
 
             Legend(modifier = Modifier.padding(top = 10.dp))
 
-            // Selected-day notes (reduced home-style thumbnails, created/edited labels).
-            val dayNotes = remember(selectedDay, activity) { viewModel.notesForDay(selected) }
+            // Selected-day activity, grouped by NOTEBOOK (FA-20): one tile per notebook, not per page.
+            val dayNotebooks = remember(selectedDay, activity) { viewModel.notebooksForDay(selected) }
             Text(
                 selected.format(DAY_HEADER),
                 style = MaterialTheme.typography.titleSmall,
@@ -193,30 +196,26 @@ fun CalendarScreen(
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
             )
-            // Notes fill the remaining space: a single horizontal row (landscape month — runs off the
+            // Tiles fill the remaining space: a single horizontal row (landscape month — runs off the
             // right edge), or a vertical grid (week in either orientation, and month in portrait).
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                if (dayNotes.isEmpty()) {
+                if (dayNotebooks.isEmpty()) {
                     Text(
                         "No notes on this day.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Neutral500,
                     )
                 } else if (landscape && mode == CalendarMode.MONTH) {
-                    // One row that fills the remaining height down to the screen bottom (tiles run
-                    // behind the New-note FAB) and scrolls horizontally off the right edge.
                     Row(
                         modifier = Modifier.fillMaxSize().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        dayNotes.forEach { note ->
-                            DayNoteThumb(
-                                note = note,
-                                date = selected,
+                        dayNotebooks.forEach { nb ->
+                            DayNotebookThumb(
+                                notebook = nb,
                                 viewModel = noteListViewModel,
-                                onClick = { onOpenNote(note.id) },
+                                onOpenPage = onOpenNote,
                                 modifier = Modifier.fillMaxHeight().width(190.dp),
-                                notebookLabel = viewModel.notebookPageLabel(note),
                             )
                         }
                     }
@@ -227,14 +226,12 @@ fun CalendarScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        gridItems(dayNotes, key = { it.id }) { note ->
-                            DayNoteThumb(
-                                note = note,
-                                date = selected,
+                        gridItems(dayNotebooks, key = { it.notebookId }) { nb ->
+                            DayNotebookThumb(
+                                notebook = nb,
                                 viewModel = noteListViewModel,
-                                onClick = { onOpenNote(note.id) },
+                                onOpenPage = onOpenNote,
                                 modifier = Modifier.fillMaxWidth().height(150.dp),
-                                notebookLabel = viewModel.notebookPageLabel(note),
                             )
                         }
                     }
@@ -358,58 +355,80 @@ private fun ActivityDot(color: Color, count: Int) {
     }
 }
 
-/** A reduced note thumbnail for the selected day (home-card style) with a created/edited label. */
+/**
+ * A reduced notebook tile for the selected day (home-card style; FA-20). One per notebook: a
+ * *created* notebook shows just a "Created" label and opens on tap; an *edited* notebook shows an
+ * "Edited" label + a "N pages" pill, and tapping opens a menu of the pages touched that day so the
+ * user can jump to the exact page (or the cover when only one page changed).
+ */
 @Composable
-private fun DayNoteThumb(
-    note: NotePage,
-    date: LocalDate,
+private fun DayNotebookThumb(
+    notebook: DayNotebook,
     viewModel: NoteListViewModel,
-    onClick: () -> Unit,
+    onOpenPage: (pageId: String) -> Unit,
     modifier: Modifier = Modifier,
-    notebookLabel: String? = null,
 ) {
-    val zone = java.time.ZoneId.systemDefault()
-    val createdThisDay = java.time.Instant.ofEpochMilli(note.createdAt).atZone(zone).toLocalDate() == date
-    val verb = if (createdThisDay) "Created" else "Edited"
-    val verbColor = if (createdThisDay) CreatedDotColor else EditedDotColor
+    val verb = if (notebook.createdThisDay) "Created" else "Edited"
+    val verbColor = if (notebook.createdThisDay) CreatedDotColor else EditedDotColor
+    val pageCount = notebook.pages.size
+    // Created → open the notebook; edited with one page → open it directly; edited multi → menu.
+    var menuOpen by remember { mutableStateOf(false) }
+    val onTileClick: () -> Unit = {
+        when {
+            notebook.createdThisDay -> onOpenPage(notebook.coverPage.id)
+            pageCount <= 1 -> onOpenPage(notebook.pages.firstOrNull()?.id ?: notebook.coverPage.id)
+            else -> menuOpen = true
+        }
+    }
     Surface(
-        modifier = modifier.clickable(onClick = onClick),
+        modifier = modifier.clickable(onClick = onTileClick),
         shape = RoundedCornerShape(14.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         color = MaterialTheme.colorScheme.surface,
     ) {
-        // The tile is given a bounded height by the caller (grid: fixed; landscape-month row:
-        // fillMaxHeight), so the thumbnail takes the remaining height above the label.
         Column(modifier = Modifier.fillMaxSize()) {
             NoteThumbnail(
-                page = note,
+                page = notebook.coverPage,
                 viewModel = viewModel,
                 modifier = Modifier.fillMaxWidth().weight(1f).background(MaterialTheme.colorScheme.surfaceContainerLowest),
             )
             Column(modifier = Modifier.padding(10.dp)) {
                 Text(
-                    note.displayTitle(),
+                    notebook.coverPage.displayTitle(),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // For a multi-page notebook, show which notebook + page this is (FA-20).
-                if (notebookLabel != null) {
-                    Text(
-                        notebookLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Neutral500,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                     Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(verbColor))
                     Spacer(Modifier.width(5.dp))
                     Text(verb, style = MaterialTheme.typography.labelSmall, color = Neutral500)
+                    // Page-count pill — only for an edited notebook (a created one shows no count).
+                    if (!notebook.createdThisDay) {
+                        Spacer(Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                        ) {
+                            Text(
+                                if (pageCount == 1) "1 page" else "$pageCount pages",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
                 }
+            }
+        }
+        // The edited-pages menu (anchored to the tile) — pick a page to open.
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            notebook.pages.forEach { page ->
+                DropdownMenuItem(
+                    text = { Text("Page ${page.pageNumber}") },
+                    onClick = { menuOpen = false; onOpenPage(page.id) },
+                )
             }
         }
     }

@@ -8,6 +8,7 @@ import ai.elrond.data.NoteRepository
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import javax.inject.Inject
@@ -56,15 +57,25 @@ class CalendarViewModel(
         NoteActivityMapper.notesForDay(latestPages, date, latestEditDays, zone)
 
     /**
-     * "Notebook → Page N" drill label for a day-sheet page (FA-20), or null for a single-page
-     * notebook (where the page's own title already identifies it). Lets a multi-page notebook's
-     * edited pages show which notebook + page they belong to; tapping the thumb opens that page.
+     * The day's activity grouped by **notebook** (FA-20): one tile per notebook rather than per page.
+     * A notebook whose cover (page 1) was created on [date] is a *created* entry (shown without a
+     * page count, tapping opens it); otherwise it's an *edited* entry carrying the pages touched that
+     * day (a count pill, tapping lists them). Sorted most-recently-active first.
      */
-    fun notebookPageLabel(page: NotePage): String? {
-        val notebookPages = latestPages.filter { it.notebookId == page.notebookId }
-        if (notebookPages.size <= 1) return null
-        val cover = notebookPages.minByOrNull { it.pageNumber } ?: return null
-        return "${cover.displayTitle(zone)} → Page ${page.pageNumber}"
+    fun notebooksForDay(date: LocalDate): List<DayNotebook> {
+        val dayPages = NoteActivityMapper.notesForDay(latestPages, date, latestEditDays, zone)
+        return dayPages.groupBy { it.notebookId }.map { (notebookId, pages) ->
+            val all = latestPages.filter { it.notebookId == notebookId }
+            val cover = all.minByOrNull { it.pageNumber } ?: pages.first()
+            val createdThisDay =
+                Instant.ofEpochMilli(cover.createdAt).atZone(zone).toLocalDate() == date
+            DayNotebook(
+                notebookId = notebookId,
+                coverPage = cover,
+                createdThisDay = createdThisDay,
+                pages = pages.sortedBy { it.pageNumber },
+            )
+        }.sortedByDescending { group -> group.pages.maxOf { it.modifiedAt } }
     }
 
     fun createNote(onCreated: (pageId: String) -> Unit) {
@@ -74,4 +85,18 @@ class CalendarViewModel(
         }
     }
 }
+
+/**
+ * A notebook's activity on a calendar day (FA-20): the cover title + the pages touched that day.
+ * [createdThisDay] distinguishes a freshly-created notebook (no page count) from an edited one
+ * (a count pill + a per-page menu). [coverPageId] is the page a "created" tile opens.
+ */
+data class DayNotebook(
+    val notebookId: String,
+    /** The notebook's cover (page 1) — its title + the thumbnail; the page a "created" tile opens. */
+    val coverPage: NotePage,
+    val createdThisDay: Boolean,
+    /** The pages of this notebook touched on the day (an "edited" tile lists these). */
+    val pages: List<NotePage>,
+)
 
