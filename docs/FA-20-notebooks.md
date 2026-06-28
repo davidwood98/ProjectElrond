@@ -124,11 +124,62 @@ Phase 0 (`9c7cb23`), 1a (`e6c6723`), 1b-i/ii/iii (`48e1aee`/`62aa52e`/`d43fda9`)
 re-key v13 (`2e0a5c8`). All compile; full app unit suite green; schemas v11/v12/v13 exported.
 
 **Phase 2 substantive work done & committed:** page index, notebook tabs, open-to-last-viewed,
-browser-as-notebooks, subjects re-key. **Minor remaining polish (next session):** calendar day-sheet
-*Day → notebook → pages* grouping, and the "Notebook → Page N" label on todo source links (both are
-cosmetic — the calendar + todo links already function at the page level).
+browser-as-notebooks, subjects re-key. **Phase 2 polish — DONE (this session):** the "Notebook → Page N"
+label on todo source links (pure `domain/SourceNoteLabel` — cover-page title + live page number, shown
+only for multi-page notebooks; `TodoViewModel.sourceLabels`, falls back to the stored snapshot for a
+deleted source), and the calendar day-sheet `Day → notebook → page` label (`CalendarViewModel.notebookPageLabel`
+subtitles each multi-page notebook's edited page on the day thumbnail; tapping already opens that page).
 
-## ⚠️ Device-test feedback (1b-i scroll) — DIAGNOSIS for the next session
+## Scroll + landscape rework (1b-i device feedback) — DONE (this session)
+
+Fixed the three device-reported 1b-i issues + the `/simplify` altitude note. App unit suite green
+(`:app:testDebugUnitTest` + `:aibackend:test`); main + androidTest compile on the WSL Linux SDK. **No
+schema change.** Device-verify on a Galaxy Tab S (the render mechanism is device-only): dry ink scrolls
+live with the paper, the eraser lands on the ink you see, and rotating to landscape centres a fixed
+portrait sheet (margins both sides) without reflowing strokes.
+
+- **Single `PageTransform` source of truth (the altitude note).** `CanvasViewModel` now exposes
+  `pageTransform: StateFlow<PageTransform>` (scale=1, `offsetX` = horizontal centring, `offsetY` =
+  −scroll). Every render/capture/hit-test site routes page↔screen through it (`pageToScreenX/Y`,
+  `screenToPageX/Y`) instead of hand-threading `± scrollPx`: ink capture (`startStroke` world transform),
+  the dry layer, the eraser, `SelectionLayer` (lasso capture, box/handles/toolbar/ghost/strokes),
+  `AiInkNoteView`, `PaperBackground`, and the AI-state overlays. Pinch-zoom (Phase 5) is now a one-line
+  `scale` change. `pageScrollPx` was removed; `scrollBy` updates the transform.
+- **B2/B3 — dry ink scrolls live (per-frame GPU transform, the FA-10 lesson).** `DryStrokesView` no
+  longer does `Matrix.setTranslate` + `invalidate()` in `onDraw` (which didn't repaint per-frame during
+  the drag — ink stayed frozen and snapped on release). It is now laid out at the **full page size**
+  (page-space units) and applies the page→screen transform as **GPU view properties** (`translationX/Y`,
+  `scaleX/Y`, top-left pivot) — a cheap composite the framework re-applies every frame; the strokes
+  rasterise once. Stroke-list changes still go through `setStrokes()` + `invalidate()` (off Compose, so
+  the FA-6 first-stroke fix holds). Because the ink is now drawn where it's seen, the eraser (which
+  hit-tests through the same transform) lands correctly — B3 resolved by B2.
+- **B1 — fixed portrait sheet, centred (per the user's clarified model).** The page is a fixed portrait
+  A-ratio sheet whose width = the device's shorter screen edge, so it never reflows on rotation; in
+  landscape it stays that width and is **centred** with equal `margin–page–margin` (the margin is the
+  transform's `offsetX`). **Scale stays 1** (strokes keep their size until pinch-zoom, Phase 5). Strokes
+  are stored in **page space** (not screen px), so centring/scroll move the ink *with* the page. The
+  90° view-orientation toggle stays deferred (Phase 4); device rotation just recomputes the transform.
+  `PaperBackground` now renders the sheet as white-on-neutral-desk with a hairline border so the page
+  edge reads (a bottom desk margin also appears in portrait when the A-ratio page is shorter than the
+  screen).
+- Tests: `SourceNoteLabelTest` (pure label resolution), `CanvasViewModelPageTransformTest` (portrait
+  no-offset / landscape centring / scroll clamping). Render mechanism + on-device centring are
+  device-verified (the mesh renderer is hardware-only).
+
+**Device-feedback follow-up (same session):** B/C/D all pass; one landscape selection bug fixed.
+`SelectionStrokes` baked the page offset into the **draw matrix**, which mis-placed the live selected
+ink (it jumped left toward screen-centre while the box stayed put) and hid the ghost in landscape —
+even though the box, capture, and dry layer were all correct. Fix: draw the selected ink + ghost at
+**identity** and apply the page→screen mapping via **`graphicsLayer`** (the SAME GPU mechanism the dry
+layer uses), with the live move/scale as a second inner layer composed as `page(live(stroke))`. So the
+selection now lands exactly where the dry ink does in every orientation.
+
+## ⚠️ Device-test feedback (1b-i scroll) — DIAGNOSIS (RESOLVED — see "Scroll + landscape rework" above)
+
+> All three issues below were fixed in the "Scroll + landscape rework" section above. Kept as the
+> diagnosis record. Note B1's resolution: the user clarified the model as a **centred fixed portrait
+> sheet** (margin–page–margin, scale unchanged until zoom), not the originally-deferred fixed sheet —
+> see that section.
 
 On a Galaxy Tab S, section-A tests passed; **section B (single-page scroll) is broken**:
 

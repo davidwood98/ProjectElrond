@@ -55,6 +55,18 @@ class CalendarViewModel(
     fun notesForDay(date: LocalDate): List<NotePage> =
         NoteActivityMapper.notesForDay(latestPages, date, latestEditDays, zone)
 
+    /**
+     * "Notebook → Page N" drill label for a day-sheet page (FA-20), or null for a single-page
+     * notebook (where the page's own title already identifies it). Lets a multi-page notebook's
+     * edited pages show which notebook + page they belong to; tapping the thumb opens that page.
+     */
+    fun notebookPageLabel(page: NotePage): String? {
+        val notebookPages = latestPages.filter { it.notebookId == page.notebookId }
+        if (notebookPages.size <= 1) return null
+        val cover = notebookPages.minByOrNull { it.pageNumber } ?: return null
+        return "${cover.displayTitle(zone)} → Page ${page.pageNumber}"
+    }
+
     fun createNote(onCreated: (pageId: String) -> Unit) {
         viewModelScope.launch {
             val page = repository.createNote()

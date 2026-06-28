@@ -651,6 +651,7 @@ fun TodoBoardSection(
     onOpenNote: (String) -> Unit,
 ) {
     val items by todoViewModel.items.collectAsStateWithLifecycle()
+    val sourceLabels by todoViewModel.sourceLabels.collectAsStateWithLifecycle()
     // Shared key so the List/Kanban choice persists across rotation (see NotesSection's note).
     var kanban by rememberSaveable(key = "library.todoKanban") { mutableStateOf(false) }
     var editingDueFor by remember { mutableStateOf<TodoItem?>(null) }
@@ -683,6 +684,7 @@ fun TodoBoardSection(
                     onSetPriority = { id, p, item -> todoViewModel.edit(id, item.content, p, item.dueAt) },
                     onEditDue = { editingDueFor = it },
                     onOpenNote = onOpenNote,
+                    sourceLabels = sourceLabels,
                 )
             } else {
                 Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
@@ -695,6 +697,7 @@ fun TodoBoardSection(
                             onEditDue = { editingDueFor = item },
                             onDelete = { todoViewModel.delete(item.id) },
                             onOpenNote = { item.sourcePageId?.let(onOpenNote) },
+                            sourceLabel = item.sourcePageId?.let { sourceLabels[it] },
                         )
                         Spacer(Modifier.height(10.dp))
                     }
@@ -754,6 +757,7 @@ private fun TodoListRow(
     onEditDue: () -> Unit,
     onDelete: () -> Unit,
     onOpenNote: () -> Unit,
+    sourceLabel: String? = null,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -777,7 +781,7 @@ private fun TodoListRow(
                 )
                 if (item.isAiExtracted && item.hasSourceLink) {
                     AiSourceLink(
-                        title = item.sourcePageTitle.orEmpty(),
+                        title = sourceLabel ?: item.sourcePageTitle.orEmpty(),
                         onClick = onOpenNote,
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.padding(top = 4.dp),
@@ -808,6 +812,7 @@ private fun KanbanBoard(
     onSetPriority: (String, TodoPriority, TodoItem) -> Unit,
     onEditDue: (TodoItem) -> Unit,
     onOpenNote: (String) -> Unit,
+    sourceLabels: Map<String, String> = emptyMap(),
 ) {
     Row(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -838,6 +843,7 @@ private fun KanbanBoard(
                         onSetPriority = { onSetPriority(item.id, it, item) },
                         onEditDue = { onEditDue(item) },
                         onOpenNote = { item.sourcePageId?.let(onOpenNote) },
+                        sourceLabel = item.sourcePageId?.let { sourceLabels[it] },
                     )
                     Spacer(Modifier.height(10.dp))
                 }
@@ -853,6 +859,7 @@ private fun KanbanCard(
     onSetPriority: (TodoPriority) -> Unit,
     onEditDue: () -> Unit,
     onOpenNote: () -> Unit,
+    sourceLabel: String? = null,
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -880,7 +887,7 @@ private fun KanbanCard(
             ) {
                 if (item.isAiExtracted && item.hasSourceLink) {
                     AiSourceLink(
-                        title = item.sourcePageTitle.orEmpty(),
+                        title = sourceLabel ?: item.sourcePageTitle.orEmpty(),
                         onClick = onOpenNote,
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.weight(1f, fill = false),

@@ -104,8 +104,9 @@ fun NoteCanvasScreen(
     val aiNotes by viewModel.aiNotes.collectAsStateWithLifecycle()
     val canUndo by viewModel.canUndo.collectAsStateWithLifecycle()
     val canRedo by viewModel.canRedo.collectAsStateWithLifecycle()
-    // Vertical scroll within the page (FA-20); the page is fit-to-width and taller than the viewport.
-    val pageScrollPx by viewModel.pageScrollPx.collectAsStateWithLifecycle()
+    // Page → screen transform (FA-20): horizontal centring offset (margins in landscape) + vertical
+    // scroll. The page is a fixed portrait sheet; this is the single source for placing it on screen.
+    val pageTransform by viewModel.pageTransform.collectAsStateWithLifecycle()
     // The notebook's pages (FA-20) — drives the page indicator; a horizontal finger swipe turns pages.
     val notebookPages by viewModel.notebookPages.collectAsStateWithLifecycle()
     // The current notebook (all notebookPages share it) — for the active editor-tab highlight.
@@ -194,8 +195,10 @@ fun NoteCanvasScreen(
         // its offset is derived from topGap so the toolbar→title spacing stays constant.
         val headerTop = topGap + 62.dp * toolbarScale + 6.dp
 
-        // Paper background (Ruled / Plain / Dots) behind the transparent ink layers; scrolls with ink.
-        PaperBackground(paper = paperStyle, scrollPx = pageScrollPx, modifier = Modifier.fillMaxSize())
+        // Paper background (Ruled / Plain / Dots) behind the transparent ink layers. The page is a
+        // fixed portrait sheet centred on screen (margins in landscape) and scrolled — all from the
+        // transform — so the paper sits exactly under the page-mapped ink.
+        PaperBackground(paper = paperStyle, transform = pageTransform, modifier = Modifier.fillMaxSize())
 
         InkCanvas(
             viewModel = viewModel,
@@ -227,7 +230,7 @@ fun NoteCanvasScreen(
                         onMove = { dx, dy -> viewModel.moveAiNote(note.id, dx, dy) },
                         onResize = { dW, dH -> viewModel.resizeAiNote(note.id, dW, dH) },
                         onRemove = { viewModel.removeAiNote(note.id) },
-                        scrollPx = pageScrollPx,
+                        transform = pageTransform,
                     )
                 }
             }
@@ -235,11 +238,14 @@ fun NoteCanvasScreen(
 
         // On-canvas AI activity: loading dots while thinking, red ink on failure.
         when (val state = aiState) {
-            is AiUiState.Thinking -> AiLoadingIndicator(x = state.x, y = state.y - pageScrollPx)
+            is AiUiState.Thinking -> AiLoadingIndicator(
+                x = pageTransform.pageToScreenX(state.x),
+                y = pageTransform.pageToScreenY(state.y),
+            )
             is AiUiState.Error -> AiErrorInk(
                 message = state.message,
-                x = state.x,
-                y = state.y - pageScrollPx,
+                x = pageTransform.pageToScreenX(state.x),
+                y = pageTransform.pageToScreenY(state.y),
                 onDismiss = viewModel::dismissAiResponse,
             )
             AiUiState.Idle -> Unit

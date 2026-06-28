@@ -388,15 +388,27 @@ class CanvasViewModel(
     /** Latest canvas height in px, reported by the UI; used to normalise the snap-back distance. */
     private var canvasHeightPx: Float = 0f
 
-    private val _pageScrollPx = MutableStateFlow(0f)
     /**
-     * Vertical scroll offset (px) within the current page; 0 = top (FA-20). The page is fit to the
-     * viewport width and is taller than the viewport (A-ratio), so it scrolls vertically. Strokes are
-     * stored in page coordinates (screen x, screen y + scroll); the canvas renders/captures through
-     * this offset. (Scale stays 1 — fit-width — so the AI-box and lasso geometry are unaffected;
-     * full logical scaling is the deferred pinch-zoom phase.)
+     * Page sheet width in px. The page is a **fixed portrait A-ratio sheet** whose width equals the
+     * device's shorter screen edge, so it never grows or reflows when the device rotates (FA-20 B1):
+     * in portrait it fills the width, in landscape it stays that same width and is centred (the
+     * horizontal margin lives in [PageTransform.offsetX]). 0 until the canvas size is first reported.
      */
-    val pageScrollPx: StateFlow<Float> = _pageScrollPx
+    private var pageWidthPx: Float = 0f
+
+    /** Vertical scroll offset (px) within the current page; 0 = top (FA-20). */
+    private var scrollPx: Float = 0f
+
+    /**
+     * The single source of truth mapping the page's logical coordinate space ⇄ screen pixels (FA-20):
+     * a uniform scale (1 in fit-width; pinch-zoom in Phase 5 changes only this), a horizontal centring
+     * [PageTransform.offsetX], and a vertical [PageTransform.offsetY] = −[scrollPx]. Strokes, AI notes,
+     * lasso geometry and `/Q` hit-tests are all stored in page space; every render/capture site routes
+     * through this transform (`pageToScreenX/Y`, `screenToPageX/Y`) rather than hand-threading the
+     * scroll, so the centring + scroll (+ future zoom) live in one place.
+     */
+    private val _pageTransform = MutableStateFlow(PageTransform(scale = 1f, offsetX = 0f, offsetY = 0f))
+    val pageTransform: StateFlow<PageTransform> = _pageTransform.asStateFlow()
 
     /** Lasso-move snap-back threshold (fraction of canvas size), kept in sync with settings. */
     @Volatile
@@ -558,20 +570,39 @@ class CanvasViewModel(
     fun setCanvasSize(widthPx: Float, heightPx: Float) {
         canvasWidthPx = widthPx
         canvasHeightPx = heightPx
-        // Re-clamp the scroll if the viewport grew (e.g. rotation) so we never sit past the bottom.
+        // The page is a fixed portrait sheet: its width = the shorter screen edge, so rotating the
+        // device doesn't reflow it (B1). In portrait that's the full width (offsetX 0); in landscape
+        // it's the (smaller) height, leaving equal side margins via the centring offset below.
+        pageWidthPx = if (widthPx > 0f && heightPx > 0f) minOf(widthPx, heightPx) else widthPx
+        // Re-clamp the scroll if the viewport grew (e.g. rotation) and refresh the transform.
         scrollBy(0f)
+    }
+
+    /** On-screen height of the fixed-width page (its A-ratio height). */
+    private fun pageContentHeightPx(): Float = pageWidthPx * PageTransform.ASPECT_RATIO
+
+    /**
+     * Recomputes [pageTransform] from the current page width, centring offset and scroll. The page is
+     * centred horizontally (equal margins in landscape, none in portrait) and shifted up by the scroll.
+     */
+    private fun refreshPageTransform() {
+        val offsetX = ((canvasWidthPx - pageWidthPx) / 2f).coerceAtLeast(0f)
+        _pageTransform.value = PageTransform(scale = 1f, offsetX = offsetX, offsetY = -scrollPx)
     }
 
     /**
      * Scrolls the page vertically by a finger-drag delta (px), clamped to the page bounds (FA-20).
-     * The page height is the fit-to-width A-ratio height (width × √2); content above the viewport
-     * top is at scroll &gt; 0.
+     * The page height is the fixed-width A-ratio height (width × √2); content above the viewport top
+     * is at scroll &gt; 0. Also called with 0 to re-clamp + refresh the transform after a size change.
      */
     fun scrollBy(dragDeltaY: Float) {
-        if (canvasWidthPx <= 0f) return
-        val contentHeight = canvasWidthPx * PageTransform.ASPECT_RATIO
-        val maxScroll = (contentHeight - canvasHeightPx).coerceAtLeast(0f)
-        _pageScrollPx.value = (_pageScrollPx.value - dragDeltaY).coerceIn(0f, maxScroll)
+        if (pageWidthPx <= 0f) {
+            refreshPageTransform()
+            return
+        }
+        val maxScroll = (pageContentHeightPx() - canvasHeightPx).coerceAtLeast(0f)
+        scrollPx = (scrollPx - dragDeltaY).coerceIn(0f, maxScroll)
+        refreshPageTransform()
     }
 
     /** Opens a specific page of this notebook (FA-20 page index). */
@@ -651,18 +682,18 @@ class CanvasViewModel(
     }
 
     private fun defaultNoteWidth(): Float {
-        val usable = canvasWidthPx - 2 * AI_NOTE_MARGIN_PX
+        val usable = pageWidthPx - 2 * AI_NOTE_MARGIN_PX
         return if (usable > AiInkNote.MIN_WIDTH_PX) usable else AiInkNote.FALLBACK_WIDTH_PX
     }
 
     /**
-     * Largest width a box whose left edge is at [x] can take while still leaving a margin at the
-     * right page edge. Returns [Float.MAX_VALUE] when the canvas width isn't known yet (e.g. unit
-     * tests), so geometry is only ever clamped once the real page width has been reported.
+     * Largest width a box whose left edge is at [x] (page coords) can take while still leaving a
+     * margin at the right page edge. Returns [Float.MAX_VALUE] when the page width isn't known yet
+     * (e.g. unit tests), so geometry is only ever clamped once the real page width has been reported.
      */
     private fun maxWidthAt(x: Float): Float =
-        if (canvasWidthPx > 0f) {
-            (canvasWidthPx - x - AI_NOTE_MARGIN_PX).coerceAtLeast(AiInkNote.MIN_WIDTH_PX)
+        if (pageWidthPx > 0f) {
+            (pageWidthPx - x - AI_NOTE_MARGIN_PX).coerceAtLeast(AiInkNote.MIN_WIDTH_PX)
         } else {
             Float.MAX_VALUE
         }
@@ -892,13 +923,18 @@ class CanvasViewModel(
 
     /** Erase any stroke whose geometry intersects the eraser position. */
     fun eraseAt(x: Float, y: Float, radius: Float = ERASER_RADIUS) {
-        // The eraser arrives in screen coords; strokes are stored in page coords (y + scroll). FA-20.
-        val worldY = y + _pageScrollPx.value
+        // The eraser arrives in screen coords; strokes are stored in page coords. Map screen→page
+        // through the transform (centring offset + scroll), so the hit-test lands on the ink the user
+        // actually sees, in any orientation/scroll position (FA-20 B3).
+        val t = _pageTransform.value
+        val worldX = t.screenToPageX(x)
+        val worldY = t.screenToPageY(y)
+        val pageRadius = t.screenToPageLength(radius)
         val before = _finishedStrokes.value
         val eraserBox = ImmutableBox.fromCenterAndDimensions(
-            ImmutableVec(x, worldY),
-            radius * 2,
-            radius * 2,
+            ImmutableVec(worldX, worldY),
+            pageRadius * 2,
+            pageRadius * 2,
         )
         val after = before.filterNot { cs ->
             cs.stroke.shape.computeCoverageIsGreaterThan(eraserBox, 0f)
@@ -963,9 +999,9 @@ class CanvasViewModel(
             notes.map { note ->
                 if (note.id == id) {
                     // Keep the box on the page: never let it slide off the left/right edge or
-                    // above the top. (Clamps only once the canvas width is known — see maxWidthAt.)
-                    val maxX = if (canvasWidthPx > 0f) {
-                        (canvasWidthPx - note.widthPx).coerceAtLeast(0f)
+                    // above the top. (Clamps only once the page width is known — see maxWidthAt.)
+                    val maxX = if (pageWidthPx > 0f) {
+                        (pageWidthPx - note.widthPx).coerceAtLeast(0f)
                     } else {
                         Float.MAX_VALUE
                     }

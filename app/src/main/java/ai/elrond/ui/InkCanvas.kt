@@ -1,6 +1,7 @@
 package ai.elrond.ui
 
 import ai.elrond.domain.PalmRejection
+import ai.elrond.domain.PageTransform
 import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.CanvasStroke
 import ai.elrond.domain.FingerGesture
@@ -76,18 +77,38 @@ internal fun InkCanvas(
     }
 }
 
-/** Dry-ink layer: renders the ViewModel's finished strokes, repainting on explicit invalidation. */
+/**
+ * Dry-ink layer: renders the ViewModel's finished strokes (stored in page coordinates).
+ *
+ * The page transform is applied as **per-frame GPU view properties** (`translationX/Y`, `scaleX/Y`),
+ * NOT a matrix recomputed in `onDraw` + `invalidate()`. This is the FA-10 lesson applied to scroll:
+ * a translate-in-draw + `invalidate()` did not produce per-frame redraws during a scroll drag (the
+ * ink stayed frozen and snapped to the scrolled position on release), exactly as a Compose transform
+ * inside a draw lambda froze the lasso ink. Driving `translationY` instead is a cheap composite the
+ * framework re-applies every frame — the strokes rasterise once and the layer is just re-positioned.
+ *
+ * The view is laid out at the **full page size** (width × A-ratio height), positioned at the page's
+ * screen origin, so translating it up by the scroll reveals the off-screen (lower) ink rather than
+ * blank space. Strokes are drawn in page space (identity matrix); the view's transform maps page →
+ * screen. Stroke-list changes still go through [setStrokes] + `invalidate()` (off Compose, so the
+ * first stroke of a freshly opened page paints without waiting on a recomposition — the FA-6 fix).
+ */
 @SuppressLint("ViewConstructor")
 private class DryStrokesView(context: Context) : View(context) {
     private val renderer = CanvasStrokeRenderer.create()
-    // Page(world) → screen transform: a vertical translate by -scroll (FA-20). Fit-width keeps the
-    // scale at 1, so this is the only adjustment between stored page coords and screen pixels.
-    private val screenTransform = Matrix()
+    // Strokes are stored in page space; the view itself carries the page→screen transform, so they
+    // draw at identity here.
+    private val identity = Matrix()
     private var strokes: List<Stroke> = emptyList()
+    private var pageWidthPx = 0
+    private var pageHeightPx = 0
 
     init {
         // A plain View can skip onDraw as an optimisation; ensure it always draws our ink.
         setWillNotDraw(false)
+        // Scale/translate about the top-left so view properties compose as screen = page·scale + offset.
+        pivotX = 0f
+        pivotY = 0f
     }
 
     /** Replace the dry strokes and repaint immediately (independent of Compose recomposition). */
@@ -96,16 +117,37 @@ private class DryStrokesView(context: Context) : View(context) {
         invalidate()
     }
 
-    /** Update the page scroll offset (px) and repaint at the new vertical position. */
-    fun setScroll(scrollPx: Float) {
-        screenTransform.setTranslate(0f, -scrollPx)
-        invalidate()
+    /** Applies the page → screen [transform] as GPU view properties (per-frame, no redraw). */
+    fun setTransform(transform: PageTransform) {
+        translationX = transform.offsetX
+        translationY = transform.offsetY // = -scroll
+        scaleX = transform.scale
+        scaleY = transform.scale
+    }
+
+    /** Sets the page's view-local size (page-space px); relayouts so scrolling reveals lower ink. */
+    fun setPageSize(widthPx: Float, heightPx: Float) {
+        val w = widthPx.toInt()
+        val h = heightPx.toInt()
+        if (w != pageWidthPx || h != pageHeightPx) {
+            pageWidthPx = w
+            pageHeightPx = h
+            requestLayout()
+        }
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        if (pageWidthPx > 0 && pageHeightPx > 0) {
+            setMeasuredDimension(pageWidthPx, pageHeightPx)
+        } else {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         strokes.forEach { stroke ->
-            renderer.draw(canvas = canvas, stroke = stroke, strokeToScreenTransform = screenTransform)
+            renderer.draw(canvas = canvas, stroke = stroke, strokeToScreenTransform = identity)
         }
     }
 }
@@ -174,12 +216,20 @@ private fun createInkView(
                         combine(
                             viewModel.finishedStrokes,
                             viewModel.selection,
-                            viewModel.pageScrollPx,
-                        ) { strokes, sel, scroll ->
-                            Triple(strokes, sel, scroll)
-                        }.collect { (strokes, sel, scroll) ->
-                            // Track the scroll offset every emission (cheap translate + invalidate).
-                            dryStrokesView.setScroll(scroll)
+                            viewModel.pageTransform,
+                        ) { strokes, sel, transform ->
+                            Triple(strokes, sel, transform)
+                        }.collect { (strokes, sel, transform) ->
+                            // Lay the dry view out at the full page size (in page-space units, so the
+                            // GPU scale below maps it to screen — zoom-ready), then apply the
+                            // page→screen transform as GPU properties every emission (cheap composite,
+                            // no redraw) — this is what makes the scroll track the gesture per-frame,
+                            // and centres the page in landscape (FA-20 B1/B2).
+                            val pageScreenW = (rootView.width - 2 * transform.offsetX).coerceAtLeast(0f)
+                            val scale = if (transform.scale != 0f) transform.scale else 1f
+                            val pageSpaceW = pageScreenW / scale
+                            dryStrokesView.setPageSize(pageSpaceW, pageSpaceW * PageTransform.ASPECT_RATIO)
+                            dryStrokesView.setTransform(transform)
                             val selectedIds = sel?.ids ?: emptySet()
                             // setStrokes() invalidate()s, which repaints every dry stroke from scratch
                             // via CanvasStrokeRenderer.draw. The combine also fires on every
@@ -300,14 +350,16 @@ private fun createTouchListener(
                         // Pen down: hold off any prefix-/Q inactivity send until this stroke finishes,
                         // so the AI never answers mid-writing (and always gets the full question).
                         viewModel.onWritingStarted()
-                        // Capture in page coords: motionEventToWorldTransform shifts the stored input
-                        // down by the scroll, so the finished stroke lands at (x, y + scroll). The wet
-                        // stroke still renders at the pen tip (motionEventToViewTransform = identity).
+                        // Capture in page coords: motionEventToWorldTransform maps the input from
+                        // screen → page space (undo the centring offset, add the scroll), so the
+                        // finished stroke lands at (x − offsetX, y + scroll). The wet stroke still
+                        // renders at the pen tip (motionEventToViewTransform = identity). FA-20.
+                        val t = viewModel.pageTransform.value
                         currentStrokeId = inProgressStrokesView.startStroke(
                             event,
                             pointerId,
                             viewModel.penBrush,
-                            Matrix().apply { setTranslate(0f, viewModel.pageScrollPx.value) },
+                            Matrix().apply { setTranslate(-t.offsetX, -t.offsetY) },
                             Matrix(),
                         )
                     }

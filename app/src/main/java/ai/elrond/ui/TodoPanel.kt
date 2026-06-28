@@ -64,6 +64,7 @@ fun TodoPanel(
     modifier: Modifier = Modifier,
 ) {
     val items by viewModel.items.collectAsStateWithLifecycle()
+    val sourceLabels by viewModel.sourceLabels.collectAsStateWithLifecycle()
     val active = items.filterNot { it.isCompleted }
     val done = items.filter { it.isCompleted }
     var editingDueFor by remember { mutableStateOf<TodoItem?>(null) }
@@ -112,6 +113,7 @@ fun TodoPanel(
                                 onOpenSource = { item.sourcePageId?.let(onOpenSource) },
                                 onEditDue = { editingDueFor = item },
                                 onSetPriority = { p -> viewModel.edit(item.id, item.content, p, item.dueAt) },
+                                sourceLabel = item.sourcePageId?.let { sourceLabels[it] },
                             )
                         }
                         if (done.isNotEmpty()) {
@@ -131,6 +133,7 @@ fun TodoPanel(
                                     onOpenSource = { item.sourcePageId?.let(onOpenSource) },
                                     onEditDue = { editingDueFor = item },
                                     onSetPriority = { p -> viewModel.edit(item.id, item.content, p, item.dueAt) },
+                                    sourceLabel = item.sourcePageId?.let { sourceLabels[it] },
                                 )
                             }
                         }
@@ -178,6 +181,7 @@ private fun TodoRow(
     onOpenSource: () -> Unit,
     onEditDue: () -> Unit,
     onSetPriority: (TodoPriority) -> Unit,
+    sourceLabel: String? = null,
 ) {
     // The compact canvas menu encodes status by tile fill, not a pill: in-progress gets a very light
     // accent wash; to-do and done stay plain (done is shown by the checkbox + strikethrough).
@@ -221,7 +225,8 @@ private fun TodoRow(
                 ) {
                     if (item.isAiExtracted && item.hasSourceLink) {
                         AiSourceLink(
-                            title = item.sourcePageTitle.orEmpty(),
+                            // Live "Notebook → Page N" when resolvable, else the stored title snapshot.
+                            title = sourceLabel ?: item.sourcePageTitle.orEmpty(),
                             onClick = onOpenSource,
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.weight(1f, fill = false),

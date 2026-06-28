@@ -2,6 +2,7 @@ package ai.elrond.ui
 
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.NotebookSummary
+import ai.elrond.domain.PageTransform
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.SubjectNode
 import ai.elrond.presentation.NoteListViewModel
@@ -71,6 +72,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -89,38 +93,74 @@ import androidx.compose.ui.window.Dialog
  * drawer's note list IS live (it navigates between real notes).
  */
 
-/** Paper background drawn behind the ink: Ruled / Plain / Dots (from the paper-style setting). */
+/**
+ * Paper background drawn behind the ink: Ruled / Plain / Dots (from the paper-style setting).
+ *
+ * The page is a **fixed portrait A-ratio sheet** placed by [transform]: in portrait it fills the
+ * width; in landscape it stays the same (portrait) width and is centred, leaving a "desk" margin on
+ * each side (FA-20 B1). The sheet is the white surface with the rule/dot lattice clipped to it; the
+ * surrounding desk is a neutral tint with a hairline page border, so the page edge reads clearly.
+ * Everything is positioned through [transform] so the paper sits exactly under the page-mapped ink.
+ */
 @Composable
-fun PaperBackground(paper: PaperStyle, modifier: Modifier = Modifier, scrollPx: Float = 0f) {
+fun PaperBackground(
+    paper: PaperStyle,
+    modifier: Modifier = Modifier,
+    transform: PageTransform = PageTransform(scale = 1f, offsetX = 0f, offsetY = 0f),
+) {
     val surface = MaterialTheme.colorScheme.surface
+    val desk = Neutral100
+    val border = Neutral200
     val mark = Neutral200
-    Canvas(modifier = modifier.fillMaxSize().background(surface)) {
-        when (paper) {
-            PaperStyle.PLAIN -> Unit // blank white page
-            PaperStyle.DOTS -> {
-                val step = 26.dp.toPx()
-                val r = 1.4.dp.toPx()
-                // Offset the lattice by the page scroll so the paper moves with the ink (FA-20).
-                var y = step - scrollPx.mod(step)
-                while (y < size.height) {
-                    var x = step
-                    while (x < size.width) {
-                        drawCircle(color = mark, radius = r, center = Offset(x, y))
-                        x += step
+    Canvas(modifier = modifier.fillMaxSize().background(desk)) {
+        // The page rectangle on screen: left/top from the transform, width = the screen span between
+        // the two side margins, height its A-ratio extent. (scale = 1 until pinch-zoom, Phase 5.)
+        val pageLeft = transform.offsetX
+        val pageWidth = (size.width - 2f * transform.offsetX).coerceAtLeast(0f)
+        val pageTop = transform.offsetY // = -scroll
+        val pageHeight = pageWidth * PageTransform.ASPECT_RATIO
+        val pageRight = pageLeft + pageWidth
+        val pageBottom = pageTop + pageHeight
+
+        // White sheet.
+        drawRect(color = surface, topLeft = Offset(pageLeft, pageTop), size = Size(pageWidth, pageHeight))
+
+        // Rule/dot lattice, clipped to the sheet and offset by the page scroll so it moves with ink.
+        clipRect(left = pageLeft, top = pageTop, right = pageRight, bottom = pageBottom) {
+            when (paper) {
+                PaperStyle.PLAIN -> Unit
+                PaperStyle.DOTS -> {
+                    val step = 26.dp.toPx()
+                    val r = 1.4.dp.toPx()
+                    var y = pageTop + step
+                    while (y < pageBottom) {
+                        var x = pageLeft + step
+                        while (x < pageRight) {
+                            drawCircle(color = mark, radius = r, center = Offset(x, y))
+                            x += step
+                        }
+                        y += step
                     }
-                    y += step
                 }
-            }
-            PaperStyle.RULED -> {
-                val step = 34.dp.toPx()
-                val w = 1.dp.toPx()
-                var y = step - scrollPx.mod(step)
-                while (y < size.height) {
-                    drawLine(color = mark, start = Offset(0f, y), end = Offset(size.width, y), strokeWidth = w)
-                    y += step
+                PaperStyle.RULED -> {
+                    val step = 34.dp.toPx()
+                    val w = 1.dp.toPx()
+                    var y = pageTop + step
+                    while (y < pageBottom) {
+                        drawLine(color = mark, start = Offset(pageLeft, y), end = Offset(pageRight, y), strokeWidth = w)
+                        y += step
+                    }
                 }
             }
         }
+
+        // Hairline page border so the sheet edge is visible against the desk.
+        drawRect(
+            color = border,
+            topLeft = Offset(pageLeft, pageTop),
+            size = Size(pageWidth, pageHeight),
+            style = Stroke(width = 1.dp.toPx()),
+        )
     }
 }
 

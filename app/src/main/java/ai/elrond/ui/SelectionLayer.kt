@@ -4,6 +4,7 @@ import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.domain.Corner
 import ai.elrond.domain.LiveTransform
+import ai.elrond.domain.PageTransform
 import ai.elrond.domain.SelectionState
 import ai.elrond.domain.StrokeSelection
 import ai.elrond.domain.StrokeTransforms
@@ -81,10 +82,11 @@ fun SelectionLayer(
     val selection by viewModel.selection.collectAsStateWithLifecycle()
     val clipboard by viewModel.clipboard.collectAsStateWithLifecycle()
     val finishedStrokes by viewModel.finishedStrokes.collectAsStateWithLifecycle()
-    // Page scroll offset (FA-20): strokes are stored in page coords, and the page may be scrolled
-    // (you can't scroll in lasso mode, but you may have scrolled in pen mode first). The overlay
-    // renders the box/ink at (world − scroll) and captures the lasso at (screen + scroll).
-    val pageScrollPx by viewModel.pageScrollPx.collectAsStateWithLifecycle()
+    // Page → screen transform (FA-20): strokes are stored in page coords, and the page may be
+    // centred (landscape margins) and/or scrolled (you can't scroll in lasso mode, but you may have
+    // scrolled in pen mode first). The overlay renders the box/ink page → screen and captures the
+    // lasso screen → page through this transform.
+    val transform by viewModel.pageTransform.collectAsStateWithLifecycle()
     // Container size in px — clamps the floating menu on-screen.
     var layerSize by remember { mutableStateOf(IntSize.Zero) }
 
@@ -96,7 +98,7 @@ fun SelectionLayer(
         // Background: drag → new lasso; tap → paste (armed) or deselect.
         LassoCatcher(
             clipboardActive = clipboard.active,
-            scrollPx = pageScrollPx,
+            transform = transform,
             onLasso = viewModel::selectByLasso,
             onTap = { x, y ->
                 if (clipboard.active) viewModel.pasteAt(x, y) else viewModel.clearSelection()
@@ -115,8 +117,8 @@ fun SelectionLayer(
                     StrokeTransforms.recolorStroke(it.stroke, fadedGhostColor(it.stroke.brush.colorIntArgb))
                 }
             }
-            SelectionStrokes(selectedStrokes, ghostStrokes, sel.transform, pageScrollPx)
-            SelectionBox(sel, viewModel, layerSize, pageScrollPx)
+            SelectionStrokes(selectedStrokes, ghostStrokes, sel.transform, transform)
+            SelectionBox(sel, viewModel, layerSize, transform)
         }
 
         if (clipboard.active) {
@@ -133,7 +135,7 @@ fun SelectionLayer(
 @Composable
 private fun LassoCatcher(
     clipboardActive: Boolean,
-    scrollPx: Float,
+    transform: PageTransform,
     onLasso: (List<GestureTriggerDetector.Point>) -> Unit,
     onTap: (Float, Float) -> Unit,
 ) {
@@ -166,11 +168,21 @@ private fun LassoCatcher(
                         }
                     }
                     if (dragging) {
-                        // Convert the screen-space lasso to page coords (y + scroll) so it hit-tests
-                        // against the stored strokes (FA-20).
-                        onLasso(points.map { GestureTriggerDetector.Point(it.x, it.y + scrollPx) })
+                        // Convert the screen-space lasso to page coords so it hit-tests against the
+                        // stored (page-space) strokes (FA-20).
+                        onLasso(
+                            points.map {
+                                GestureTriggerDetector.Point(
+                                    transform.screenToPageX(it.x),
+                                    transform.screenToPageY(it.y),
+                                )
+                            },
+                        )
                     } else {
-                        onTap(down.position.x, down.position.y + scrollPx)
+                        onTap(
+                            transform.screenToPageX(down.position.x),
+                            transform.screenToPageY(down.position.y),
+                        )
                     }
                     path.value = emptyList()
                 }
@@ -202,7 +214,7 @@ private fun SelectionBox(
     sel: SelectionState,
     viewModel: CanvasViewModel,
     layerSize: IntSize,
-    scrollPx: Float,
+    transform: PageTransform,
 ) {
     val density = LocalDensity.current
     val accent = LeapTheme.tokens.accent
@@ -211,7 +223,10 @@ private fun SelectionBox(
     with(density) {
         Box(
             Modifier
-                .absoluteOffset(x = box.left.toDp(), y = (box.top - scrollPx).toDp())
+                .absoluteOffset(
+                    x = transform.pageToScreenX(box.left).toDp(),
+                    y = transform.pageToScreenY(box.top).toDp(),
+                )
                 .size(width = box.width.coerceAtLeast(1f).toDp(), height = box.height.coerceAtLeast(1f).toDp())
                 .border(
                     width = 1.5.dp,
@@ -241,7 +256,7 @@ private fun SelectionBox(
         }
     }
 
-    SelectionToolbar(sel, viewModel, layerSize, scrollPx)
+    SelectionToolbar(sel, viewModel, layerSize, transform)
 }
 
 /** A draggable corner handle that scales the selection about the opposite corner. */
@@ -288,7 +303,7 @@ private fun SelectionToolbar(
     sel: SelectionState,
     viewModel: CanvasViewModel,
     layerSize: IntSize,
-    scrollPx: Float,
+    transform: PageTransform,
 ) {
     val box = sel.displayBounds
     var menuOpen by remember { mutableStateOf(false) }
@@ -301,12 +316,12 @@ private fun SelectionToolbar(
                 val h = toolbarSize.height
                 val margin = 8.dp.toPx()
                 val gap = 8.dp.toPx()
-                // Centre over the selection, then keep both horizontal edges on-screen.
+                // Centre over the selection (in screen space), then keep both horizontal edges on.
                 val maxX = (layerSize.width - w - margin).coerceAtLeast(margin)
-                val x = (box.centerX - w / 2f).coerceIn(margin, maxX)
+                val x = (transform.pageToScreenX(box.centerX) - w / 2f).coerceIn(margin, maxX)
                 // Prefer above the box; drop below when there's no room, then clamp vertically.
-                val above = (box.top - scrollPx) - h - gap
-                val rawY = if (above >= margin) above else (box.bottom - scrollPx) + gap
+                val above = transform.pageToScreenY(box.top) - h - gap
+                val rawY = if (above >= margin) above else transform.pageToScreenY(box.bottom) + gap
                 val maxY = (layerSize.height - h - margin).coerceAtLeast(margin)
                 val y = rawY.coerceIn(margin, maxY)
                 IntOffset(x.roundToInt(), y.roundToInt())
@@ -418,51 +433,62 @@ internal fun SelectionStrokes(
     selected: List<InkStroke>,
     ghost: List<InkStroke>,
     transform: LiveTransform,
-    scrollPx: Float = 0f,
+    page: PageTransform = PageTransform(scale = 1f, offsetX = 0f, offsetY = 0f),
 ) {
     val renderer = remember { CanvasStrokeRenderer.create() }
-    // Faded origin ghost — drawn once at the original position, shown only while transforming.
-    if (!transform.isIdentity) {
-        StrokeCanvas(ghost, renderer, Modifier, scrollPx)
+    // Strokes are drawn at IDENTITY (page coordinates); the page → screen mapping (centring offset +
+    // scroll + scale) is applied as a GPU graphicsLayer — the SAME mechanism the dry-ink layer uses
+    // (InkCanvas.DryStrokesView translates a page-space view), so the live selection lands exactly
+    // where the dry ink does in every orientation. Baking the offset into the draw matrix instead
+    // mis-placed the live ink in landscape (FA-20 device feedback). The live move/scale is a second,
+    // inner layer in page space — composed as page(live(stroke)) — re-applied per frame, no mesh redraw.
+    val pageLayer: androidx.compose.ui.graphics.GraphicsLayerScope.() -> Unit = {
+        translationX = page.offsetX
+        translationY = page.offsetY
+        scaleX = page.scale
+        scaleY = page.scale
+        transformOrigin = TransformOrigin(0f, 0f)
     }
-    // Live move/scale via a GPU graphicsLayer (reliable per-frame update; no mesh redraw).
+    // Faded origin ghost — drawn once at the original page position, shown only while transforming.
+    if (!transform.isIdentity) {
+        StrokeCanvas(ghost, renderer, Modifier.graphicsLayer(pageLayer))
+    }
     key(selected) {
         StrokeCanvas(
             selected,
             renderer,
-            Modifier.graphicsLayer {
-                translationX = transform.dx
-                translationY = transform.dy
-                scaleX = transform.scaleX
-                scaleY = transform.scaleY
-                // Scale about the same pivot LiveTransform uses, expressed as a fraction of the layer.
-                // The strokes draw at (world − scroll), so the on-screen pivot y is (pivotY − scroll).
-                transformOrigin = if (size.width > 0f && size.height > 0f) {
-                    TransformOrigin(transform.pivotX / size.width, (transform.pivotY - scrollPx) / size.height)
-                } else {
-                    TransformOrigin(0f, 0f)
-                }
-            },
-            scrollPx,
+            Modifier
+                // Outer: page → screen (applied last). Inner: the live move/scale in page space.
+                .graphicsLayer(pageLayer)
+                .graphicsLayer {
+                    translationX = transform.dx
+                    translationY = transform.dy
+                    scaleX = transform.scaleX
+                    scaleY = transform.scaleY
+                    // Live pivot is in page coords; the identity-drawn canvas is 1:1 page↔pixel.
+                    transformOrigin = if (size.width > 0f && size.height > 0f) {
+                        TransformOrigin(transform.pivotX / size.width, transform.pivotY / size.height)
+                    } else {
+                        TransformOrigin(0f, 0f)
+                    }
+                },
         )
     }
 }
 
-/** Rasterises [strokes] at their own coordinates (identity) with the ink renderer. */
+/** Rasterises [strokes] at IDENTITY (page coordinates); the caller's [modifier] maps page → screen. */
 @Composable
 private fun StrokeCanvas(
     strokes: List<InkStroke>,
     renderer: CanvasStrokeRenderer,
     modifier: Modifier,
-    scrollPx: Float = 0f,
 ) {
-    // Page(world) → screen: translate by -scroll (FA-20); scale stays 1 in fit-width mode.
-    val transform = remember(scrollPx) { Matrix().apply { setTranslate(0f, -scrollPx) } }
+    val identity = remember { Matrix() }
     Canvas(modifier.fillMaxSize()) {
         drawIntoCanvas { canvas ->
             val nativeCanvas = canvas.nativeCanvas
             strokes.forEach { stroke ->
-                renderer.draw(canvas = nativeCanvas, stroke = stroke, strokeToScreenTransform = transform)
+                renderer.draw(canvas = nativeCanvas, stroke = stroke, strokeToScreenTransform = identity)
             }
         }
     }

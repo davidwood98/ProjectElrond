@@ -216,6 +216,7 @@ fun CalendarScreen(
                                 viewModel = noteListViewModel,
                                 onClick = { onOpenNote(note.id) },
                                 modifier = Modifier.fillMaxHeight().width(190.dp),
+                                notebookLabel = viewModel.notebookPageLabel(note),
                             )
                         }
                     }
@@ -233,6 +234,7 @@ fun CalendarScreen(
                                 viewModel = noteListViewModel,
                                 onClick = { onOpenNote(note.id) },
                                 modifier = Modifier.fillMaxWidth().height(150.dp),
+                                notebookLabel = viewModel.notebookPageLabel(note),
                             )
                         }
                     }
@@ -364,6 +366,7 @@ private fun DayNoteThumb(
     viewModel: NoteListViewModel,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    notebookLabel: String? = null,
 ) {
     val zone = java.time.ZoneId.systemDefault()
     val createdThisDay = java.time.Instant.ofEpochMilli(note.createdAt).atZone(zone).toLocalDate() == date
@@ -391,6 +394,17 @@ private fun DayNoteThumb(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // For a multi-page notebook, show which notebook + page this is (FA-20).
+                if (notebookLabel != null) {
+                    Text(
+                        notebookLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Neutral500,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                     Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(verbColor))
                     Spacer(Modifier.width(5.dp))

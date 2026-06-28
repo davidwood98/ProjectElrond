@@ -3,6 +3,7 @@ package ai.elrond.ui
 import ai.elrond.R
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.MathDetector
+import ai.elrond.domain.PageTransform
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -80,7 +81,7 @@ fun AiInkNoteView(
     onResize: (dWidth: Float, dHeight: Float) -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
-    scrollPx: Float = 0f,
+    transform: PageTransform = PageTransform(scale = 1f, offsetX = 0f, offsetY = 0f),
 ) {
     val density = LocalDensity.current
     val widthDp = with(density) { note.widthPx.toDp() }
@@ -92,7 +93,13 @@ fun AiInkNoteView(
 
     Box(
         modifier = modifier
-            .offset { IntOffset(note.x.roundToInt(), (note.y - scrollPx).roundToInt()) }
+            // The note is anchored in page space; map page → screen (centring offset + scroll).
+            .offset {
+                IntOffset(
+                    transform.pageToScreenX(note.x).roundToInt(),
+                    transform.pageToScreenY(note.y).roundToInt(),
+                )
+            }
             .width(widthDp)
             .then(heightModifier)
             .then(
