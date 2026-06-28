@@ -4,6 +4,7 @@ import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.CanvasStroke
 import ai.elrond.domain.NoteEditDay
 import ai.elrond.domain.Notebook
+import ai.elrond.domain.NotebookSummary
 import ai.elrond.domain.NotePage
 import java.time.Instant
 import java.time.LocalDate
@@ -11,6 +12,7 @@ import java.time.ZoneId
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
@@ -85,6 +87,30 @@ class NoteRepository(
     /** All pages ordered by last edit — the "created X / last edited Y" timeline. */
     fun observeTimeline(): Flow<List<NotePage>> =
         pageDao.observeTimeline().map { entities -> entities.map(NotePageEntity::toDomain) }
+
+    /**
+     * One [NotebookSummary] per non-empty notebook (FA-20) — backs the browser grid + editor tabs.
+     * Title = the cover (first) page's title; the default page to open = the most-recently-viewed page.
+     * Sorted most-recently-opened first.
+     */
+    fun observeNotebookSummaries(): Flow<List<NotebookSummary>> =
+        combine(notebookDao.observeAll(), pageDao.observeTimeline()) { notebooks, pages ->
+            val byNotebook = pages.groupBy { it.notebookId }
+            notebooks.mapNotNull { nb ->
+                val nbPages = byNotebook[nb.id]?.sortedBy { it.pageNumber } ?: return@mapNotNull null
+                val cover = nbPages.first()
+                val lastViewed = nbPages.maxByOrNull { it.lastOpenedAt } ?: cover
+                NotebookSummary(
+                    notebookId = nb.id,
+                    title = cover.toDomain().displayTitle(zone),
+                    coverPageId = cover.id,
+                    pageCount = nbPages.size,
+                    modifiedAt = nbPages.maxOf { it.modifiedAt },
+                    lastViewedPageId = lastViewed.id,
+                    lastOpenedAt = nbPages.maxOf { it.lastOpenedAt },
+                )
+            }.sortedByDescending { it.lastOpenedAt }
+        }
 
     /**
      * Creates a fresh notebook with its first page and returns that page (FA-20: each note is its own

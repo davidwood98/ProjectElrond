@@ -1,6 +1,7 @@
 package ai.elrond.presentation
 
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.NotebookSummary
 import ai.elrond.data.SessionNotesTracker
 import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.NoteRepository
@@ -53,6 +54,25 @@ class NoteListViewModel @Inject constructor(
     ) { ids, pages ->
         val byId = pages.associateBy { it.id }
         ids.mapNotNull { byId[it] }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** One summary per notebook (FA-20), most-recently-opened first — backs the browser grid. */
+    val notebooks: StateFlow<List<NotebookSummary>> = repository.observeNotebookSummaries()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Notebooks touched in the current foreground session (FA-20) — the editor's note tabs. Derived
+     * from the session's opened page ids mapped to their notebooks and de-duplicated (opening several
+     * pages of one notebook yields a single tab), preserving open order.
+     */
+    val sessionNotebooks: StateFlow<List<NotebookSummary>> = combine(
+        sessionNotesTracker.openedPageIds,
+        repository.observeNotebookSummaries(),
+        repository.observeTimeline(),
+    ) { openedIds, summaries, pages ->
+        val pageToNotebook = pages.associate { it.id to it.notebookId }
+        val summaryById = summaries.associateBy { it.notebookId }
+        openedIds.mapNotNull { pid -> pageToNotebook[pid]?.let(summaryById::get) }.distinctBy { it.notebookId }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** Renames a note; a blank title reverts it to the auto-generated timestamp title. */

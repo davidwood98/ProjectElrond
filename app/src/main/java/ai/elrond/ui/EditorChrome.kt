@@ -1,6 +1,7 @@
 package ai.elrond.ui
 
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.NotebookSummary
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.SubjectNode
 import ai.elrond.presentation.NoteListViewModel
@@ -212,28 +213,29 @@ fun EditorHeader(
  */
 @Composable
 internal fun NoteTabPills(
-    tabs: List<NotePage>,
-    currentPageId: String,
+    tabs: List<NotebookSummary>,
+    currentNotebookId: String?,
     currentTitle: String,
-    onSelectTab: (String) -> Unit,
+    onSelectTab: (pageId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val hasCurrent = remember(tabs, currentPageId) { tabs.any { it.id == currentPageId } }
+    val hasCurrent = remember(tabs, currentNotebookId) { tabs.any { it.notebookId == currentNotebookId } }
     Row(
         modifier = modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Fallback only while the current note hasn't yet propagated into the session list.
+        // Fallback only while the current notebook hasn't yet propagated into the session list.
         if (!hasCurrent) {
             TabPill(label = currentTitle, active = true, onClick = {})
         }
-        tabs.forEach { page ->
-            val active = page.id == currentPageId
+        tabs.forEach { tab ->
+            val active = tab.notebookId == currentNotebookId
             TabPill(
-                label = if (active) currentTitle else page.displayTitle(),
+                label = if (active) currentTitle else tab.title,
                 active = active,
-                onClick = { if (!active) onSelectTab(page.id) },
+                // Tapping a notebook tab opens its most-recently-viewed page (FA-20 open-to-last-viewed).
+                onClick = { if (!active) onSelectTab(tab.lastViewedPageId) },
             )
         }
     }

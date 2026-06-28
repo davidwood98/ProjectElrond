@@ -108,6 +108,8 @@ fun NoteCanvasScreen(
     val pageScrollPx by viewModel.pageScrollPx.collectAsStateWithLifecycle()
     // The notebook's pages (FA-20) — drives the page indicator; a horizontal finger swipe turns pages.
     val notebookPages by viewModel.notebookPages.collectAsStateWithLifecycle()
+    // The current notebook (all notebookPages share it) — for the active editor-tab highlight.
+    val currentNotebookId = notebookPages.firstOrNull()?.notebookId
     val pendingExtraction by viewModel.pendingExtraction.collectAsStateWithLifecycle()
     val todoCount by todoViewModel.activeCount.collectAsStateWithLifecycle()
     var showTodoPanel by remember { mutableStateOf(false) }
@@ -125,8 +127,8 @@ fun NoteCanvasScreen(
     val pageTitle by viewModel.pageTitle.collectAsStateWithLifecycle()
     val pageDateLabel by viewModel.pageDateLabel.collectAsStateWithLifecycle()
     val libraryNotes by noteListViewModel.pages.collectAsStateWithLifecycle()
-    // The note tabs show notes opened in the current foreground session (FA-16) — cleared on background.
-    val sessionNotes by noteListViewModel.sessionNotes.collectAsStateWithLifecycle()
+    // The editor tabs show notebooks opened in the current foreground session (FA-20).
+    val sessionNotebooks by noteListViewModel.sessionNotebooks.collectAsStateWithLifecycle()
     // Quick Nav (FA-16): the read-only subject tree with each subject's notes nested inside it.
     val subjectTree by subjectViewModel.tree.collectAsStateWithLifecycle()
     val subjectExpandedIds by subjectViewModel.expandedIds.collectAsStateWithLifecycle()
@@ -468,8 +470,8 @@ fun NoteCanvasScreen(
             onRename = viewModel::renamePage,
             tabs = {
                 NoteTabPills(
-                    tabs = sessionNotes,
-                    currentPageId = pageId,
+                    tabs = sessionNotebooks,
+                    currentNotebookId = currentNotebookId,
                     currentTitle = pageTitle,
                     onSelectTab = { id -> if (id != pageId) onOpenNote(id) },
                     modifier = Modifier.fillMaxWidth(),

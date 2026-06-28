@@ -20,6 +20,21 @@ data class Notebook(
     val modifiedAt: Long = createdAt,
 )
 
+/**
+ * A lightweight summary of a notebook for the browser grid + editor tabs (FA-20): its display title
+ * (the cover page's title), the cover page (page 1, for the thumbnail), the page count, recency, and
+ * the page to open by default — the most-recently-viewed page within the notebook.
+ */
+data class NotebookSummary(
+    val notebookId: String,
+    val title: String,
+    val coverPageId: String,
+    val pageCount: Int,
+    val modifiedAt: Long,
+    val lastViewedPageId: String,
+    val lastOpenedAt: Long,
+)
+
 /** A day on which a note page was edited (one per page per local day). */
 data class NoteEditDay(val pageId: String, val date: LocalDate)
 
