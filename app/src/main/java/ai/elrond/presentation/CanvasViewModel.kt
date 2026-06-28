@@ -574,6 +574,56 @@ class CanvasViewModel(
         _pageScrollPx.value = (_pageScrollPx.value - dragDeltaY).coerceIn(0f, maxScroll)
     }
 
+    /** Opens a specific page of this notebook (FA-20 page index). */
+    fun goToPage(targetPageId: String) {
+        if (targetPageId != pageId) viewModelScope.launch { _pageTurnEvents.emit(targetPageId) }
+    }
+
+    /** Adds a blank page to the notebook and opens it (FA-20 page-index "+"). */
+    fun addPageAndOpen() {
+        val repo = repository ?: return
+        val nb = notebookId ?: return
+        viewModelScope.launch { _pageTurnEvents.emit(repo.addPage(nb).id) }
+    }
+
+    /** Toggles a page's bookmark (FA-20 page index). */
+    fun setPageBookmark(targetPageId: String, bookmarked: Boolean) {
+        val repo = repository ?: return
+        viewModelScope.launch { repo.setBookmark(targetPageId, bookmarked) }
+    }
+
+    /**
+     * Deletes a page from the notebook, keeping at least one (FA-20). If the open page is deleted,
+     * navigates to a neighbouring page.
+     */
+    fun deletePageFromNotebook(targetPageId: String) {
+        val repo = repository ?: return
+        val pages = _notebookPages.value
+        if (pages.size <= 1) return // a notebook always keeps at least one page
+        val idx = pages.indexOfFirst { it.id == targetPageId }
+        viewModelScope.launch {
+            repo.deletePage(targetPageId)
+            if (targetPageId == pageId && idx >= 0) {
+                val neighbour = pages.getOrNull(idx + 1) ?: pages.getOrNull(idx - 1)
+                neighbour?.let { _pageTurnEvents.emit(it.id) }
+            }
+        }
+    }
+
+    /** Moves a page one position earlier/later in the notebook (FA-20 page-index reorder). */
+    fun movePage(targetPageId: String, forward: Boolean) {
+        val repo = repository ?: return
+        val pages = _notebookPages.value
+        val idx = pages.indexOfFirst { it.id == targetPageId }
+        if (idx < 0) return
+        val swapIdx = if (forward) idx + 1 else idx - 1
+        if (swapIdx < 0 || swapIdx > pages.lastIndex) return
+        val newOrder = pages.map { it.id }.toMutableList()
+        newOrder[idx] = pages[swapIdx].id
+        newOrder[swapIdx] = pages[idx].id
+        viewModelScope.launch { repo.reorderPages(newOrder) }
+    }
+
     /**
      * Turns to the previous/next page (FA-20). Forward past the last page creates a new blank page —
      * but only when the current page has content, so repeatedly swiping past the end never spawns

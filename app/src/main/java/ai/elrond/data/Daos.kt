@@ -69,6 +69,14 @@ interface NotePageDao {
     @Query("UPDATE note_pages SET customTitle = :title, modifiedAt = :modifiedAt WHERE id = :id")
     suspend fun rename(id: String, title: String?, modifiedAt: Long)
 
+    /** Toggle a page's bookmark flag (FA-20 page index). */
+    @Query("UPDATE note_pages SET isBookmarked = :bookmarked WHERE id = :id")
+    suspend fun setBookmarked(id: String, bookmarked: Boolean)
+
+    /** Set a page's position within its notebook (FA-20 page-index reorder). */
+    @Query("UPDATE note_pages SET pageNumber = :pageNumber WHERE id = :id")
+    suspend fun setPageNumber(id: String, pageNumber: Int)
+
     /** Strokes cascade-delete via the pageId foreign key. */
     @Query("DELETE FROM note_pages WHERE id = :id")
     suspend fun deleteById(id: String)

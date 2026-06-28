@@ -55,6 +55,16 @@ class NoteRepository(
     fun observePagesOrdered(notebookId: String): Flow<List<NotePage>> =
         pageDao.observeByNotebookOrdered(notebookId).map { entities -> entities.map(NotePageEntity::toDomain) }
 
+    /** Toggle a page's bookmark flag (FA-20 page index). */
+    suspend fun setBookmark(pageId: String, bookmarked: Boolean) {
+        pageDao.setBookmarked(pageId, bookmarked)
+    }
+
+    /** Rewrite page order: each id's pageNumber becomes its 1-based position in [orderedIds] (FA-20). */
+    suspend fun reorderPages(orderedIds: List<String>) {
+        orderedIds.forEachIndexed { index, id -> pageDao.setPageNumber(id, index + 1) }
+    }
+
     /** Adds a new page after the notebook's current last page (FA-20); its number is max + 1. */
     suspend fun addPage(notebookId: String): NotePage {
         val now = clock()

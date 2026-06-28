@@ -484,7 +484,17 @@ fun NoteCanvasScreen(
         )
 
         if (showPages) {
-            PagesOverlay(currentTitle = pageTitle, onDismiss = { showPages = false })
+            PagesOverlay(
+                pages = notebookPages,
+                currentPageId = pageId,
+                noteListViewModel = noteListViewModel,
+                onOpenPage = { id -> showPages = false; if (id != pageId) onOpenNote(id) },
+                onAddPage = { showPages = false; viewModel.addPageAndOpen() },
+                onDeletePage = viewModel::deletePageFromNotebook,
+                onToggleBookmark = viewModel::setPageBookmark,
+                onMovePage = viewModel::movePage,
+                onDismiss = { showPages = false },
+            )
         }
         if (showLibrary) {
             LibraryOverlay(

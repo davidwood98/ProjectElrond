@@ -3,6 +3,7 @@ package ai.elrond.ui
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.SubjectNode
+import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGrey
 import ai.elrond.ui.theme.LeapTheme
@@ -15,6 +16,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,11 +43,14 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MyLocation
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -255,17 +262,28 @@ private fun TabPill(label: String, active: Boolean, onClick: () -> Unit, modifie
 }
 
 /**
- * The Pages popup (centred dialog) — a UI placeholder. The app stores one page per note, so this
- * shows the open note as "Page 1" plus a disabled "Add page" tile; the select/bookmark header
- * buttons are present (per the handoff) but inert until multi-page notes exist.
+ * The Pages popup (FA-20): a thumbnail grid of the open notebook's pages. Tap a page to open it; the
+ * star toggles a bookmark; the ⋮ menu moves a page earlier/later or deletes it (the last remaining
+ * page can't be deleted); the trailing tile adds a new page. Reorder is via the menu's Move actions
+ * (press-hold drag-reorder is a future refinement).
  */
 @Composable
-fun PagesOverlay(currentTitle: String, onDismiss: () -> Unit) {
+fun PagesOverlay(
+    pages: List<NotePage>,
+    currentPageId: String,
+    noteListViewModel: NoteListViewModel,
+    onOpenPage: (String) -> Unit,
+    onAddPage: () -> Unit,
+    onDeletePage: (String) -> Unit,
+    onToggleBookmark: (String, Boolean) -> Unit,
+    onMovePage: (String, Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.widthIn(max = 680.dp).fillMaxWidth(),
+            modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth().fillMaxHeight(0.85f),
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -276,21 +294,8 @@ fun PagesOverlay(currentTitle: String, onDismiss: () -> Unit) {
                         color = LeapGrey,
                     )
                     Spacer(Modifier.width(10.dp))
-                    Pill("1 page")
+                    Pill(if (pages.size == 1) "1 page" else "${pages.size} pages")
                     Spacer(Modifier.weight(1f))
-                    Icon(
-                        Icons.Filled.Bookmark,
-                        contentDescription = "Bookmarked (coming soon)",
-                        tint = Neutral400,
-                        modifier = Modifier.size(22.dp).padding(end = 4.dp),
-                    )
-                    Icon(
-                        Icons.Outlined.CheckBox,
-                        contentDescription = "Select (coming soon)",
-                        tint = Neutral400,
-                        modifier = Modifier.size(22.dp),
-                    )
-                    Spacer(Modifier.width(12.dp))
                     Icon(
                         painterResource(ElrondIcons.Close),
                         contentDescription = "Close",
@@ -299,76 +304,131 @@ fun PagesOverlay(currentTitle: String, onDismiss: () -> Unit) {
                     )
                 }
                 Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    PageCard(label = "Page 1", caption = currentTitle, modifier = Modifier.weight(1f))
-                    AddPageCard(modifier = Modifier.weight(1f))
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 150.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                ) {
+                    itemsIndexed(pages, key = { _, p -> p.id }) { index, page ->
+                        PageGridCard(
+                            page = page,
+                            number = index + 1,
+                            isCurrent = page.id == currentPageId,
+                            canDelete = pages.size > 1,
+                            canMoveEarlier = index > 0,
+                            canMoveLater = index < pages.lastIndex,
+                            noteListViewModel = noteListViewModel,
+                            onOpen = { onOpenPage(page.id) },
+                            onToggleBookmark = { onToggleBookmark(page.id, !page.isBookmarked) },
+                            onDelete = { onDeletePage(page.id) },
+                            onMove = { forward -> onMovePage(page.id, forward) },
+                        )
+                    }
+                    item { AddPageTile(onClick = onAddPage) }
                 }
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "Multiple pages per note are coming soon.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Neutral500,
+            }
+        }
+    }
+}
+
+@Composable
+private fun PageGridCard(
+    page: NotePage,
+    number: Int,
+    isCurrent: Boolean,
+    canDelete: Boolean,
+    canMoveEarlier: Boolean,
+    canMoveLater: Boolean,
+    noteListViewModel: NoteListViewModel,
+    onOpen: () -> Unit,
+    onToggleBookmark: () -> Unit,
+    onDelete: () -> Unit,
+    onMove: (Boolean) -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(13.dp))
+            .border(
+                width = if (isCurrent) 2.dp else 1.dp,
+                color = if (isCurrent) LeapTheme.tokens.accent else Neutral200,
+                shape = RoundedCornerShape(13.dp),
+            )
+            .clickable(onClick = onOpen),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(150.dp)
+                .background(MaterialTheme.colorScheme.surface),
+        ) {
+            NoteThumbnail(page = page, viewModel = noteListViewModel, modifier = Modifier.fillMaxSize())
+            if (page.isBookmarked) {
+                Icon(
+                    Icons.Filled.Bookmark,
+                    contentDescription = "Bookmarked",
+                    tint = LeapTheme.tokens.accent,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(18.dp),
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun PageCard(label: String, caption: String, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(13.dp))
-            .border(1.dp, Neutral200, RoundedCornerShape(13.dp)),
-    ) {
-        // Dotted thumbnail, echoing the editor's dotted paper.
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(118.dp)
-                .background(MaterialTheme.colorScheme.surface),
-        ) {
-            val step = 13.dp.toPx()
-            val r = 1.dp.toPx()
-            var y = step
-            while (y < size.height) {
-                var x = step
-                while (x < size.width) {
-                    drawCircle(color = Neutral200, radius = r, center = Offset(x, y))
-                    x += step
-                }
-                y += step
-            }
-        }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 11.dp, end = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, style = MaterialTheme.typography.labelLarge, color = LeapGrey, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
             Text(
-                caption,
-                style = MaterialTheme.typography.bodySmall,
-                color = Neutral400,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 110.dp),
+                "Page $number",
+                style = MaterialTheme.typography.labelMedium,
+                color = LeapGrey,
+                fontWeight = FontWeight.Bold,
             )
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = onToggleBookmark, modifier = Modifier.size(34.dp)) {
+                Icon(
+                    if (page.isBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                    contentDescription = "Bookmark",
+                    tint = if (page.isBookmarked) LeapTheme.tokens.accent else Neutral400,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        painterResource(ElrondIcons.MoreVert),
+                        contentDescription = "Page actions",
+                        tint = Neutral500,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (canMoveEarlier) {
+                        DropdownMenuItem(text = { Text("Move earlier") }, onClick = { menuOpen = false; onMove(false) })
+                    }
+                    if (canMoveLater) {
+                        DropdownMenuItem(text = { Text("Move later") }, onClick = { menuOpen = false; onMove(true) })
+                    }
+                    if (canDelete) {
+                        DropdownMenuItem(text = { Text("Delete page") }, onClick = { menuOpen = false; onDelete() })
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun AddPageCard(modifier: Modifier = Modifier) {
+private fun AddPageTile(onClick: () -> Unit) {
     Column(
-        modifier = modifier
-            .height(118.dp + 38.dp)
+        modifier = Modifier
+            .height(190.dp)
             .clip(RoundedCornerShape(13.dp))
-            .border(1.dp, Neutral200, RoundedCornerShape(13.dp)),
+            .border(1.dp, Neutral200, RoundedCornerShape(13.dp))
+            .clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(Icons.Filled.Add, contentDescription = null, tint = Neutral400, modifier = Modifier.size(28.dp))
+        Icon(Icons.Filled.Add, contentDescription = "Add page", tint = Neutral400, modifier = Modifier.size(28.dp))
         Spacer(Modifier.height(6.dp))
         Text("Add page", style = MaterialTheme.typography.bodySmall, color = Neutral400)
     }
