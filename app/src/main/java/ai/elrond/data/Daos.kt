@@ -29,6 +29,10 @@ interface NotebookDao {
     @Query("SELECT * FROM notebooks ORDER BY createdAt LIMIT 1")
     suspend fun first(): NotebookEntity?
 
+    /** Renames the notebook (FA-20). The title is a notebook property, so it survives page reorders. */
+    @Query("UPDATE notebooks SET name = :name, modifiedAt = :modifiedAt WHERE id = :id")
+    suspend fun setName(id: String, name: String, modifiedAt: Long)
+
     /** Deletes a notebook; its pages (and their strokes/ai-notes/edit-events) cascade via FKs (FA-20). */
     @Query("DELETE FROM notebooks WHERE id = :id")
     suspend fun deleteById(id: String)

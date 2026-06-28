@@ -32,7 +32,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.zIndex
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -150,7 +153,9 @@ fun PaperBackground(
     Canvas(modifier = modifier.fillMaxSize().background(desk)) {
         // The page rectangle on screen: left/top from the transform, width = the screen span between
         // the two side margins, height its A-ratio extent for the orientation. (scale = 1 until zoom.)
-        val pageLeft = transform.offsetX
+        // panX is the transient page-turn slide — it shifts the sheet's left but NOT the width (which
+        // derives from the symmetric centring margin), so the paper slides cleanly during a swipe.
+        val pageLeft = transform.offsetX + transform.panX
         val pageWidth = (size.width - 2f * transform.offsetX).coerceAtLeast(0f)
         val pageTop = transform.offsetY // = -scroll
         val pageHeight = if (landscape) pageWidth / PageTransform.ASPECT_RATIO else pageWidth * PageTransform.ASPECT_RATIO
@@ -348,10 +353,9 @@ private fun OrientationDropdown(
 }
 
 /**
- * The editor header (FA-15): a distinct light-grey band holding the open note's title (bold Poppins,
- * tap the edit icon to rename inline) and the **created** date on the right. In **Separate** tab mode
- * `NoteCanvasScreen` passes the note tabs via [tabs] and they render at the top of this band, just
- * above the title; in **Attached** mode [tabs] is null (the tabs dock inside the toolbar card instead).
+ * The editor title band (FA-15/FA-20): a distinct light-grey band holding the open note's title (bold
+ * Poppins — **tap the title itself to rename inline**) and the **created** date on the right. The note
+ * tabs are a separate pinned band ([NoteTabsBand]) above this one; only this title block scrolls away.
  */
 @Composable
 fun EditorHeader(
@@ -359,68 +363,93 @@ fun EditorHeader(
     dateLabel: String,
     onRename: (String) -> Unit,
     modifier: Modifier = Modifier,
-    tabs: (@Composable () -> Unit)? = null,
 ) {
     var editing by remember { mutableStateOf(false) }
-    Column(
+    Row(
         modifier = modifier
             .clip(RoundedCornerShape(13.dp))
             .background(HeaderBandColor)
             .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Separate-mode note tabs sit at the top of the band, just above the title.
-        if (tabs != null) {
-            tabs()
-            Spacer(Modifier.height(6.dp))
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            if (editing) {
-                val focusRequester = remember { FocusRequester() }
-                var text by remember(title) { mutableStateOf(title) }
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    singleLine = true,
-                    modifier = Modifier
-                        .widthIn(max = 320.dp)
-                        .focusRequester(focusRequester)
-                        // Commit when focus is lost (tap away), not only on the IME Done action.
-                        .onFocusChanged { if (!it.isFocused && editing) { onRename(text); editing = false } },
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { onRename(text); editing = false }),
-                )
-                // Focus + raise the keyboard immediately so the user can type on the first tap.
-                LaunchedEffect(Unit) { focusRequester.requestFocus() }
-            } else {
-                // The title is NOT clickable: a wide clickable here sits over the canvas and would
-                // swallow S Pen strokes that start in the header band. Rename is via the edit icon.
-                Text(
-                    // headlineSmall is Poppins; bump to ExtraBold for the bolder display look.
-                    text = title,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = LeapGrey,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 320.dp),
-                )
-                IconButton(onClick = { editing = true }, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        Icons.Outlined.Edit,
-                        contentDescription = "Rename note",
-                        tint = Neutral500,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
-            Spacer(Modifier.weight(1f))
+        if (editing) {
+            val focusRequester = remember { FocusRequester() }
+            var text by remember(title) { mutableStateOf(title) }
+            // Only commit on focus-LOSS once the field has actually GAINED focus. On first
+            // composition Compose delivers an initial onFocusChanged(isFocused = false) before
+            // requestFocus() runs — without this guard that closed the editor the instant it opened.
+            var hasFocused by remember { mutableStateOf(false) }
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                modifier = Modifier
+                    .widthIn(max = 320.dp)
+                    .focusRequester(focusRequester)
+                    // Commit when focus is lost (tap away), not only on the IME Done action.
+                    .onFocusChanged {
+                        if (it.isFocused) {
+                            hasFocused = true
+                        } else if (hasFocused && editing) {
+                            onRename(text)
+                            editing = false
+                        }
+                    },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onRename(text); editing = false }),
+            )
+            // Focus + raise the keyboard immediately so the user can type on the first tap.
+            LaunchedEffect(Unit) { focusRequester.requestFocus() }
+        } else {
+            // The title itself is the rename control: tap it to edit in place (FA-20). The tap
+            // target is only the title text (not a full-width strip), so it doesn't swallow S Pen
+            // strokes that start elsewhere in the band.
             Text(
-                text = if (dateLabel.isBlank()) "Saved" else "$dateLabel · Saved",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Neutral500,
+                // headlineSmall is Poppins; bump to ExtraBold for the bolder display look.
+                text = title,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.ExtraBold,
+                color = LeapGrey,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .widthIn(max = 320.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { editing = true }
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
             )
         }
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = if (dateLabel.isBlank()) "Saved" else "$dateLabel · Saved",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Neutral500,
+        )
     }
+}
+
+/**
+ * The pinned note-tabs band (FA-20): the grey header band that holds the note tabs. It stays put
+ * while the title block scrolls up behind it — so the tabs never scroll away.
+ */
+@Composable
+fun NoteTabsBand(
+    tabs: List<NotebookSummary>,
+    currentNotebookId: String?,
+    currentTitle: String,
+    onSelectTab: (pageId: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    NoteTabPills(
+        tabs = tabs,
+        currentNotebookId = currentNotebookId,
+        currentTitle = currentTitle,
+        onSelectTab = onSelectTab,
+        modifier = modifier
+            .clip(RoundedCornerShape(13.dp))
+            .background(HeaderBandColor)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    )
 }
 
 /**
@@ -505,9 +534,23 @@ fun PagesOverlay(
 ) {
     var selectMode by remember { mutableStateOf(false) }
     val selectedIds = remember { mutableStateListOf<String>() }
+    // Bookmark filter: when on, the grid shows only bookmarked pages (a quick-nav view). Reorder is
+    // disabled while filtered (it's a full-notebook operation); tap still opens the page.
+    var filterBookmarks by remember { mutableStateOf(false) }
+    val hasBookmarks = pages.any { it.isBookmarked }
+    // Effective filter: never strand the user on an empty grid if the last bookmark is removed.
+    val bookmarkedOnly = filterBookmarks && hasBookmarks
+    val visiblePages = if (bookmarkedOnly) pages.filter { it.isBookmarked } else pages
     var draggingId by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
-    var dropTargetId by remember { mutableStateOf<String?>(null) }
+    // The pointer's position in grid space at drag start (the dragged card's parent origin + the
+    // local touch point). Adding [dragOffset] to this tracks the finger/stylus through the grid —
+    // we hit-test THAT, not the dragged tile's own bounds (which move with its graphicsLayer and so
+    // would double-count the drag). This makes the drop follow the pen, and land where indicated.
+    var dragStartPointer by remember { mutableStateOf(Offset.Zero) }
+    // The insertion gap during a reorder drag: dropIndex == k means "between page k-1 and page k"
+    // (k in 0..pages.size). Rendered as an accent line in the margin at that gap.
+    var dropIndex by remember { mutableStateOf<Int?>(null) }
     val cardBounds = remember { mutableStateMapOf<String, Rect>() }
 
     fun toggleSelect(id: String) {
@@ -530,6 +573,25 @@ fun PagesOverlay(
                     )
                     Spacer(Modifier.width(10.dp))
                     Pill(if (pages.size == 1) "1 page" else "${pages.size} pages")
+                    // Bookmarks filter — show only bookmarked pages (disabled when none exist).
+                    Spacer(Modifier.width(4.dp))
+                    val accent = LeapTheme.tokens.accent
+                    IconButton(
+                        onClick = { filterBookmarks = !filterBookmarks },
+                        enabled = hasBookmarks,
+                        modifier = Modifier.size(34.dp),
+                    ) {
+                        Icon(
+                            if (bookmarkedOnly) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                            contentDescription = if (bookmarkedOnly) "Showing bookmarked pages" else "Filter to bookmarked pages",
+                            tint = when {
+                                !hasBookmarks -> Neutral400
+                                bookmarkedOnly -> accent
+                                else -> Neutral500
+                            },
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                     Spacer(Modifier.weight(1f))
                     if (selectMode) {
                         TextButton(
@@ -567,46 +629,77 @@ fun PagesOverlay(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 ) {
-                    itemsIndexed(pages, key = { _, p -> p.id }) { index, page ->
-                        val dragModifier = Modifier.pointerInput(page.id, selectMode, pages.size) {
-                            if (selectMode) return@pointerInput
+                    itemsIndexed(visiblePages, key = { _, p -> p.id }) { index, page ->
+                        // True page number / neighbours come from the FULL list, so the filtered
+                        // view still shows real numbers and reorder math stays whole-notebook.
+                        val fullIndex = pages.indexOfFirst { it.id == page.id }
+                        val dragModifier = Modifier.pointerInput(page.id, selectMode, bookmarkedOnly, pages.size) {
+                            // No reorder while filtered to bookmarks (it's a full-notebook operation).
+                            if (selectMode || bookmarkedOnly) return@pointerInput
                             detectDragGesturesAfterLongPress(
-                                onDragStart = { draggingId = page.id; dragOffset = Offset.Zero; dropTargetId = null },
+                                onDragStart = { offset ->
+                                    draggingId = page.id
+                                    dragOffset = Offset.Zero
+                                    dropIndex = null
+                                    // Snapshot the pen's grid-space position now (bounds are clean
+                                    // before any drag translation), then track it via dragOffset.
+                                    dragStartPointer = (cardBounds[page.id]?.topLeft ?: Offset.Zero) + offset
+                                },
                                 onDrag = { change, delta ->
                                     change.consume()
                                     dragOffset += delta
-                                    // Hit-test the dragged card's current centre against the other cards.
-                                    val centre = (cardBounds[page.id]?.center ?: Offset.Zero) + dragOffset
-                                    dropTargetId = cardBounds.entries
-                                        .firstOrNull { it.key != page.id && it.value.contains(centre) }?.key
+                                    // The pen position in grid space — hit-test it against the other
+                                    // cards to find the insertion gap (before/after the card it's over).
+                                    val pointer = dragStartPointer + dragOffset
+                                    val target = cardBounds.entries
+                                        .firstOrNull { it.key != page.id && it.value.contains(pointer) }
+                                    if (target != null) {
+                                        val tIdx = pages.indexOfFirst { it.id == target.key }
+                                        val before = pointer.x < target.value.center.x
+                                        dropIndex = if (before) tIdx else tIdx + 1
+                                    }
                                 },
                                 onDragEnd = {
                                     val from = draggingId
-                                    val to = dropTargetId
-                                    if (from != null && to != null && from != to) {
+                                    val target = dropIndex
+                                    if (from != null && target != null) {
                                         val ids = pages.map { it.id }.toMutableList()
-                                        ids.remove(from)
-                                        val toIdx = ids.indexOf(to)
-                                        ids.add(if (toIdx < 0) ids.size else toIdx, from)
-                                        onReorder(ids)
+                                        val fromIdx = ids.indexOf(from)
+                                        if (fromIdx >= 0) {
+                                            ids.removeAt(fromIdx)
+                                            // Shift the gap left if it sat after the removed card.
+                                            val insert = (if (fromIdx < target) target - 1 else target)
+                                                .coerceIn(0, ids.size)
+                                            ids.add(insert, from)
+                                            if (ids != pages.map { it.id }) onReorder(ids)
+                                        }
                                     }
-                                    draggingId = null; dropTargetId = null; dragOffset = Offset.Zero
+                                    draggingId = null; dropIndex = null; dragOffset = Offset.Zero
                                 },
-                                onDragCancel = { draggingId = null; dropTargetId = null; dragOffset = Offset.Zero },
+                                onDragCancel = { draggingId = null; dropIndex = null; dragOffset = Offset.Zero },
                             )
                         }
+                        // The insertion line shows on a card's leading edge when the gap is before it,
+                        // and on the last card's trailing edge when the gap is at the very end. It's
+                        // hidden for a no-op drop (the gap on either side of the dragged card itself).
+                        val fromIdx = draggingId?.let { id -> pages.indexOfFirst { it.id == id } } ?: -1
+                        val noOp = dropIndex == fromIdx || dropIndex == fromIdx + 1
+                        val showDropBefore = draggingId != null && !noOp && dropIndex == fullIndex
+                        val showDropAfter =
+                            draggingId != null && !noOp && dropIndex == pages.size && fullIndex == pages.lastIndex
                         PageGridCard(
                             page = page,
-                            number = index + 1,
+                            number = fullIndex + 1,
                             isCurrent = page.id == currentPageId,
                             canDelete = pages.size > 1,
-                            canMoveEarlier = index > 0,
-                            canMoveLater = index < pages.lastIndex,
+                            canMoveEarlier = fullIndex > 0 && !bookmarkedOnly,
+                            canMoveLater = fullIndex < pages.lastIndex && !bookmarkedOnly,
                             noteListViewModel = noteListViewModel,
                             selectMode = selectMode,
                             selected = page.id in selectedIds,
                             isDragging = draggingId == page.id,
-                            isDropTarget = dropTargetId == page.id && draggingId != null,
+                            showDropBefore = showDropBefore,
+                            showDropAfter = showDropAfter,
                             dragOffset = if (draggingId == page.id) dragOffset else Offset.Zero,
                             dragModifier = dragModifier,
                             onBoundsChanged = { cardBounds[page.id] = it },
@@ -617,7 +710,8 @@ fun PagesOverlay(
                             onMove = { forward -> onMovePage(page.id, forward) },
                         )
                     }
-                    if (!selectMode) item { AddPageTile(onClick = onAddPage) }
+                    // "Add page" only in the full (unfiltered) view — not while filtered to bookmarks.
+                    if (!selectMode && !bookmarkedOnly) item { AddPageTile(onClick = onAddPage) }
                 }
             }
         }
@@ -636,7 +730,8 @@ private fun PageGridCard(
     selectMode: Boolean,
     selected: Boolean,
     isDragging: Boolean,
-    isDropTarget: Boolean,
+    showDropBefore: Boolean,
+    showDropAfter: Boolean,
     dragOffset: Offset,
     dragModifier: Modifier,
     onBoundsChanged: (Rect) -> Unit,
@@ -648,24 +743,23 @@ private fun PageGridCard(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val accent = LeapTheme.tokens.accent
-    val borderColor = when {
-        isDropTarget -> accent
-        isCurrent -> accent
-        else -> Neutral200
-    }
-    val borderWidth = when {
-        isDropTarget -> 3.dp
-        isCurrent -> 2.dp
-        else -> 1.dp
-    }
-    Column(
+    val borderColor = if (isCurrent) accent else Neutral200
+    val borderWidth = if (isCurrent) 2.dp else 1.dp
+    // Outer Box is NOT clipped, so the reorder drop line can render into the inter-tile margin.
+    Box(
         modifier = Modifier
+            // Lift the dragged tile above its siblings: in a LazyVerticalGrid later items draw on
+            // top, so without this the dragged page slides BEHIND the pages after it.
+            .zIndex(if (isDragging) 1f else 0f)
             .onGloballyPositioned { onBoundsChanged(it.boundsInParent()) }
             .graphicsLayer {
                 translationX = dragOffset.x
                 translationY = dragOffset.y
                 if (isDragging) { scaleX = 1.04f; scaleY = 1.04f; shadowElevation = 16f; alpha = 0.96f }
-            }
+            },
+    ) {
+      Column(
+        modifier = Modifier
             .clip(RoundedCornerShape(13.dp))
             .border(width = borderWidth, color = borderColor, shape = RoundedCornerShape(13.dp))
             .then(dragModifier)
@@ -739,7 +833,26 @@ private fun PageGridCard(
                 }
             }
         }
+      }
+      // Reorder drop indicator: an accent line in the inter-tile margin marking where the dragged
+      // page will land (leading edge for a gap before this card; trailing edge for the very end).
+      if (showDropBefore) DropLine(start = true, accent = accent)
+      if (showDropAfter) DropLine(start = false, accent = accent)
     }
+}
+
+/** The reorder insertion line drawn in the inter-tile margin on a card's leading/trailing edge. */
+@Composable
+private fun BoxScope.DropLine(start: Boolean, accent: Color) {
+    Box(
+        modifier = Modifier
+            .align(if (start) Alignment.CenterStart else Alignment.CenterEnd)
+            .offset(x = if (start) (-7).dp else 7.dp)
+            .width(3.dp)
+            .height(150.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(accent),
+    )
 }
 
 @Composable

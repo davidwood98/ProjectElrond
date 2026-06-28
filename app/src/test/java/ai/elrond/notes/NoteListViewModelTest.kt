@@ -125,16 +125,17 @@ class NoteListViewModelTest {
     }
 
     @Test
-    fun `renameNote delegates to repository, blank reverts to the auto title`() = runTest(dispatcher) {
+    fun `renameNote renames the notebook (title survives page reorders)`() = runTest(dispatcher) {
         every { repository.observeTimeline() } returns flowOf(emptyList())
         val viewModel = NoteListViewModel(repository, thumbnailCache)
 
-        viewModel.renameNote("p1", "Maths")
-        viewModel.renameNote("p2", "   ")
+        // The arg is now the notebookId; blank handling lives in repository.renameNotebook.
+        viewModel.renameNote("nb1", "Maths")
+        viewModel.renameNote("nb2", "   ")
         advanceUntilIdle()
 
-        coVerify { repository.renamePage("p1", "Maths") }
-        coVerify { repository.renamePage("p2", null) }
+        coVerify { repository.renameNotebook("nb1", "Maths") }
+        coVerify { repository.renameNotebook("nb2", "   ") }
     }
 
     @Test

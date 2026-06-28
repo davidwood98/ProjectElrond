@@ -5,6 +5,7 @@ import ai.elrond.domain.CalendarGrid
 import ai.elrond.domain.DayActivity
 import ai.elrond.presentation.CalendarViewModel
 import ai.elrond.presentation.DayNotebook
+import ai.elrond.presentation.DayPage
 import ai.elrond.presentation.EventsUiState
 import ai.elrond.presentation.EventsViewModel
 import ai.elrond.presentation.NoteListViewModel
@@ -16,7 +17,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -373,15 +376,20 @@ private fun DayNotebookThumb(
     val pageCount = notebook.pages.size
     // Created → open the notebook; edited with one page → open it directly; edited multi → menu.
     var menuOpen by remember { mutableStateOf(false) }
+    // The menu matches the tile width (measured here), so it reads as a drop-down from the tile.
+    val density = LocalDensity.current
+    var tileWidth by remember { mutableStateOf(0.dp) }
     val onTileClick: () -> Unit = {
         when {
             notebook.createdThisDay -> onOpenPage(notebook.coverPage.id)
-            pageCount <= 1 -> onOpenPage(notebook.pages.firstOrNull()?.id ?: notebook.coverPage.id)
+            pageCount <= 1 -> onOpenPage(notebook.pages.firstOrNull()?.page?.id ?: notebook.coverPage.id)
             else -> menuOpen = true
         }
     }
     Surface(
-        modifier = modifier.clickable(onClick = onTileClick),
+        modifier = modifier
+            .clickable(onClick = onTileClick)
+            .onSizeChanged { tileWidth = with(density) { it.width.toDp() } },
         shape = RoundedCornerShape(14.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         color = MaterialTheme.colorScheme.surface,
@@ -394,7 +402,7 @@ private fun DayNotebookThumb(
             )
             Column(modifier = Modifier.padding(10.dp)) {
                 Text(
-                    notebook.coverPage.displayTitle(),
+                    notebook.title,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -422,12 +430,22 @@ private fun DayNotebookThumb(
                 }
             }
         }
-        // The edited-pages menu (anchored to the tile) — pick a page to open.
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            notebook.pages.forEach { page ->
+        // The edited-pages menu (anchored to the tile, sized to the tile width) — pick a page to
+        // open. Each page carries a colour prefix: a green dot if it was added to the notebook that
+        // day, a grey dot if it already existed and was edited.
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            modifier = if (tileWidth > 0.dp) Modifier.width(tileWidth) else Modifier,
+        ) {
+            notebook.pages.forEach { dayPage ->
+                val dotColor = if (dayPage.addedThisDay) CreatedDotColor else EditedDotColor
                 DropdownMenuItem(
-                    text = { Text("Page ${page.pageNumber}") },
-                    onClick = { menuOpen = false; onOpenPage(page.id) },
+                    text = { Text("Page ${dayPage.page.pageNumber}") },
+                    leadingIcon = {
+                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(dotColor))
+                    },
+                    onClick = { menuOpen = false; onOpenPage(dayPage.page.id) },
                 )
             }
         }

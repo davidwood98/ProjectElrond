@@ -51,4 +51,27 @@ class PageTransformTest {
         // height = (sw / W) * (W * √2) = sw * √2
         assertEquals(screenWidth * PageTransform.ASPECT_RATIO, PageTransform.pageScreenHeight(screenWidth), 1e-2f)
     }
+
+    @Test
+    fun panX_defaults_to_zero_and_does_not_shift_x() {
+        val t = PageTransform(scale = 1f, offsetX = 40f, offsetY = 0f)
+        assertEquals(0f, t.panX, 0f)
+        assertEquals(140f, t.pageToScreenX(100f), 1e-4f)
+    }
+
+    @Test
+    fun panX_shifts_screen_x_on_top_of_the_offset() {
+        // The transient page-turn slide adds to the on-screen x (FA-20) — the page visually slides.
+        val t = PageTransform(scale = 1f, offsetX = 40f, offsetY = 0f, panX = -25f)
+        assertEquals(115f, t.pageToScreenX(100f), 1e-4f) // 100 + 40 - 25
+        // ...and the inverse undoes both the offset and the pan.
+        assertEquals(100f, t.screenToPageX(t.pageToScreenX(100f)), 1e-3f)
+    }
+
+    @Test
+    fun panX_does_not_affect_y_or_lengths() {
+        val t = PageTransform(scale = 2f, offsetX = 10f, offsetY = -30f, panX = 99f)
+        assertEquals(-30f, t.pageToScreenY(0f), 1e-4f)
+        assertEquals(20f, t.pageToScreenLength(10f), 1e-4f)
+    }
 }

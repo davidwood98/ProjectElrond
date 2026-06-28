@@ -108,6 +108,11 @@ fun SelectionLayer(
             onTap = { x, y ->
                 if (clipboard.active) viewModel.pasteAt(x, y) else viewModel.clearSelection()
             },
+            // A finger rejected from lassoing (palm rejection) still scrolls / turns pages, so the
+            // lasso tool behaves like every other tool for navigation (FA-20).
+            onScroll = viewModel::scrollBy,
+            onSwipe = viewModel::swipeBy,
+            onSwipeRelease = viewModel::releaseSwipe,
         )
 
         selection?.let { sel ->
@@ -144,6 +149,9 @@ private fun LassoCatcher(
     stylusOnly: Boolean,
     onLasso: (List<GestureTriggerDetector.Point>) -> Unit,
     onTap: (Float, Float) -> Unit,
+    onScroll: (Float) -> Unit,
+    onSwipe: (Float) -> Unit,
+    onSwipeRelease: () -> Unit,
 ) {
     val accent = LeapTheme.tokens.accent
     val path = remember { mutableStateOf<List<Offset>>(emptyList()) }
@@ -153,9 +161,41 @@ private fun LassoCatcher(
             .pointerInput(clipboardActive, stylusOnly) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
-                    // Palm rejection (FA-20): with stylus-only on, ignore a finger here so it can't
-                    // start a lasso/paste — matching the pen. The unconsumed events fall through.
-                    if (stylusOnly && down.type == PointerType.Touch) return@awaitEachGesture
+                    // Palm rejection (FA-20): with stylus-only on, a finger must NOT lasso/paste — but
+                    // it should still scroll / turn pages like every other tool. So instead of
+                    // dropping the gesture, drive navigation with it (axis-locked after a small slop:
+                    // vertical = scroll, horizontal = page turn), matching the InkCanvas finger path.
+                    if (stylusOnly && down.type == PointerType.Touch) {
+                        var axis = 0 // 0 = undecided, 1 = vertical scroll, 2 = horizontal page turn
+                        var lastY = down.position.y
+                        var lastX = down.position.x
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!ch.pressed) { ch.consume(); break }
+                            val total = ch.position - down.position
+                            if (axis == 0) {
+                                val locked = lockAxisOrUndecided(total.x, total.y)
+                                if (locked != 0) {
+                                    axis = locked
+                                    lastY = ch.position.y
+                                    lastX = ch.position.x
+                                }
+                            }
+                            if (axis == 1) {
+                                onScroll(ch.position.y - lastY)
+                                lastY = ch.position.y
+                                ch.consume()
+                            } else if (axis == 2) {
+                                // Live page-turn slide (same as the pen path) — release decides.
+                                onSwipe(ch.position.x - lastX)
+                                lastX = ch.position.x
+                                ch.consume()
+                            }
+                        }
+                        if (axis == 2) onSwipeRelease()
+                        return@awaitEachGesture
+                    }
                     val points = mutableListOf(down.position)
                     var dragging = false
                     while (true) {
@@ -452,7 +492,7 @@ internal fun SelectionStrokes(
     // mis-placed the live ink in landscape (FA-20 device feedback). The live move/scale is a second,
     // inner layer in page space — composed as page(live(stroke)) — re-applied per frame, no mesh redraw.
     val pageLayer: androidx.compose.ui.graphics.GraphicsLayerScope.() -> Unit = {
-        translationX = page.offsetX
+        translationX = page.offsetX + page.panX // panX = transient page-turn slide
         translationY = page.offsetY
         scaleX = page.scale
         scaleY = page.scale

@@ -14,6 +14,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -27,12 +28,18 @@ class TodoViewModel(
     // primary constructor's JVM signature stays distinct from the @Inject one — tests pass only the
     // TodoRepository and get the empty default.
     pages: Flow<List<NotePage>> = flowOf(emptyList()),
+    // notebookId → name, so a renamed notebook's source link shows the new name (FA-20).
+    notebookNames: Flow<Map<String, String>> = flowOf(emptyMap()),
 ) : ViewModel() {
 
-    /** Hilt entry point; the page list comes from the NoteRepository timeline. */
+    /** Hilt entry point; the page list + notebook names come from the NoteRepository. */
     @Inject
     constructor(repository: TodoRepository, noteRepository: NoteRepository) :
-        this(repository, noteRepository.observeTimeline())
+        this(
+            repository,
+            noteRepository.observeTimeline(),
+            noteRepository.observeNotebooks().map { nbs -> nbs.associate { it.id to it.name } },
+        )
 
     val items: StateFlow<List<TodoItem>> = repository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -42,10 +49,9 @@ class TodoViewModel(
      * from the current page list so a moved page reflects its new number; a deleted source is absent
      * (the UI falls back to the stored title snapshot). Empty when no page list is wired (unit tests).
      */
-    val sourceLabels: StateFlow<Map<String, String>> = pages
-        .map { current ->
-            current.mapNotNull { p -> SourceNoteLabel.resolve(p.id, current)?.let { p.id to it } }.toMap()
-        }
+    val sourceLabels: StateFlow<Map<String, String>> = combine(pages, notebookNames) { current, names ->
+        current.mapNotNull { p -> SourceNoteLabel.resolve(p.id, current, names)?.let { p.id to it } }.toMap()
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /** Outstanding count for the toolbar badge. */

@@ -5,6 +5,7 @@ import ai.elrond.domain.CanvasStroke
 import ai.elrond.domain.NoteEditDay
 import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotebookSummary
+import ai.elrond.domain.notebookTitle
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.PageViewOrientation
 import ai.elrond.domain.PaperColor
@@ -133,7 +134,7 @@ class NoteRepository(
                 val lastViewed = nbPages.maxByOrNull { it.lastOpenedAt } ?: cover
                 NotebookSummary(
                     notebookId = nb.id,
-                    title = cover.toDomain().displayTitle(zone),
+                    title = notebookTitle(nb.name, cover.toDomain(), zone),
                     coverPageId = cover.id,
                     pageCount = nbPages.size,
                     modifiedAt = nbPages.maxOf { it.modifiedAt },
@@ -177,6 +178,14 @@ class NoteRepository(
         val now = clock()
         pageDao.rename(pageId, title, now)
         recordEdit(pageId, now)
+    }
+
+    /**
+     * Renames the notebook (FA-20). The title is stored on the notebook, not on a page, so it
+     * survives page reorders (which previously moved the title to whichever page became page 1).
+     */
+    suspend fun renameNotebook(notebookId: String, name: String?) {
+        notebookDao.setName(notebookId, name?.trim().orEmpty(), clock())
     }
 
     suspend fun getPage(pageId: String): NotePage? = pageDao.getById(pageId)?.toDomain()

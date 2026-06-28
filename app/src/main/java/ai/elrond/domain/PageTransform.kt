@@ -24,16 +24,23 @@ import kotlin.math.sqrt
 data class PageTransform(
     /** Uniform px-per-logical-unit scale. Fit-to-width = screenWidth / [LOGICAL_WIDTH]. */
     val scale: Float,
-    /** Screen x of the page's logical origin (0, 0). */
+    /** Screen x of the page's logical origin (0, 0) — the horizontal centring margin (FA-20). */
     val offsetX: Float,
     /** Screen y of the page's logical origin (0, 0). */
     val offsetY: Float,
+    /**
+     * Transient horizontal page-turn slide (px), added to the on-screen x **without** affecting
+     * [offsetX] (FA-20). Keeping it separate lets render sites that derive the page *width* from the
+     * symmetric centring margin (`screenWidth − 2·offsetX`) stay correct mid-swipe, while the page
+     * still visually slides. 0 at rest.
+     */
+    val panX: Float = 0f,
 ) {
-    fun pageToScreenX(x: Float): Float = x * scale + offsetX
+    fun pageToScreenX(x: Float): Float = x * scale + offsetX + panX
 
     fun pageToScreenY(y: Float): Float = y * scale + offsetY
 
-    fun screenToPageX(x: Float): Float = (x - offsetX) / scale
+    fun screenToPageX(x: Float): Float = (x - offsetX - panX) / scale
 
     fun screenToPageY(y: Float): Float = (y - offsetY) / scale
 

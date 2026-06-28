@@ -42,9 +42,15 @@ class CalendarViewModelTest {
     private fun millis(date: String) =
         ZonedDateTime.of(LocalDate.parse(date).atTime(12, 0), zone).toInstant().toEpochMilli()
 
-    private fun page(id: String, created: String, modified: String = created) = NotePage(
-        id = id, notebookId = "nb", customTitle = null,
-        createdAt = millis(created), modifiedAt = millis(modified),
+    private fun page(
+        id: String,
+        created: String,
+        modified: String = created,
+        notebookId: String = "nb",
+        pageNumber: Int = 1,
+    ) = NotePage(
+        id = id, notebookId = notebookId, customTitle = null,
+        createdAt = millis(created), modifiedAt = millis(modified), pageNumber = pageNumber,
     )
 
     @Test
@@ -92,6 +98,33 @@ class CalendarViewModelTest {
         advanceUntilIdle()
 
         assertEquals(listOf("a"), viewModel.notesForDay(LocalDate.parse("2026-06-10")).map { it.id })
+    }
+
+    @Test
+    fun `notebooksForDay marks added vs edited pages`() = runTest(dispatcher) {
+        // p1 is the cover (created 06-08) and was edited on 06-10; p2 was added (created) on 06-10.
+        every { repository.observeTimeline() } returns flowOf(
+            listOf(
+                page("p1", created = "2026-06-08", pageNumber = 1),
+                page("p2", created = "2026-06-10", pageNumber = 2),
+            ),
+        )
+        every { repository.observeEditEvents() } returns flowOf(
+            listOf(NoteEditDay("p1", LocalDate.parse("2026-06-10"))),
+        )
+        val viewModel = CalendarViewModel(repository, zone)
+        backgroundScope.launch { viewModel.activityByDay.collect { } }
+        advanceUntilIdle()
+
+        val notebooks = viewModel.notebooksForDay(LocalDate.parse("2026-06-10"))
+        assertEquals(1, notebooks.size)
+        val nb = notebooks.first()
+        // The cover (p1) pre-existed → the notebook reads as "edited", not "created".
+        assertEquals(false, nb.createdThisDay)
+        assertEquals("p1", nb.coverPage.id)
+        // p1 was only edited today (grey dot); p2 was added today (green dot).
+        assertEquals(false, nb.pages.first { it.page.id == "p1" }.addedThisDay)
+        assertEquals(true, nb.pages.first { it.page.id == "p2" }.addedThisDay)
     }
 
     @Test

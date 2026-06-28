@@ -57,9 +57,12 @@ class NoteListViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** Renames a note; a blank title reverts it to the auto-generated timestamp title. */
-    fun renameNote(pageId: String, title: String) {
-        viewModelScope.launch { repository.renamePage(pageId, title.trim().ifEmpty { null }) }
+    /**
+     * Renames a notebook from the browser; a blank title reverts to the auto-generated timestamp.
+     * The title is stored on the notebook (FA-20), so it survives page reorders — matching the editor.
+     */
+    fun renameNote(notebookId: String, title: String) {
+        viewModelScope.launch { repository.renameNotebook(notebookId, title) }
     }
 
     /** Creates a new notebook with its first page and reports the page id for navigation (FA-20). */

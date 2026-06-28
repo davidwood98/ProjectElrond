@@ -51,4 +51,15 @@ class SourceNoteLabelTest {
         val pages = listOf(page("p1", "nb1", "Here", 1))
         assertNull(SourceNoteLabel.resolve("gone", pages))
     }
+
+    @Test
+    fun `notebook name wins and is independent of page order`() {
+        val names = mapOf("nb1" to "Renamed")
+        val pages = listOf(page("p1", "nb1", "OldCover", 1), page("p2", "nb1", "x", 2))
+        assertEquals("Renamed", SourceNoteLabel.resolve("p1", pages, names))
+        assertEquals("Renamed", SourceNoteLabel.resolve("p2", pages, names))
+        // Reorder so p2 is now the cover (page 1) — the notebook name still shows (FA-20 fix).
+        val reordered = listOf(page("p2", "nb1", "x", 1), page("p1", "nb1", "OldCover", 2))
+        assertEquals("Renamed", SourceNoteLabel.resolve("p1", reordered, names))
+    }
 }

@@ -25,6 +25,15 @@ data class Notebook(
 )
 
 /**
+ * The notebook's display title (FA-20): its [Notebook.name] when the user has named it, otherwise the
+ * cover page's timestamp-based title. Stored on the notebook (not a page), so it is independent of
+ * page order — a rename survives reordering pages. The single rule used by every surface that shows a
+ * notebook title (editor header, tabs, browser, calendar day-sheet, to-do source links).
+ */
+fun notebookTitle(name: String, coverPage: NotePage, zone: ZoneId = ZoneId.systemDefault()): String =
+    name.ifBlank { coverPage.displayTitle(zone) }
+
+/**
  * A lightweight summary of a notebook for the browser grid + editor tabs (FA-20): its display title
  * (the cover page's title), the cover page (page 1, for the thumbnail), the page count, recency, and
  * the page to open by default — the most-recently-viewed page within the notebook.

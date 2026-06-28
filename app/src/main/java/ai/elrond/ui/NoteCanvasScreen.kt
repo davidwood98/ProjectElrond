@@ -95,7 +95,32 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/** How long the unobtrusive page-count pill / orientation prompt stay before fading away (FA-20). */
+private const val AUTO_FADE_MILLIS = 5_000L
+
+/**
+ * Visibility flag for an unobtrusive overlay that shows on a state change then fades after
+ * [AUTO_FADE_MILLIS] (FA-20). Re-shows whenever any of [keys] change; stays hidden while [active] is
+ * false (so a gated overlay — e.g. only on an orientation mismatch — never flashes). Used for both
+ * the page-count pill and the rotation prompt.
+ */
+@Composable
+private fun rememberAutoFadeVisible(vararg keys: Any?, active: Boolean = true): Boolean {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(active, *keys) {
+        if (active) {
+            visible = true
+            delay(AUTO_FADE_MILLIS)
+            visible = false
+        } else {
+            visible = false
+        }
+    }
+    return visible
+}
 
 /** Note page screen: full-bleed ink canvas with a floating tool bar. */
 @Composable
@@ -212,17 +237,24 @@ fun NoteCanvasScreen(
         // its offset is derived from topGap so the toolbar→title spacing stays constant.
         val headerTop = topGap + 62.dp * toolbarScale + 6.dp
 
-        // FA-20: the page starts BELOW the title/header band, and the band scrolls away with the top
-        // of the page. We measure the band height, tell the VM where the page top sits (so its
-        // transform docks the page below the band), and slide the band up by the same scroll.
+        // FA-20: the page starts BELOW the header. The note TABS are a PINNED band (they never scroll
+        // away); only the TITLE block scrolls up — and it slides up BEHIND the pinned tabs band. We
+        // measure both band heights, tell the VM where the page top sits (so its transform docks the
+        // page below the whole header), and slide just the title block up by the scroll amount.
         val density = LocalDensity.current
-        var headerBandHeightPx by remember { mutableStateOf(0) }
-        val headerTopPx = with(density) { headerTop.toPx() }
+        var tabsBandHeightPx by remember { mutableStateOf(0) }
+        var titleBandHeightPx by remember { mutableStateOf(0) }
+        val tabsTopPx = with(density) { headerTop.toPx() }
+        val titleGapPx = with(density) { 4.dp.toPx() }
         val pageTopGapPx = with(density) { 8.dp.toPx() }
-        val pageTopInsetPx = headerTopPx + headerBandHeightPx + pageTopGapPx
+        // Title block's rest position: just below the pinned tabs band.
+        val titleTopPx = tabsTopPx + tabsBandHeightPx + titleGapPx
+        val pageTopInsetPx = titleTopPx + titleBandHeightPx + pageTopGapPx
         LaunchedEffect(pageTopInsetPx) { viewModel.setPageTopInset(pageTopInsetPx) }
-        // Scroll derived from the transform (offsetY = pageTopInset − scroll); drives the band slide.
+        // Scroll derived from the transform (offsetY = pageTopInset − scroll); drives the title slide.
         val headerScrollPx = (pageTopInsetPx - pageTransform.offsetY).coerceAtLeast(0f)
+        val sideStart = leftInset + 14.dp
+        val sideEnd = rightInset + 14.dp
 
         // Paper background (Ruled / Plain / Dots) behind the transparent ink layers. The page is a
         // fixed portrait sheet centred on screen (margins in landscape) and scrolled — all from the
@@ -310,30 +342,34 @@ fun NoteCanvasScreen(
             },
         )
 
-        // Note title + created date in the grey header band. Composed BEFORE the toolbar so the
-        // toolbar draws on top as the band scrolls up under it (FA-20). The band sits just below the
-        // toolbar at rest and slides away with the page top as you scroll.
+        // Note title + created date in a grey band. Composed BEFORE the pinned tabs band (next) and
+        // the toolbar so it slides up BEHIND them as you scroll (FA-20). Its rest position is just
+        // below the tabs band; scrolling slides only this title block away.
         EditorHeader(
             title = pageTitle,
             dateLabel = pageDateLabel,
             onRename = viewModel::renamePage,
-            tabs = {
-                NoteTabPills(
-                    tabs = sessionNotebooks,
-                    currentNotebookId = currentNotebookId,
-                    currentTitle = pageTitle,
-                    onSelectTab = { id -> if (id != pageId) onOpenNote(id) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
-                .offset { IntOffset(0, (headerTopPx - headerScrollPx).roundToInt()) }
-                .onSizeChanged { headerBandHeightPx = it.height }
-                // Inset-aware so the band can't slide under a side cutout/nav bar; keeps its own 14dp
-                // visual margin (slightly tighter than the toolbar's "side spacing").
-                .padding(start = leftInset + 14.dp, end = rightInset + 14.dp),
+                .offset { IntOffset(0, (titleTopPx - headerScrollPx).roundToInt()) }
+                .onSizeChanged { titleBandHeightPx = it.height }
+                .padding(start = sideStart, end = sideEnd),
+        )
+
+        // Pinned note-tabs band: composed AFTER the title block (opaque, so it occludes the title as
+        // it slides up behind it) and never takes a scroll offset — so the tabs stay put (FA-20).
+        NoteTabsBand(
+            tabs = sessionNotebooks,
+            currentNotebookId = currentNotebookId,
+            currentTitle = pageTitle,
+            onSelectTab = { id -> if (id != pageId) onOpenNote(id) },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .offset { IntOffset(0, tabsTopPx.roundToInt()) }
+                .onSizeChanged { tabsBandHeightPx = it.height }
+                .padding(start = sideStart, end = sideEnd),
         )
 
         // ── Leap note toolbar (Claude Design "Note Tool Icons" handoff) ──────────────────────
@@ -639,22 +675,29 @@ fun NoteCanvasScreen(
 
         // Page indicator (FA-20): "Page n / total" when the notebook has more than one page. A
         // horizontal finger swipe turns pages; swiping past the last (with content) adds a new one.
+        // It re-shows on each page change then fades away after 5s so it stays unobtrusive.
         if (notebookPages.size > 1) {
             val pageIdx = notebookPages.indexOfFirst { it.id == pageId }
-            Surface(
+            AnimatedVisibility(
+                visible = rememberAutoFadeVisible(pageId, notebookPages.size),
+                enter = fadeIn(),
+                exit = fadeOut(),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 6.dp),
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
-                shadowElevation = 2.dp,
             ) {
-                Text(
-                    text = "Page ${if (pageIdx >= 0) pageIdx + 1 else 1} / ${notebookPages.size}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                )
+                Surface(
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+                    shadowElevation = 2.dp,
+                ) {
+                    Text(
+                        text = "Page ${if (pageIdx >= 0) pageIdx + 1 else 1} / ${notebookPages.size}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
+                }
             }
         }
 
@@ -665,8 +708,11 @@ fun NoteCanvasScreen(
         val deviceOrientation =
             if (deviceLandscape) PageViewOrientation.LANDSCAPE else PageViewOrientation.PORTRAIT
         val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        // Show the prompt on a fresh orientation mismatch, then fade it away after 5s so it stays
+        // unobtrusive (it re-appears if the device is rotated into a new mismatch).
+        val orientationMismatch = deviceOrientation != viewOrientation
         AnimatedVisibility(
-            visible = deviceOrientation != viewOrientation,
+            visible = rememberAutoFadeVisible(deviceOrientation, active = orientationMismatch),
             enter = fadeIn() + slideInVertically { it },
             exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier

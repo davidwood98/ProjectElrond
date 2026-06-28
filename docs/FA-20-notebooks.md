@@ -155,6 +155,57 @@ is device-verify-only.
 
 ---
 
+## Device-feedback batch 3 (2026-06-28) — 6 items + tweaks
+
+Third device-test round on the notebooks editor. **No schema change — DB stays v14.** App + aibackend
+unit suites green (`:app:testDebugUnitTest` + `:aibackend:test`); `:app:compileDebugKotlin` +
+`:app:compileDebugAndroidTestKotlin` build on the WSL Linux SDK. Compose surfaces are device-verify-only.
+A `/simplify` pass (4 reviewers) ran over the diff; its consensus findings were applied (see end).
+
+1. **Calendar day-sheet — per-page added/edited dots + tile-width menu.** `DayNotebook.pages` is now
+   `List<DayPage>` (`DayPage(page, addedThisDay)`); `notebooksForDay` flags each touched page as *added*
+   this day (cover `createdAt` on the day) vs *edited*. The day-sheet menu (`CalendarScreen`) now sizes
+   to the tile width (measured via `onSizeChanged`) and prefixes each page with a green (added) /
+   grey (edited) dot — reusing `CreatedDotColor`/`EditedDotColor`. Created notebooks still show no count;
+   edited ones keep the "N pages" pill.
+2. **Tabs stay pinned; only the title scrolls (behind the tabs).** The single grey header band was split:
+   a **pinned `NoteTabsBand`** (no scroll offset) and a separate **`EditorHeader` title block** that
+   slides up by the scroll and is composed *before* the (opaque) tabs band so it disappears behind it.
+   `NoteCanvasScreen` measures both band heights to dock the page below the whole header.
+   **Plus:** the title text itself is now the rename control (tap it → inline edit) — the edit-pen icon
+   was removed; the tap target is just the title text, so it doesn't swallow S Pen strokes.
+3. **Page-turn swipe animation + elastic snap-back.** A horizontal finger swipe now slides the page live
+   (the page follows the finger) and on release either slides off + turns or **springs elastically back**
+   to centre. Implemented as a transient `PageTransform.panX` (kept separate from `offsetX` so the
+   symmetric page-width derivation stays correct mid-swipe) + `CanvasViewModel.swipeBy`/`releaseSwipe`/
+   `animateSwipeTo` (an ease-out frame loop; Compose-free, lives in the VM). The dry-ink view, paper, AI
+   notes and selection all add `panX`, so the whole page slides coherently. **Note:** the page turn still
+   route-navigates on commit (chrome recreates), so a residual arrival flash can remain — full
+   chrome-decoupling needs the **in-place paging** foundation, which is the prerequisite for Phase 3
+   continuous vertical scroll and should be a dedicated, device-tested change (recommended next).
+4. **Pages-index reorder — accent line in the margin.** The drop indicator is no longer a thick border on
+   the tile under the dragged one; the drag computes an **insertion index** and draws an accent line in the
+   inter-tile margin (a `DropLine` on the leading edge of the card the page would land before, or the
+   trailing edge for the very end). The card is wrapped in an unclipped Box so the line renders into the gap.
+5. **Finger scrolls/turns pages in lasso mode.** The lasso `SelectionLayer` overlay owned all input, so a
+   finger rejected from lassoing (palm rejection) did nothing. It now runs the same axis-locked
+   scroll/page-turn the pen path uses (`onScroll`/`onSwipe`/`onSwipeRelease` → the VM), so a finger scrolls
+   and turns pages in lasso mode like every other tool.
+6. **Orientation button + page-count pill fade after 5s.** Both are wrapped in `AnimatedVisibility` driven
+   by a shared `rememberAutoFadeVisible(keys…, active)` helper: they re-show on the relevant change (page
+   change / a fresh orientation mismatch) then fade after 5s.
+
+`/simplify` applied: extracted the `rememberAutoFadeVisible` auto-fade helper (was two copy-paste
+`LaunchedEffect` timers), the `DropLine` composable (was two near-identical overlays), and a shared
+`ui/FingerNav.kt` `lockAxisOrUndecided` + `FINGER_AXIS_LOCK_SLOP_PX` (removed the divergent `20f` slop
+constant duplicated across InkCanvas/SelectionLayer). Skipped (justified): unifying the two-framework
+gesture state machines (View `MotionEvent` vs Compose `awaitPointerEvent` — awkward, low payoff) and
+converting `animateSwipeTo` to Compose `Animatable`/`withFrameNanos` (would pull Compose into the
+Compose-free ViewModel layer).
+
+Tests: `PageTransformTest` (+panX cases), new `FingerNavTest` (axis-lock decision), `CalendarViewModelTest`
+(+`notebooksForDay` added-vs-edited). New swipe/scroll/tabs/menu/fade UI is device-verify-only.
+
 ## Build status (commits on `fa-20-notebooks`)
 
 Phase 0 (`9c7cb23`), 1a (`e6c6723`), 1b-i/ii/iii (`48e1aee`/`62aa52e`/`d43fda9`), page index

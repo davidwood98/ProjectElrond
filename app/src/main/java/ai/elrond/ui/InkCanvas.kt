@@ -34,7 +34,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
@@ -119,7 +118,7 @@ private class DryStrokesView(context: Context) : View(context) {
 
     /** Applies the page → screen [transform] as GPU view properties (per-frame, no redraw). */
     fun setTransform(transform: PageTransform) {
-        translationX = transform.offsetX
+        translationX = transform.offsetX + transform.panX // panX = transient page-turn slide
         translationY = transform.offsetY // = -scroll
         scaleX = transform.scale
         scaleY = transform.scale
@@ -277,8 +276,8 @@ private fun createTouchListener(
     var scrollStartX = 0f
     var scrollStartY = 0f
     var lastScrollY = 0f
+    var lastScrollX = 0f
     var scrollAxis = 0 // 0 = undecided, 1 = vertical (scroll), 2 = horizontal (page turn)
-    var pageTurnFired = false
 
     return View.OnTouchListener { view, event ->
         // Track finger + S Pen-button gestures BEFORE the lasso bail-out, so they keep working in
@@ -330,8 +329,8 @@ private fun createTouchListener(
                             scrollStartX = event.getX(event.actionIndex)
                             scrollStartY = event.getY(event.actionIndex)
                             lastScrollY = scrollStartY
+                            lastScrollX = scrollStartX
                             scrollAxis = 0
-                            pageTurnFired = false
                         }
                         return@OnTouchListener true
                     }
@@ -376,20 +375,22 @@ private fun createTouchListener(
                             val fy = event.getY(si)
                             val totalDx = fx - scrollStartX
                             val totalDy = fy - scrollStartY
-                            if (scrollAxis == 0 &&
-                                (abs(totalDx) > AXIS_LOCK_SLOP_PX || abs(totalDy) > AXIS_LOCK_SLOP_PX)
-                            ) {
-                                scrollAxis = if (abs(totalDx) > abs(totalDy)) 2 else 1
-                                lastScrollY = fy // start scrolling from the lock point
+                            if (scrollAxis == 0) {
+                                val locked = lockAxisOrUndecided(totalDx, totalDy)
+                                if (locked != 0) {
+                                    scrollAxis = locked
+                                    lastScrollY = fy // start scroll/swipe from the lock point
+                                    lastScrollX = fx
+                                }
                             }
                             if (scrollAxis == 1) {
                                 viewModel.scrollBy(fy - lastScrollY)
                                 lastScrollY = fy
-                            } else if (scrollAxis == 2 && !pageTurnFired &&
-                                abs(totalDx) > PAGE_SWIPE_THRESHOLD_PX
-                            ) {
-                                pageTurnFired = true
-                                viewModel.turnPage(forward = totalDx < 0)
+                            } else if (scrollAxis == 2) {
+                                // Live page-turn slide: the page follows the finger; release decides
+                                // whether it turns or springs back (FA-20).
+                                viewModel.swipeBy(fx - lastScrollX)
+                                lastScrollX = fx
                             }
                         }
                         return@OnTouchListener true
@@ -412,9 +413,10 @@ private fun createTouchListener(
                     // Only finish when the tracked pointer lifts; a finger lifting is ignored.
                     val pointerId = event.getPointerId(event.actionIndex)
                     if (pointerId == scrollPointerId) {
+                        // Resolve a horizontal swipe: turn the page or spring back (FA-20).
+                        if (scrollAxis == 2) viewModel.releaseSwipe()
                         scrollPointerId = null
                         scrollAxis = 0
-                        pageTurnFired = false
                     }
                     if (pointerId == currentPointerId) {
                         currentStrokeId?.let { strokeId ->
@@ -435,9 +437,9 @@ private fun createTouchListener(
                     currentStrokeId = null
                     currentIsFinger = false
                     erasing = false
+                    if (scrollAxis == 2) viewModel.releaseSwipe() // spring an in-progress swipe back
                     scrollPointerId = null
                     scrollAxis = 0
-                    pageTurnFired = false
                     true
                 }
 
@@ -713,7 +715,3 @@ internal class StylusButtonTracker(private val viewModel: CanvasViewModel) {
     }
 }
 
-/** Finger-swipe tuning (FA-20): how far the drag travels before the scroll/turn axis locks, and how
- *  far a horizontal swipe must travel to turn the page. Raw px (device-tunable). */
-private const val AXIS_LOCK_SLOP_PX = 20f
-private const val PAGE_SWIPE_THRESHOLD_PX = 140f

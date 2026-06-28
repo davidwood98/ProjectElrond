@@ -333,8 +333,8 @@ fun NotesSection(
             title = "Rename note",
             initial = notebook.title,
             confirmLabel = "Save",
-            // The notebook's title is its cover page's title — rename that page.
-            onConfirm = { noteListViewModel.renameNote(notebook.coverPageId, it); renameCandidate = null },
+            // The title is a notebook property (survives page reorders) — rename the notebook.
+            onConfirm = { noteListViewModel.renameNote(notebook.notebookId, it); renameCandidate = null },
             onDismiss = { renameCandidate = null },
         )
     }

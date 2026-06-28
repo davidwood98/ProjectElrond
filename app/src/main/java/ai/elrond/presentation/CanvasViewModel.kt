@@ -31,6 +31,7 @@ import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.defaultAiNotePosition
 import ai.elrond.domain.groupStrokesIntoLines
+import ai.elrond.domain.notebookTitle
 import ai.elrond.domain.selectQuestionLines
 import ai.elrond.domain.strokeCentroid
 import ai.elrond.domain.strokeLoopOrNull
@@ -92,6 +93,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.abs
 
 /**
  * Holds canvas drawing state: finished (dry) strokes, the active tool, brush settings,
@@ -407,6 +409,16 @@ class CanvasViewModel(
     private var scrollPx: Float = 0f
 
     /**
+     * Transient horizontal page-turn slide (px), folded into [PageTransform.offsetX] (FA-20). During a
+     * horizontal finger swipe the page follows the finger; on release it either slides off and turns
+     * (commit) or springs elastically back to 0. Always 0 at rest.
+     */
+    private var swipeOffsetX: Float = 0f
+
+    /** Drives the release animation (spring-back or slide-off) so a new swipe can cancel it. */
+    private var swipeSettleJob: Job? = null
+
+    /**
      * The single source of truth mapping the page's logical coordinate space ⇄ screen pixels (FA-20):
      * a uniform scale (1 in fit-width; pinch-zoom in Phase 5 changes only this), a horizontal centring
      * [PageTransform.offsetX], and a vertical [PageTransform.offsetY] = −[scrollPx]. Strokes, AI notes,
@@ -533,21 +545,22 @@ class CanvasViewModel(
                 runCatching { repository.getPage(pageId) }.getOrNull()?.let { page ->
                     notebookId = page.notebookId
                     // Track the notebook's ordered pages for the page indicator + swipe page-turns.
-                    // The notebook's TITLE/date is its cover (page 1) — pages > 1 have no title of
-                    // their own, so swapping pages never changes the header/tab name (FA-20).
+                    // The date comes from the cover (page 1); the TITLE is a notebook property
+                    // (see refreshTitle) so it survives page reorders (FA-20).
                     viewModelScope.launch {
                         repository.observePagesOrdered(page.notebookId).collect { pages ->
                             _notebookPages.value = pages
-                            val cover = pages.minByOrNull { it.pageNumber } ?: page
-                            _pageTitle.value = cover.displayTitle()
-                            _pageDateLabel.value = formatPageDate(cover.createdAt)
+                            coverPage = pages.minByOrNull { it.pageNumber } ?: page
+                            _pageDateLabel.value = formatPageDate((coverPage ?: page).createdAt)
+                            refreshTitle()
                         }
                     }
-                    // Track the notebook's per-notebook page-style overrides (FA-20).
+                    // Track the notebook's per-notebook page-style overrides + its name (FA-20).
                     viewModelScope.launch {
                         repository.observeNotebook(page.notebookId).collect { nb ->
                             currentNotebook = nb
                             refreshPageStyle()
+                            refreshTitle()
                         }
                     }
                 }
@@ -570,6 +583,19 @@ class CanvasViewModel(
     private val _pageDateLabel = MutableStateFlow("")
     /** The open note's creation date, e.g. "8 Feb 2026", shown beside the title. */
     val pageDateLabel: StateFlow<String> = _pageDateLabel.asStateFlow()
+
+    /** The notebook's cover (page 1) — supplies the date + the title's timestamp fallback. */
+    private var coverPage: NotePage? = null
+
+    /**
+     * Recomputes the editor title from the notebook name (the rename target) with the cover page's
+     * timestamp as the fallback — a notebook-level title, independent of page order (FA-20). Called
+     * whenever the notebook or its pages change.
+     */
+    private fun refreshTitle() {
+        val cover = coverPage ?: return
+        _pageTitle.value = notebookTitle(currentNotebook?.name.orEmpty(), cover)
+    }
 
     // ── Per-notebook page style (FA-20: paper style / grid density / colour / orientation) ───────
     /** Global default paper style, kept current; used when this notebook has no override. */
@@ -639,14 +665,15 @@ class CanvasViewModel(
     }
 
     /**
-     * Renames the notebook — i.e. its cover (page 1) title, since that IS the notebook's title and
-     * the only page with one. A blank title reverts to the auto-generated timestamp. The header
-     * refreshes via the observePagesOrdered flow.
+     * Renames the notebook. The title is stored on the NOTEBOOK (not a page), so it survives page
+     * reorders — previously it lived on the cover page and reverted when reordering changed which
+     * page was page 1 (FA-20). A blank name reverts to the cover's auto-generated timestamp. The
+     * header refreshes via the observeNotebook flow.
      */
     fun renamePage(newTitle: String) {
         val repo = repository ?: return
-        val coverId = _notebookPages.value.minByOrNull { it.pageNumber }?.id ?: pageId ?: return
-        viewModelScope.launch { repo.renamePage(coverId, newTitle.trim().ifBlank { null }) }
+        val nb = notebookId ?: return
+        viewModelScope.launch { repo.renameNotebook(nb, newTitle) }
     }
 
     private fun formatPageDate(createdAt: Long): String =
@@ -704,8 +731,13 @@ class CanvasViewModel(
      * by the scroll — so scrolling slides the title away and docks the page under the toolbar.
      */
     private fun refreshPageTransform() {
-        val offsetX = ((canvasWidthPx - pageWidthPx) / 2f).coerceAtLeast(0f)
-        _pageTransform.value = PageTransform(scale = 1f, offsetX = offsetX, offsetY = pageTopInsetPx - scrollPx)
+        val centring = ((canvasWidthPx - pageWidthPx) / 2f).coerceAtLeast(0f)
+        _pageTransform.value = PageTransform(
+            scale = 1f,
+            offsetX = centring,
+            offsetY = pageTopInsetPx - scrollPx,
+            panX = swipeOffsetX,
+        )
     }
 
     /**
@@ -804,24 +836,79 @@ class CanvasViewModel(
      * blank pages. Emits the target page id for the screen to navigate to.
      */
     fun turnPage(forward: Boolean) {
-        val repo = repository ?: return
-        val nb = notebookId ?: return
+        viewModelScope.launch { pageTurnTarget(forward)?.let { _pageTurnEvents.emit(it) } }
+    }
+
+    /**
+     * The page to turn to in [forward] direction, or null if there's none (backward at the first
+     * page; forward at the last page with no content). Forward past the last page with content
+     * creates a new blank page — so repeatedly swiping past the end never spawns blank pages.
+     */
+    private suspend fun pageTurnTarget(forward: Boolean): String? {
+        val repo = repository ?: return null
+        val nb = notebookId ?: return null
         val pages = _notebookPages.value
         val idx = pages.indexOfFirst { it.id == pageId }
-        if (idx < 0) return
-        viewModelScope.launch {
-            val targetId = when {
-                forward && idx < pages.lastIndex -> pages[idx + 1].id
-                forward -> {
-                    val hasContent = _finishedStrokes.value.isNotEmpty() ||
-                        _aiNotes.value.any { !it.isError }
-                    if (hasContent) repo.addPage(nb).id else null
-                }
-                !forward && idx > 0 -> pages[idx - 1].id
-                else -> null
+        if (idx < 0) return null
+        return when {
+            forward && idx < pages.lastIndex -> pages[idx + 1].id
+            forward -> {
+                val hasContent = _finishedStrokes.value.isNotEmpty() ||
+                    _aiNotes.value.any { !it.isError }
+                if (hasContent) repo.addPage(nb).id else null
             }
-            targetId?.let { _pageTurnEvents.emit(it) }
+            !forward && idx > 0 -> pages[idx - 1].id
+            else -> null
         }
+    }
+
+    /** Live horizontal page-turn slide: the page follows the finger by [dxScreen] px (FA-20). */
+    fun swipeBy(dxScreen: Float) {
+        swipeSettleJob?.cancel()
+        val limit = if (pageWidthPx > 0f) pageWidthPx else canvasWidthPx
+        swipeOffsetX = (swipeOffsetX + dxScreen).coerceIn(-limit, limit)
+        refreshPageTransform()
+    }
+
+    /**
+     * Releases a horizontal swipe (FA-20): past the commit threshold — and only if a page exists that
+     * way — it slides the page off and turns; otherwise it springs elastically back to centre. A swipe
+     * toward a page that can't be turned to (the first/last edge) also springs back, so the gesture
+     * always resolves cleanly.
+     */
+    fun releaseSwipe() {
+        swipeSettleJob?.cancel()
+        swipeSettleJob = viewModelScope.launch {
+            val forward = swipeOffsetX < 0f
+            val target =
+                if (abs(swipeOffsetX) > PAGE_SWIPE_COMMIT_PX) pageTurnTarget(forward) else null
+            if (target != null) {
+                // Slide the current page fully off, then hand over to the target page (it opens
+                // centred in a fresh transform — the residual is covered by the slide-off).
+                animateSwipeTo(if (forward) -pageWidthPx else pageWidthPx, SWIPE_SLIDE_OFF_MS)
+                _pageTurnEvents.emit(target)
+            } else {
+                animateSwipeTo(0f, SWIPE_SNAP_BACK_MS) // elastic snap-back
+            }
+        }
+    }
+
+    /** Animates [swipeOffsetX] to [target] over [durationMs] with an ease-out (the spring feel). */
+    private suspend fun animateSwipeTo(target: Float, durationMs: Long) {
+        val start = swipeOffsetX
+        val dist = target - start
+        if (dist != 0f) {
+            val frames = (durationMs / SWIPE_FRAME_MS).toInt().coerceAtLeast(1)
+            for (i in 1..frames) {
+                val t = i / frames.toFloat()
+                val eased = 1f - (1f - t) * (1f - t) * (1f - t) // ease-out cubic
+                swipeOffsetX = start + dist * eased
+                refreshPageTransform()
+                delay(SWIPE_FRAME_MS)
+            }
+        }
+        swipeOffsetX = target
+        refreshPageTransform()
     }
 
     private fun defaultNoteWidth(): Float {
@@ -1973,6 +2060,13 @@ class CanvasViewModel(
 
         /** How long a self-clearing on-canvas notification stays up (within the 1–2s spec). */
         const val TRANSIENT_MESSAGE_MILLIS: Long = 1_500L
+
+        // Page-turn swipe (FA-20): how far past which a release commits the turn, the slide-off /
+        // snap-back animation durations, and the per-frame tick (~60fps).
+        private const val PAGE_SWIPE_COMMIT_PX: Float = 140f
+        private const val SWIPE_SLIDE_OFF_MS: Long = 160L
+        private const val SWIPE_SNAP_BACK_MS: Long = 240L
+        private const val SWIPE_FRAME_MS: Long = 16L
 
         /** Shown briefly when a re-triggered selection only holds already-captured items. */
         const val ALREADY_EXISTS_MESSAGE: String = "Already on your to-do list"

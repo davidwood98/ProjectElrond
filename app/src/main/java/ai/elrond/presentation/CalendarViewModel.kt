@@ -4,6 +4,7 @@ import ai.elrond.domain.NoteEditDay
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.DayActivity
 import ai.elrond.domain.NoteActivityMapper
+import ai.elrond.domain.notebookTitle
 import ai.elrond.data.NoteRepository
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -33,6 +34,8 @@ class CalendarViewModel(
     /** Latest pages + edit days, kept current regardless of which UI flows are being collected. */
     private var latestPages: List<NotePage> = emptyList()
     private var latestEditDays: List<NoteEditDay> = emptyList()
+    /** notebookId → name, so a renamed notebook shows its name on the day-sheet (FA-20). */
+    private var latestNotebookNames: Map<String, String> = emptyMap()
 
     init {
         viewModelScope.launch {
@@ -40,6 +43,11 @@ class CalendarViewModel(
                 latestPages = pages
                 latestEditDays = edits
             }.collect { }
+        }
+        viewModelScope.launch {
+            repository.observeNotebooks().collect { nbs ->
+                latestNotebookNames = nbs.associate { it.id to it.name }
+            }
         }
     }
 
@@ -72,10 +80,17 @@ class CalendarViewModel(
             DayNotebook(
                 notebookId = notebookId,
                 coverPage = cover,
+                title = notebookTitle(latestNotebookNames[notebookId].orEmpty(), cover, zone),
                 createdThisDay = createdThisDay,
-                pages = pages.sortedBy { it.pageNumber },
+                // Per-page: a page first added to the notebook on this day reads "added" (green dot);
+                // a page that already existed but was edited today reads "edited" (grey dot).
+                pages = pages.sortedBy { it.pageNumber }.map { page ->
+                    val addedThisDay =
+                        Instant.ofEpochMilli(page.createdAt).atZone(zone).toLocalDate() == date
+                    DayPage(page = page, addedThisDay = addedThisDay)
+                },
             )
-        }.sortedByDescending { group -> group.pages.maxOf { it.modifiedAt } }
+        }.sortedByDescending { group -> group.pages.maxOf { it.page.modifiedAt } }
     }
 
     fun createNote(onCreated: (pageId: String) -> Unit) {
@@ -93,10 +108,22 @@ class CalendarViewModel(
  */
 data class DayNotebook(
     val notebookId: String,
-    /** The notebook's cover (page 1) — its title + the thumbnail; the page a "created" tile opens. */
+    /** The notebook's cover (page 1) — the thumbnail; the page a "created" tile opens. */
     val coverPage: NotePage,
+    /** The notebook's display title (its name, else the cover's timestamp) — order-independent. */
+    val title: String,
     val createdThisDay: Boolean,
     /** The pages of this notebook touched on the day (an "edited" tile lists these). */
-    val pages: List<NotePage>,
+    val pages: List<DayPage>,
+)
+
+/**
+ * One page of a [DayNotebook] touched on the day. [addedThisDay] is true when the page was first
+ * added to the notebook on this day (rendered with a green "added" dot in the per-page menu) and
+ * false when it already existed but was edited today (a grey "edited" dot).
+ */
+data class DayPage(
+    val page: NotePage,
+    val addedThisDay: Boolean,
 )
 
