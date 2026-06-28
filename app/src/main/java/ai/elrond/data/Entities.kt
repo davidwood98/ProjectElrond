@@ -10,6 +10,15 @@ data class NotebookEntity(
     @PrimaryKey val id: String,
     val name: String,
     val createdAt: Long,
+    // FA-20: a notebook becomes a multi-page document. These per-notebook settings override the
+    // global defaults; a null column means "follow the global default" (resolved at read time).
+    val pageNavigationMode: String? = null,
+    val paperStyle: String? = null,
+    val viewOrientation: String? = null,
+    /** Placeholder for a future page-template id (FA-20 deferred); unused for now. */
+    val templateId: String? = null,
+    /** Last time the notebook (or one of its pages) changed; for recency ordering. */
+    val modifiedAt: Long = 0,
 )
 
 @Entity(
@@ -36,6 +45,10 @@ data class NotePageEntity(
     val tags: List<String> = emptyList(),
     /** AI-generated summary of the page used for organisation and topic detection. */
     val contextSummary: String? = null,
+    /** FA-20: 1-based position of this page within its notebook (mutable; drag-reorder writes it). */
+    val pageNumber: Int = 1,
+    /** FA-20: user bookmark flag, surfaced in the page index. */
+    val isBookmarked: Boolean = false,
 )
 
 @Entity(

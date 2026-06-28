@@ -1,6 +1,7 @@
 package ai.elrond.data
 
 import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -13,8 +14,9 @@ import org.robolectric.RobolectricTestRunner
 
 /**
  * Validates the Room schema migrations on a real SQLite database (Robolectric), reading
- * the exported schema JSONs from test assets. Covers the full v1→v5 chain (schema
- * validation) and the v4→v5 backfill that seeds page_edit_events from existing pages.
+ * the exported schema JSONs from test assets. Covers the full v1→v11 chain (schema
+ * validation) plus the data-touching migrations (e.g. v4→v5 page_edit_events backfill,
+ * v10→v11 notebook/page columns + modifiedAt backfill).
  */
 @RunWith(RobolectricTestRunner::class)
 class ElrondMigrationTest {
@@ -35,6 +37,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_7_8,
         ElrondDatabase.MIGRATION_8_9,
         ElrondDatabase.MIGRATION_9_10,
+        ElrondDatabase.MIGRATION_10_11,
     )
 
     /**
@@ -58,11 +61,52 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v10_and_validates_final_schema() {
+    fun migrates_v1_to_v11_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v10 schema (incl. the FA-16
-        // subjects + note_subjects tables).
-        helper.runMigrationsAndValidate(TEST_DB, 10, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v11 schema (incl. the FA-20
+        // notebook/page columns).
+        helper.runMigrationsAndValidate(TEST_DB, 11, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_10_to_11_adds_notebook_and_page_columns_and_backfills_modifiedAt() {
+        helper.createDatabase(TEST_DB, 10).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt) VALUES ('nb1', 'N', 4242)")
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, " +
+                    "lastOpenedAt, tags, contextSummary) " +
+                    "VALUES ('p1', 'nb1', NULL, 1000, 2000, 2000, '', NULL)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 11, true, *allMigrations)
+
+        val notebookCols = columnNames(db, "notebooks")
+        val pageCols = columnNames(db, "note_pages")
+        var notebookModifiedAt = -1L
+        db.query("SELECT modifiedAt FROM notebooks WHERE id = 'nb1'").use { c ->
+            if (c.moveToNext()) notebookModifiedAt = c.getLong(0)
+        }
+        var pageNumber = -1
+        var isBookmarked = -1
+        db.query("SELECT pageNumber, isBookmarked FROM note_pages WHERE id = 'p1'").use { c ->
+            if (c.moveToNext()) {
+                pageNumber = c.getInt(0)
+                isBookmarked = c.getInt(1)
+            }
+        }
+        db.close()
+
+        assertTrue("notebooks.pageNavigationMode should exist", "pageNavigationMode" in notebookCols)
+        assertTrue("notebooks.paperStyle should exist", "paperStyle" in notebookCols)
+        assertTrue("notebooks.viewOrientation should exist", "viewOrientation" in notebookCols)
+        assertTrue("notebooks.templateId should exist", "templateId" in notebookCols)
+        assertTrue("notebooks.modifiedAt should exist", "modifiedAt" in notebookCols)
+        assertTrue("note_pages.pageNumber should exist", "pageNumber" in pageCols)
+        assertTrue("note_pages.isBookmarked should exist", "isBookmarked" in pageCols)
+        assertEquals(4242L, notebookModifiedAt) // backfilled from createdAt
+        assertEquals(1, pageNumber) // default
+        assertEquals(0, isBookmarked) // default (false)
     }
 
     @Test
@@ -163,6 +207,15 @@ class ElrondMigrationTest {
         assertEquals(1, rows.size)
         assertEquals("p1", rows[0].first)
         assertEquals(2L, rows[0].second) // epoch-day 2
+    }
+
+    private fun columnNames(db: SupportSQLiteDatabase, table: String): Set<String> {
+        val cols = mutableSetOf<String>()
+        db.query("PRAGMA table_info($table)").use { c ->
+            val nameIndex = c.getColumnIndex("name")
+            while (c.moveToNext()) cols.add(c.getString(nameIndex))
+        }
+        return cols
     }
 
     companion object {

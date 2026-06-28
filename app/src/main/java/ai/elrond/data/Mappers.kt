@@ -3,6 +3,9 @@ package ai.elrond.data
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.PageNavigationMode
+import ai.elrond.domain.PageViewOrientation
+import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.Subject
 import ai.elrond.domain.TodoItem
 import ai.elrond.domain.TodoPriority
@@ -12,6 +15,12 @@ fun NotebookEntity.toDomain(): Notebook = Notebook(
     id = id,
     name = name,
     createdAt = createdAt,
+    // A null column means "inherit the global default"; only parse when a value is stored.
+    pageNavigationMode = pageNavigationMode?.let(PageNavigationMode::fromName),
+    paperStyle = paperStyle?.let(PaperStyle::fromName),
+    viewOrientation = viewOrientation?.let(PageViewOrientation::fromName),
+    templateId = templateId,
+    modifiedAt = modifiedAt,
 )
 
 fun NotePageEntity.toDomain(): NotePage = NotePage(
@@ -23,6 +32,8 @@ fun NotePageEntity.toDomain(): NotePage = NotePage(
     lastOpenedAt = lastOpenedAt,
     tags = tags,
     contextSummary = contextSummary,
+    pageNumber = pageNumber,
+    isBookmarked = isBookmarked,
 )
 
 fun SubjectEntity.toDomain(): Subject = Subject(

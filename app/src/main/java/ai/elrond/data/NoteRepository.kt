@@ -36,7 +36,8 @@ class NoteRepository(
         notebookDao.observeAll().map { entities -> entities.map(NotebookEntity::toDomain) }
 
     suspend fun createNotebook(name: String): Notebook {
-        val entity = NotebookEntity(id = newId(), name = name, createdAt = clock())
+        val now = clock()
+        val entity = NotebookEntity(id = newId(), name = name, createdAt = now, modifiedAt = now)
         notebookDao.insert(entity)
         return entity.toDomain()
     }

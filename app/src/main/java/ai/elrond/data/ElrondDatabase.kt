@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SubjectEntity::class,
         NoteSubjectEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -232,6 +232,27 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v11 (FA-20) begins the notebook → multi-page model. Additive only — adds per-notebook
+         * settings to `notebooks` (pageNavigationMode / paperStyle / viewOrientation override the
+         * global defaults, null = inherit; a templateId placeholder; modifiedAt) and page ordering to
+         * `note_pages` (pageNumber, isBookmarked). Behaviour is unchanged until the paged canvas
+         * lands; existing notebooks get modifiedAt = createdAt. The "explode each note into its own
+         * notebook" + note_subjects re-key happen with the navigation flip in a later migration.
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notebooks ADD COLUMN pageNavigationMode TEXT")
+                db.execSQL("ALTER TABLE notebooks ADD COLUMN paperStyle TEXT")
+                db.execSQL("ALTER TABLE notebooks ADD COLUMN viewOrientation TEXT")
+                db.execSQL("ALTER TABLE notebooks ADD COLUMN templateId TEXT")
+                db.execSQL("ALTER TABLE notebooks ADD COLUMN modifiedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE notebooks SET modifiedAt = createdAt")
+                db.execSQL("ALTER TABLE note_pages ADD COLUMN pageNumber INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE note_pages ADD COLUMN isBookmarked INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -243,7 +264,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                     DB_NAME,
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-                    MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+                    MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                 ).build().also { instance = it }
             }
     }
