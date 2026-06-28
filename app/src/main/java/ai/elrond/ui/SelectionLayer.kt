@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.runtime.key
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke as InkStroke
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -87,6 +88,9 @@ fun SelectionLayer(
     // scrolled in pen mode first). The overlay renders the box/ink page → screen and captures the
     // lasso screen → page through this transform.
     val transform by viewModel.pageTransform.collectAsStateWithLifecycle()
+    // Palm rejection applies to the lasso too (FA-20): when stylus-only is on, a finger must NOT
+    // start a selection — the lasso follows the same rule as the pen for all tools.
+    val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
     // Container size in px — clamps the floating menu on-screen.
     var layerSize by remember { mutableStateOf(IntSize.Zero) }
 
@@ -99,6 +103,7 @@ fun SelectionLayer(
         LassoCatcher(
             clipboardActive = clipboard.active,
             transform = transform,
+            stylusOnly = stylusOnly,
             onLasso = viewModel::selectByLasso,
             onTap = { x, y ->
                 if (clipboard.active) viewModel.pasteAt(x, y) else viewModel.clearSelection()
@@ -136,6 +141,7 @@ fun SelectionLayer(
 private fun LassoCatcher(
     clipboardActive: Boolean,
     transform: PageTransform,
+    stylusOnly: Boolean,
     onLasso: (List<GestureTriggerDetector.Point>) -> Unit,
     onTap: (Float, Float) -> Unit,
 ) {
@@ -144,9 +150,12 @@ private fun LassoCatcher(
     Box(
         Modifier
             .fillMaxSize()
-            .pointerInput(clipboardActive) {
+            .pointerInput(clipboardActive, stylusOnly) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
+                    // Palm rejection (FA-20): with stylus-only on, ignore a finger here so it can't
+                    // start a lasso/paste — matching the pen. The unconsumed events fall through.
+                    if (stylusOnly && down.type == PointerType.Touch) return@awaitEachGesture
                     val points = mutableListOf(down.position)
                     var dragging = false
                     while (true) {

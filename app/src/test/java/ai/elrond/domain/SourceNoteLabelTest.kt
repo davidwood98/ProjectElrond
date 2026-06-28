@@ -18,32 +18,32 @@ class SourceNoteLabelTest {
         )
 
     @Test
-    fun `single-page notebook shows just the title`() {
+    fun `single-page notebook shows the title`() {
         val pages = listOf(page("p1", "nb1", "Shopping", 1))
         assertEquals("Shopping", SourceNoteLabel.resolve("p1", pages))
     }
 
     @Test
-    fun `multi-page notebook shows cover title and the page's number`() {
+    fun `multi-page notebook shows the cover title for any page (no page number)`() {
         val pages = listOf(
             page("p1", "nb1", "Maths", 1),
             page("p2", "nb1", "ignored-title", 2),
             page("p3", "nb1", "ignored", 3),
         )
-        // The label uses the cover (page 1) title + the target page's own number.
-        assertEquals("Maths → Page 2", SourceNoteLabel.resolve("p2", pages))
-        assertEquals("Maths → Page 3", SourceNoteLabel.resolve("p3", pages))
+        // The label is always the cover (page 1) title — pages > 1 have no title of their own.
+        assertEquals("Maths", SourceNoteLabel.resolve("p2", pages))
+        assertEquals("Maths", SourceNoteLabel.resolve("p3", pages))
     }
 
     @Test
-    fun `pages from other notebooks don't affect the count or cover`() {
+    fun `resolves the cover title using only the page's own notebook`() {
         val pages = listOf(
             page("p1", "nb1", "Solo", 1),
             page("o1", "nb2", "Other", 1),
             page("o2", "nb2", "Other 2", 2),
         )
-        // nb1 has a single page → no page suffix despite nb2 being multi-page.
         assertEquals("Solo", SourceNoteLabel.resolve("p1", pages))
+        assertEquals("Other", SourceNoteLabel.resolve("o2", pages))
     }
 
     @Test

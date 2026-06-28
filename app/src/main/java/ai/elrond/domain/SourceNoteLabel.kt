@@ -1,23 +1,18 @@
 package ai.elrond.domain
 
 /**
- * Resolves the live "Notebook → Page N" label for a to-do or calendar item that links back to a
- * source page (FA-20). The page may since have moved within its notebook (page numbers are mutable),
- * so the label is derived from the *current* page list rather than a stored snapshot — the snapshot
- * title is only the fallback for a deleted source.
- *
- * The notebook's display name is its cover (first) page's title, matching the browser/tabs (a
- * per-note notebook stores no separate name). The "→ Page N" suffix is shown only when the notebook
- * actually has more than one page, so single-page notebooks (the common case) read as just the title
- * without redundant "→ Page 1" noise.
+ * Resolves the live notebook-title label for a to-do or calendar item that links back to a source
+ * page (FA-20). A notebook's title is its cover (first) page's title — pages > 1 have no title of
+ * their own — so the label reads cleanly as just the notebook title regardless of which page the
+ * item came from. The link still opens the *exact* source page (the caller keeps the sourcePageId);
+ * this only controls the displayed text. Resolved from the current page list so a renamed notebook
+ * updates live; null when the source page no longer exists (the UI falls back to the stored snapshot).
  */
 object SourceNoteLabel {
-    /** Live label for [pageId] given all [pages], or null if the page no longer exists. */
+    /** Live notebook title for [pageId] given all [pages], or null if the page no longer exists. */
     fun resolve(pageId: String, pages: List<NotePage>): String? {
         val page = pages.firstOrNull { it.id == pageId } ?: return null
-        val notebookPages = pages.filter { it.notebookId == page.notebookId }
-        val cover = notebookPages.minByOrNull { it.pageNumber } ?: page
-        val name = cover.displayTitle()
-        return if (notebookPages.size > 1) "$name → Page ${page.pageNumber}" else name
+        val cover = pages.filter { it.notebookId == page.notebookId }.minByOrNull { it.pageNumber } ?: page
+        return cover.displayTitle()
     }
 }

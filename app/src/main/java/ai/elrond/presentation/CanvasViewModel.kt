@@ -521,13 +521,17 @@ class CanvasViewModel(
                 runCatching { repository.loadAiNotes(pageId) }
                     .onSuccess { loaded -> _aiNotes.value = loaded }
                 runCatching { repository.getPage(pageId) }.getOrNull()?.let { page ->
-                    _pageTitle.value = page.displayTitle()
-                    _pageDateLabel.value = formatPageDate(page.createdAt)
                     notebookId = page.notebookId
                     // Track the notebook's ordered pages for the page indicator + swipe page-turns.
+                    // The notebook's TITLE/date is its cover (page 1) — pages > 1 have no title of
+                    // their own, so swapping pages never changes the header/tab name (FA-20).
                     viewModelScope.launch {
-                        repository.observePagesOrdered(page.notebookId)
-                            .collect { _notebookPages.value = it }
+                        repository.observePagesOrdered(page.notebookId).collect { pages ->
+                            _notebookPages.value = pages
+                            val cover = pages.minByOrNull { it.pageNumber } ?: page
+                            _pageTitle.value = cover.displayTitle()
+                            _pageDateLabel.value = formatPageDate(cover.createdAt)
+                        }
                     }
                 }
                 // Record the open so this note rises to the top of "Recent" / the note tabs (FA-15).
@@ -550,14 +554,15 @@ class CanvasViewModel(
     /** The open note's creation date, e.g. "8 Feb 2026", shown beside the title. */
     val pageDateLabel: StateFlow<String> = _pageDateLabel.asStateFlow()
 
-    /** Renames the open page; a blank title reverts to the auto-generated timestamp title. */
+    /**
+     * Renames the notebook — i.e. its cover (page 1) title, since that IS the notebook's title and
+     * the only page with one. A blank title reverts to the auto-generated timestamp. The header
+     * refreshes via the observePagesOrdered flow.
+     */
     fun renamePage(newTitle: String) {
         val repo = repository ?: return
-        val id = pageId ?: return
-        viewModelScope.launch {
-            repo.renamePage(id, newTitle.trim().ifBlank { null })
-            runCatching { repo.getPage(id) }.getOrNull()?.let { _pageTitle.value = it.displayTitle() }
-        }
+        val coverId = _notebookPages.value.minByOrNull { it.pageNumber }?.id ?: pageId ?: return
+        viewModelScope.launch { repo.renamePage(coverId, newTitle.trim().ifBlank { null }) }
     }
 
     private fun formatPageDate(createdAt: Long): String =
