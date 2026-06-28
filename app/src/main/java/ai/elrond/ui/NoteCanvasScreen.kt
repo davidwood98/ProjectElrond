@@ -524,6 +524,8 @@ fun NoteCanvasScreen(
                 onDeletePage = viewModel::deletePageFromNotebook,
                 onToggleBookmark = viewModel::setPageBookmark,
                 onMovePage = viewModel::movePage,
+                onReorder = viewModel::reorderPages,
+                onMultiDelete = viewModel::deletePagesFromNotebook,
                 onDismiss = { showPages = false },
             )
         }

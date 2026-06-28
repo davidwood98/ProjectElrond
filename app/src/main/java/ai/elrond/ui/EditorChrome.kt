@@ -43,6 +43,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
@@ -52,7 +53,9 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
@@ -72,6 +75,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -82,7 +87,12 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.Color
@@ -473,9 +483,11 @@ private fun TabPill(label: String, active: Boolean, onClick: () -> Unit, modifie
 
 /**
  * The Pages popup (FA-20): a thumbnail grid of the open notebook's pages. Tap a page to open it; the
- * star toggles a bookmark; the ⋮ menu moves a page earlier/later or deletes it (the last remaining
- * page can't be deleted); the trailing tile adds a new page. Reorder is via the menu's Move actions
- * (press-hold drag-reorder is a future refinement).
+ * star toggles a bookmark; the ⋮ menu moves a page earlier/later or deletes it. **Press-hold-drag**
+ * a page to reorder — the page under the finger shows an accent drop indicator and the drag commits
+ * the new order on release. The **Select** (tick-box) toolbar toggle enters multi-select mode, where
+ * tapping a page checks it and a **Delete (N)** action removes the checked pages (the notebook always
+ * keeps at least one). The trailing tile adds a new page.
  */
 @Composable
 fun PagesOverlay(
@@ -487,8 +499,21 @@ fun PagesOverlay(
     onDeletePage: (String) -> Unit,
     onToggleBookmark: (String, Boolean) -> Unit,
     onMovePage: (String, Boolean) -> Unit,
+    onReorder: (List<String>) -> Unit,
+    onMultiDelete: (Set<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var selectMode by remember { mutableStateOf(false) }
+    val selectedIds = remember { mutableStateListOf<String>() }
+    var draggingId by remember { mutableStateOf<String?>(null) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var dropTargetId by remember { mutableStateOf<String?>(null) }
+    val cardBounds = remember { mutableStateMapOf<String, Rect>() }
+
+    fun toggleSelect(id: String) {
+        if (id in selectedIds) selectedIds.remove(id) else selectedIds.add(id)
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(20.dp),
@@ -506,12 +531,34 @@ fun PagesOverlay(
                     Spacer(Modifier.width(10.dp))
                     Pill(if (pages.size == 1) "1 page" else "${pages.size} pages")
                     Spacer(Modifier.weight(1f))
-                    Icon(
-                        painterResource(ElrondIcons.Close),
-                        contentDescription = "Close",
-                        tint = Neutral500,
-                        modifier = Modifier.size(22.dp).clickable(onClick = onDismiss),
-                    )
+                    if (selectMode) {
+                        TextButton(
+                            onClick = {
+                                onMultiDelete(selectedIds.toSet())
+                                selectedIds.clear()
+                                selectMode = false
+                            },
+                            // Never offer to delete the whole notebook.
+                            enabled = selectedIds.isNotEmpty() && selectedIds.size < pages.size,
+                        ) { Text("Delete (${selectedIds.size})") }
+                        TextButton(onClick = { selectMode = false; selectedIds.clear() }) { Text("Done") }
+                    } else {
+                        IconButton(onClick = { selectMode = true }, modifier = Modifier.size(34.dp)) {
+                            Icon(
+                                Icons.Outlined.CheckBox,
+                                contentDescription = "Select pages",
+                                tint = Neutral500,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            painterResource(ElrondIcons.Close),
+                            contentDescription = "Close",
+                            tint = Neutral500,
+                            modifier = Modifier.size(22.dp).clickable(onClick = onDismiss),
+                        )
+                    }
                 }
                 Spacer(Modifier.height(16.dp))
                 LazyVerticalGrid(
@@ -521,6 +568,33 @@ fun PagesOverlay(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 ) {
                     itemsIndexed(pages, key = { _, p -> p.id }) { index, page ->
+                        val dragModifier = Modifier.pointerInput(page.id, selectMode, pages.size) {
+                            if (selectMode) return@pointerInput
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { draggingId = page.id; dragOffset = Offset.Zero; dropTargetId = null },
+                                onDrag = { change, delta ->
+                                    change.consume()
+                                    dragOffset += delta
+                                    // Hit-test the dragged card's current centre against the other cards.
+                                    val centre = (cardBounds[page.id]?.center ?: Offset.Zero) + dragOffset
+                                    dropTargetId = cardBounds.entries
+                                        .firstOrNull { it.key != page.id && it.value.contains(centre) }?.key
+                                },
+                                onDragEnd = {
+                                    val from = draggingId
+                                    val to = dropTargetId
+                                    if (from != null && to != null && from != to) {
+                                        val ids = pages.map { it.id }.toMutableList()
+                                        ids.remove(from)
+                                        val toIdx = ids.indexOf(to)
+                                        ids.add(if (toIdx < 0) ids.size else toIdx, from)
+                                        onReorder(ids)
+                                    }
+                                    draggingId = null; dropTargetId = null; dragOffset = Offset.Zero
+                                },
+                                onDragCancel = { draggingId = null; dropTargetId = null; dragOffset = Offset.Zero },
+                            )
+                        }
                         PageGridCard(
                             page = page,
                             number = index + 1,
@@ -529,13 +603,21 @@ fun PagesOverlay(
                             canMoveEarlier = index > 0,
                             canMoveLater = index < pages.lastIndex,
                             noteListViewModel = noteListViewModel,
-                            onOpen = { onOpenPage(page.id) },
+                            selectMode = selectMode,
+                            selected = page.id in selectedIds,
+                            isDragging = draggingId == page.id,
+                            isDropTarget = dropTargetId == page.id && draggingId != null,
+                            dragOffset = if (draggingId == page.id) dragOffset else Offset.Zero,
+                            dragModifier = dragModifier,
+                            onBoundsChanged = { cardBounds[page.id] = it },
+                            onOpen = { if (selectMode) toggleSelect(page.id) else onOpenPage(page.id) },
+                            onToggleSelect = { toggleSelect(page.id) },
                             onToggleBookmark = { onToggleBookmark(page.id, !page.isBookmarked) },
                             onDelete = { onDeletePage(page.id) },
                             onMove = { forward -> onMovePage(page.id, forward) },
                         )
                     }
-                    item { AddPageTile(onClick = onAddPage) }
+                    if (!selectMode) item { AddPageTile(onClick = onAddPage) }
                 }
             }
         }
@@ -551,20 +633,42 @@ private fun PageGridCard(
     canMoveEarlier: Boolean,
     canMoveLater: Boolean,
     noteListViewModel: NoteListViewModel,
+    selectMode: Boolean,
+    selected: Boolean,
+    isDragging: Boolean,
+    isDropTarget: Boolean,
+    dragOffset: Offset,
+    dragModifier: Modifier,
+    onBoundsChanged: (Rect) -> Unit,
     onOpen: () -> Unit,
+    onToggleSelect: () -> Unit,
     onToggleBookmark: () -> Unit,
     onDelete: () -> Unit,
     onMove: (Boolean) -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val accent = LeapTheme.tokens.accent
+    val borderColor = when {
+        isDropTarget -> accent
+        isCurrent -> accent
+        else -> Neutral200
+    }
+    val borderWidth = when {
+        isDropTarget -> 3.dp
+        isCurrent -> 2.dp
+        else -> 1.dp
+    }
     Column(
         modifier = Modifier
+            .onGloballyPositioned { onBoundsChanged(it.boundsInParent()) }
+            .graphicsLayer {
+                translationX = dragOffset.x
+                translationY = dragOffset.y
+                if (isDragging) { scaleX = 1.04f; scaleY = 1.04f; shadowElevation = 16f; alpha = 0.96f }
+            }
             .clip(RoundedCornerShape(13.dp))
-            .border(
-                width = if (isCurrent) 2.dp else 1.dp,
-                color = if (isCurrent) LeapTheme.tokens.accent else Neutral200,
-                shape = RoundedCornerShape(13.dp),
-            )
+            .border(width = borderWidth, color = borderColor, shape = RoundedCornerShape(13.dp))
+            .then(dragModifier)
             .clickable(onClick = onOpen),
     ) {
         Box(
@@ -578,8 +682,17 @@ private fun PageGridCard(
                 Icon(
                     Icons.Filled.Bookmark,
                     contentDescription = "Bookmarked",
-                    tint = LeapTheme.tokens.accent,
+                    tint = accent,
                     modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(18.dp),
+                )
+            }
+            // Multi-select checkbox overlay.
+            if (selectMode) {
+                Icon(
+                    if (selected) Icons.Filled.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
+                    contentDescription = if (selected) "Selected" else "Not selected",
+                    tint = if (selected) accent else Neutral500,
+                    modifier = Modifier.align(Alignment.TopStart).padding(6.dp).size(22.dp),
                 )
             }
         }
@@ -594,32 +707,34 @@ private fun PageGridCard(
                 fontWeight = FontWeight.Bold,
             )
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = onToggleBookmark, modifier = Modifier.size(34.dp)) {
-                Icon(
-                    if (page.isBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
-                    contentDescription = "Bookmark",
-                    tint = if (page.isBookmarked) LeapTheme.tokens.accent else Neutral400,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-            Box {
-                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(34.dp)) {
+            if (!selectMode) {
+                IconButton(onClick = onToggleBookmark, modifier = Modifier.size(34.dp)) {
                     Icon(
-                        painterResource(ElrondIcons.MoreVert),
-                        contentDescription = "Page actions",
-                        tint = Neutral500,
+                        if (page.isBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                        contentDescription = "Bookmark",
+                        tint = if (page.isBookmarked) accent else Neutral400,
                         modifier = Modifier.size(18.dp),
                     )
                 }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    if (canMoveEarlier) {
-                        DropdownMenuItem(text = { Text("Move earlier") }, onClick = { menuOpen = false; onMove(false) })
+                Box {
+                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(34.dp)) {
+                        Icon(
+                            painterResource(ElrondIcons.MoreVert),
+                            contentDescription = "Page actions",
+                            tint = Neutral500,
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
-                    if (canMoveLater) {
-                        DropdownMenuItem(text = { Text("Move later") }, onClick = { menuOpen = false; onMove(true) })
-                    }
-                    if (canDelete) {
-                        DropdownMenuItem(text = { Text("Delete page") }, onClick = { menuOpen = false; onDelete() })
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        if (canMoveEarlier) {
+                            DropdownMenuItem(text = { Text("Move earlier") }, onClick = { menuOpen = false; onMove(false) })
+                        }
+                        if (canMoveLater) {
+                            DropdownMenuItem(text = { Text("Move later") }, onClick = { menuOpen = false; onMove(true) })
+                        }
+                        if (canDelete) {
+                            DropdownMenuItem(text = { Text("Delete page") }, onClick = { menuOpen = false; onDelete() })
+                        }
                     }
                 }
             }

@@ -745,6 +745,29 @@ class CanvasViewModel(
         }
     }
 
+    /**
+     * Deletes several pages at once (FA-20 page-index multi-select), always keeping at least one.
+     * If the open page is among them, navigates to a surviving page.
+     */
+    fun deletePagesFromNotebook(targetIds: Set<String>) {
+        val repo = repository ?: return
+        val pages = _notebookPages.value
+        val toDelete = pages.filter { it.id in targetIds }
+        val survivors = pages.filterNot { it.id in targetIds }
+        if (toDelete.isEmpty() || survivors.isEmpty()) return // never delete the whole notebook
+        viewModelScope.launch {
+            toDelete.forEach { repo.deletePage(it.id) }
+            if (pageId in targetIds) _pageTurnEvents.emit(survivors.first().id)
+        }
+    }
+
+    /** Commits a full page order (FA-20 page-index drag-reorder); [orderedIds] is the new sequence. */
+    fun reorderPages(orderedIds: List<String>) {
+        val repo = repository ?: return
+        if (orderedIds.isEmpty()) return
+        viewModelScope.launch { repo.reorderPages(orderedIds) }
+    }
+
     /** Moves a page one position earlier/later in the notebook (FA-20 page-index reorder). */
     fun movePage(targetPageId: String, forward: Boolean) {
         val repo = repository ?: return
