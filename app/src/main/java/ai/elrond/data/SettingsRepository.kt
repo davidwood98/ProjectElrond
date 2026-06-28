@@ -5,6 +5,7 @@ import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.NoteTabsMode
+import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.StylusHoldTool
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
@@ -238,6 +239,14 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[PAPER_STYLE_KEY] = style.name }
     }
 
+    /** Default page scroll direction (Vertical-continuous / Horizontal-turn); per-notebook override in the editor (FA-20). */
+    val pageNavigationMode: Flow<PageNavigationMode> = context.settingsDataStore.data
+        .map { PageNavigationMode.fromName(it[PAGE_NAVIGATION_MODE_KEY]) }
+
+    suspend fun setPageNavigationMode(mode: PageNavigationMode) {
+        context.settingsDataStore.edit { it[PAGE_NAVIGATION_MODE_KEY] = mode.name }
+    }
+
     /** Editor note-tab layout: tabs docked atop the tools (Attached) or above the title (Separate). */
     val noteTabsMode: Flow<NoteTabsMode> = context.settingsDataStore.data
         .map { NoteTabsMode.fromName(it[NOTE_TABS_MODE_KEY]) }
@@ -426,6 +435,7 @@ class SettingsRepository(private val context: Context) {
         private val UNIT_SYSTEM_KEY = stringPreferencesKey("unit_system")
         private val APP_ACCENT_KEY = stringPreferencesKey("app_accent")
         private val PAPER_STYLE_KEY = stringPreferencesKey("paper_style")
+        private val PAGE_NAVIGATION_MODE_KEY = stringPreferencesKey("page_navigation_mode")
         private val NOTE_TABS_MODE_KEY = stringPreferencesKey("note_tabs_mode")
         private val CALENDAR_PROVIDER_KEY = stringPreferencesKey("calendar_provider")
         private val AI_NOTE_SELECTED_ON_CREATE_KEY = booleanPreferencesKey("ai_note_selected_on_create")

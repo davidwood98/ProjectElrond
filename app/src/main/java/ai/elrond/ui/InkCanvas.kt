@@ -1,6 +1,7 @@
 package ai.elrond.ui
 
 import ai.elrond.domain.PalmRejection
+import ai.elrond.domain.PageLayer
 import ai.elrond.domain.PageTransform
 import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.CanvasStroke
@@ -95,12 +96,15 @@ internal fun InkCanvas(
 @SuppressLint("ViewConstructor")
 private class DryStrokesView(context: Context) : View(context) {
     private val renderer = CanvasStrokeRenderer.create()
-    // Strokes are stored in page space; the view itself carries the page→screen transform, so they
-    // draw at identity here.
-    private val identity = Matrix()
-    private var strokes: List<Stroke> = emptyList()
-    private var pageWidthPx = 0
-    private var pageHeightPx = 0
+    // Each layer's strokes are stored in that page's own page-space; the view carries the document→
+    // screen transform and draws each layer translated by its (open-page-relative) docTop, so a single
+    // view + GPU transform renders the whole continuous vertical document (FA-20). The matrix is
+    // reused per layer to avoid per-frame allocation.
+    private val layerMatrix = Matrix()
+    private var layers: List<PageLayer> = emptyList()
+    private var excludedIds: Set<String> = emptySet()
+    private var viewWidthPx = 0
+    private var viewHeightPx = 0
 
     init {
         // A plain View can skip onDraw as an optimisation; ensure it always draws our ink.
@@ -110,34 +114,35 @@ private class DryStrokesView(context: Context) : View(context) {
         pivotY = 0f
     }
 
-    /** Replace the dry strokes and repaint immediately (independent of Compose recomposition). */
-    fun setStrokes(value: List<Stroke>) {
-        strokes = value
+    /** Replace the rendered page layers (minus any lasso-selected ids) and repaint immediately. */
+    fun setLayers(value: List<PageLayer>, excluded: Set<String>) {
+        layers = value
+        excludedIds = excluded
         invalidate()
     }
 
-    /** Applies the page → screen [transform] as GPU view properties (per-frame, no redraw). */
+    /** Applies the document → screen [transform] as GPU view properties (per-frame, no redraw). */
     fun setTransform(transform: PageTransform) {
         translationX = transform.offsetX + transform.panX // panX = transient page-turn slide
-        translationY = transform.offsetY // = -scroll
+        translationY = transform.offsetY // open-page origin; layers offset by their docTop in onDraw
         scaleX = transform.scale
         scaleY = transform.scale
     }
 
-    /** Sets the page's view-local size (page-space px); relayouts so scrolling reveals lower ink. */
-    fun setPageSize(widthPx: Float, heightPx: Float) {
+    /** Sets the view-local size (page-space px) spanning the whole document; relayouts on change. */
+    fun setViewSize(widthPx: Float, heightPx: Float) {
         val w = widthPx.toInt()
         val h = heightPx.toInt()
-        if (w != pageWidthPx || h != pageHeightPx) {
-            pageWidthPx = w
-            pageHeightPx = h
+        if (w != viewWidthPx || h != viewHeightPx) {
+            viewWidthPx = w
+            viewHeightPx = h
             requestLayout()
         }
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        if (pageWidthPx > 0 && pageHeightPx > 0) {
-            setMeasuredDimension(pageWidthPx, pageHeightPx)
+        if (viewWidthPx > 0 && viewHeightPx > 0) {
+            setMeasuredDimension(viewWidthPx, viewHeightPx)
         } else {
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
         }
@@ -145,8 +150,14 @@ private class DryStrokesView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        strokes.forEach { stroke ->
-            renderer.draw(canvas = canvas, stroke = stroke, strokeToScreenTransform = identity)
+        layers.forEach { layer ->
+            // The view is laid out over the whole document (local y=0 = document top). Each page draws
+            // at its absolute docTop; the view's GPU transform maps the document onto the screen.
+            layerMatrix.setTranslate(0f, layer.docTopPx)
+            layer.strokes.forEach { cs ->
+                if (cs.id in excludedIds) return@forEach
+                renderer.draw(canvas = canvas, stroke = cs.stroke, strokeToScreenTransform = layerMatrix)
+            }
         }
     }
 }
@@ -208,39 +219,36 @@ private fun createInkView(
                 val owner = v.findViewTreeLifecycleOwner() ?: return
                 job = owner.lifecycleScope.launch {
                     owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                        // Keys for the last dry-layer rebuild, so we rebuild + repaint ONLY when the
-                        // stroke list or the selected set actually changes.
-                        var splitKeyStrokes: List<CanvasStroke>? = null
-                        var splitKeyIds: Set<String> = emptySet()
+                        // Keys for the last dry-layer rebuild, so we re-set the layers + repaint ONLY
+                        // when the page set/strokes or the selected set actually changes (not on a
+                        // transform-only emission, e.g. a scroll/zoom/lasso-drag frame).
+                        var lastLayers: List<PageLayer>? = null
+                        var lastIds: Set<String> = emptySet()
                         combine(
-                            viewModel.finishedStrokes,
+                            viewModel.pageLayers,
                             viewModel.selection,
-                            viewModel.pageTransform,
-                        ) { strokes, sel, transform ->
-                            Triple(strokes, sel, transform)
-                        }.collect { (strokes, sel, transform) ->
-                            // Lay the dry view out at the full page size (in page-space units, so the
-                            // GPU scale below maps it to screen — zoom-ready), then apply the
-                            // page→screen transform as GPU properties every emission (cheap composite,
-                            // no redraw) — this is what makes the scroll track the gesture per-frame,
-                            // and centres the page in landscape (FA-20 B1/B2).
+                            viewModel.documentTransform,
+                            viewModel.documentHeightPx,
+                        ) { layers, sel, transform, docHeight ->
+                            DryLayerState(layers, sel?.ids ?: emptySet(), transform, docHeight)
+                        }.collect { (layers, selectedIds, transform, docHeight) ->
+                            // Lay the dry view out over the WHOLE document (page-space units, so the GPU
+                            // scale below maps it to screen — zoom-ready), then apply the document→screen
+                            // transform as GPU properties every emission (a cheap composite, no redraw) —
+                            // this is what makes scroll/zoom track per-frame and centres the page in
+                            // landscape (FA-20 B1/B2). One view renders every page of the document.
                             val pageScreenW = (rootView.width - 2 * transform.offsetX).coerceAtLeast(0f)
                             val scale = if (transform.scale != 0f) transform.scale else 1f
                             val pageSpaceW = pageScreenW / scale
-                            dryStrokesView.setPageSize(pageSpaceW, pageSpaceW * PageTransform.ASPECT_RATIO)
+                            val docHeightSpace = if (docHeight > 0f) docHeight else pageSpaceW * PageTransform.ASPECT_RATIO
+                            dryStrokesView.setViewSize(pageSpaceW, docHeightSpace)
                             dryStrokesView.setTransform(transform)
-                            val selectedIds = sel?.ids ?: emptySet()
-                            // setStrokes() invalidate()s, which repaints every dry stroke from scratch
-                            // via CanvasStrokeRenderer.draw. The combine also fires on every
-                            // transform-only emission (each lasso-drag frame updates selection.transform
-                            // but not the stroke list or the selected ids) — so calling setStrokes there
-                            // would redraw the whole page per frame. Gate it on a real change.
-                            if (strokes !== splitKeyStrokes || selectedIds != splitKeyIds) {
-                                splitKeyStrokes = strokes
-                                splitKeyIds = selectedIds
-                                dryStrokesView.setStrokes(
-                                    strokes.filterNot { it.id in selectedIds }.map { it.stroke },
-                                )
+                            // setLayers() invalidate()s, repainting every dry stroke; gate it on a real
+                            // change so a transform-only emission doesn't redraw the whole document.
+                            if (layers !== lastLayers || selectedIds != lastIds) {
+                                lastLayers = layers
+                                lastIds = selectedIds
+                                dryStrokesView.setLayers(layers, selectedIds)
                             }
                         }
                     }
@@ -257,6 +265,40 @@ private fun createInkView(
         },
     )
     return rootView
+}
+
+/** The combined dry-layer render inputs (FA-20), destructured in the collector. */
+private data class DryLayerState(
+    val layers: List<PageLayer>,
+    val selectedIds: Set<String>,
+    val transform: PageTransform,
+    val docHeight: Float,
+)
+
+/** Finger-pointer count, centroid, and mean spread from the centroid — the inputs a pinch needs (FA-20). */
+private class FingerSpan(val count: Int, val cx: Float, val cy: Float, val spread: Float)
+
+private fun fingerSpan(event: MotionEvent, excludeIndex: Int = -1): FingerSpan {
+    var sumX = 0f
+    var sumY = 0f
+    var n = 0
+    for (i in 0 until event.pointerCount) {
+        if (i == excludeIndex) continue
+        if (event.getToolType(i) != MotionEvent.TOOL_TYPE_FINGER) continue
+        sumX += event.getX(i)
+        sumY += event.getY(i)
+        n++
+    }
+    if (n == 0) return FingerSpan(0, 0f, 0f, 0f)
+    val cx = sumX / n
+    val cy = sumY / n
+    var spread = 0f
+    for (i in 0 until event.pointerCount) {
+        if (i == excludeIndex) continue
+        if (event.getToolType(i) != MotionEvent.TOOL_TYPE_FINGER) continue
+        spread += hypot(event.getX(i) - cx, event.getY(i) - cy)
+    }
+    return FingerSpan(n, cx, cy, spread / n)
 }
 
 private fun createTouchListener(
@@ -277,7 +319,15 @@ private fun createTouchListener(
     var scrollStartY = 0f
     var lastScrollY = 0f
     var lastScrollX = 0f
-    var scrollAxis = 0 // 0 = undecided, 1 = vertical (scroll), 2 = horizontal (page turn)
+    var scrollAxis = 0 // 0 = undecided, 1 = vertical (scroll), 2 = horizontal (page turn / pan)
+    // When the horizontal axis locks while zoomed in (page wider than the viewport) the drag PANS the
+    // page instead of turning it; captured once at lock so release knows not to spring a page turn.
+    var horizontalIsPan = false
+    // Two-finger pinch zoom (FA-20): tracks the previous finger spread + centroid between frames.
+    var pinching = false
+    var pinchPrevSpread = 0f
+    var pinchPrevCx = 0f
+    var pinchPrevCy = 0f
 
     return View.OnTouchListener { view, event ->
         // Track finger + S Pen-button gestures BEFORE the lasso bail-out, so they keep working in
@@ -306,6 +356,25 @@ private fun createTouchListener(
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                    // Pinch zoom (FA-20): two or more fingers → enter pinch mode, cancelling any nascent
+                    // finger stroke + single-finger scroll. Skipped while a stylus stroke is active.
+                    val span = fingerSpan(event)
+                    if (span.count >= 2 && (currentStrokeId == null || currentIsFinger)) {
+                        if (currentIsFinger && currentStrokeId != null) {
+                            currentStrokeId?.let { inProgressStrokesView.cancelStroke(it, event) }
+                        }
+                        currentPointerId = null
+                        currentStrokeId = null
+                        currentIsFinger = false
+                        erasing = false
+                        scrollPointerId = null
+                        scrollAxis = 0
+                        pinching = true
+                        pinchPrevSpread = span.spread
+                        pinchPrevCx = span.cx
+                        pinchPrevCy = span.cy
+                        return@OnTouchListener true
+                    }
                     // A second finger landing during a finger-drawn stroke means a multi-finger
                     // gesture is starting, not ink — cancel the nascent finger stroke so the tap
                     // leaves no mark (FA-19). Stylus strokes (a resting palm landing mid-stroke)
@@ -344,21 +413,31 @@ private fun createTouchListener(
                     if (erase) {
                         erasing = true
                         viewModel.beginEraseGesture() // one undo step per gesture
-                        viewModel.eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
+                        viewModel.eraseAtScreen(event.getX(pointerIndex), event.getY(pointerIndex))
                     } else {
                         // Pen down: hold off any prefix-/Q inactivity send until this stroke finishes,
                         // so the AI never answers mid-writing (and always gets the full question).
                         viewModel.onWritingStarted()
-                        // Capture in page coords: motionEventToWorldTransform maps the input from
-                        // screen → page space (undo the centring offset, add the scroll), so the
-                        // finished stroke lands at (x − offsetX, y + scroll). The wet stroke still
-                        // renders at the pen tip (motionEventToViewTransform = identity). FA-20.
-                        val t = viewModel.pageTransform.value
+                        // Capture in the target page's coords: find the page under the pen (FA-20
+                        // continuous document) and map screen → that page's space — undo its origin and
+                        // the zoom scale, so the finished stroke is stored in page space regardless of
+                        // scroll/zoom/which page. The wet stroke still renders at the pen tip
+                        // (motionEventToViewTransform = identity). A touch in a page gap is ignored.
+                        val hit = viewModel.pageHitAt(event.getY(pointerIndex))
+                        if (hit == null) {
+                            currentPointerId = null
+                            return@OnTouchListener true
+                        }
+                        viewModel.beginStrokeOnPage(hit.pageId)
+                        val invScale = if (hit.scale != 0f) 1f / hit.scale else 1f
                         currentStrokeId = inProgressStrokesView.startStroke(
                             event,
                             pointerId,
                             viewModel.penBrush,
-                            Matrix().apply { setTranslate(-t.offsetX, -t.offsetY) },
+                            Matrix().apply {
+                                setTranslate(-hit.originX, -hit.originY)
+                                postScale(invScale, invScale)
+                            },
                             Matrix(),
                         )
                     }
@@ -366,6 +445,23 @@ private fun createTouchListener(
                 }
 
                 MotionEvent.ACTION_MOVE -> {
+                    // Pinch zoom (FA-20): scale about the finger centroid + pan by its movement.
+                    if (pinching) {
+                        val span = fingerSpan(event)
+                        if (span.count >= 2 && span.spread > 0f && pinchPrevSpread > 0f) {
+                            viewModel.zoomAndPan(
+                                focalX = span.cx,
+                                focalY = span.cy,
+                                scaleFactor = span.spread / pinchPrevSpread,
+                                panDx = span.cx - pinchPrevCx,
+                                panDy = span.cy - pinchPrevCy,
+                            )
+                            pinchPrevSpread = span.spread
+                            pinchPrevCx = span.cx
+                            pinchPrevCy = span.cy
+                        }
+                        return@OnTouchListener true
+                    }
                     // A lone finger drag scrolls or swipes to turn pages (FA-20), before stylus
                     // handling. The axis locks after a small slop.
                     scrollPointerId?.let { sid ->
@@ -381,15 +477,23 @@ private fun createTouchListener(
                                     scrollAxis = locked
                                     lastScrollY = fy // start scroll/swipe from the lock point
                                     lastScrollX = fx
+                                    // When zoomed wider than the screen a horizontal drag PANS; only a
+                                    // fit-width page turns (horizontal mode) — captured for release.
+                                    horizontalIsPan = viewModel.canPanHorizontally()
                                 }
                             }
                             if (scrollAxis == 1) {
                                 viewModel.scrollBy(fy - lastScrollY)
                                 lastScrollY = fy
                             } else if (scrollAxis == 2) {
-                                // Live page-turn slide: the page follows the finger; release decides
-                                // whether it turns or springs back (FA-20).
-                                viewModel.swipeBy(fx - lastScrollX)
+                                val dx = fx - lastScrollX
+                                if (horizontalIsPan) {
+                                    viewModel.panBy(dx, 0f)
+                                } else {
+                                    // Live page-turn slide: the page follows the finger; release decides
+                                    // whether it turns or springs back (FA-20).
+                                    viewModel.swipeBy(dx)
+                                }
                                 lastScrollX = fx
                             }
                         }
@@ -401,7 +505,7 @@ private fun createTouchListener(
                     val pointerIndex = event.findPointerIndex(pointerId)
                     if (pointerIndex < 0) return@OnTouchListener true
                     if (erasing) {
-                        viewModel.eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
+                        viewModel.eraseAtScreen(event.getX(pointerIndex), event.getY(pointerIndex))
                     } else {
                         val strokeId = currentStrokeId ?: return@OnTouchListener true
                         inProgressStrokesView.addToStroke(event, pointerId, strokeId, predictedEvent)
@@ -410,11 +514,30 @@ private fun createTouchListener(
                 }
 
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                    // End a pinch once fewer than two fingers remain (FA-20).
+                    if (pinching) {
+                        val exclude = if (event.actionMasked == MotionEvent.ACTION_POINTER_UP) event.actionIndex else -1
+                        val remaining = fingerSpan(event, excludeIndex = exclude)
+                        if (remaining.count >= 2) {
+                            pinchPrevSpread = remaining.spread
+                            pinchPrevCx = remaining.cx
+                            pinchPrevCy = remaining.cy
+                        } else {
+                            pinching = false
+                            viewModel.endPinch()
+                            // Don't let a lingering finger start a scroll (avoid a jump); it will on a
+                            // fresh DOWN.
+                            scrollPointerId = null
+                            scrollAxis = 0
+                        }
+                        return@OnTouchListener true
+                    }
                     // Only finish when the tracked pointer lifts; a finger lifting is ignored.
                     val pointerId = event.getPointerId(event.actionIndex)
                     if (pointerId == scrollPointerId) {
-                        // Resolve a horizontal swipe: turn the page or spring back (FA-20).
-                        if (scrollAxis == 2) viewModel.releaseSwipe()
+                        // Resolve a horizontal swipe: turn the page or spring back (FA-20). A pan does
+                        // not turn pages, so it just ends.
+                        if (scrollAxis == 2 && !horizontalIsPan) viewModel.releaseSwipe()
                         scrollPointerId = null
                         scrollAxis = 0
                     }
@@ -437,7 +560,8 @@ private fun createTouchListener(
                     currentStrokeId = null
                     currentIsFinger = false
                     erasing = false
-                    if (scrollAxis == 2) viewModel.releaseSwipe() // spring an in-progress swipe back
+                    if (pinching) { pinching = false; viewModel.endPinch() }
+                    if (scrollAxis == 2 && !horizontalIsPan) viewModel.releaseSwipe() // spring an in-progress swipe back
                     scrollPointerId = null
                     scrollAxis = 0
                     true

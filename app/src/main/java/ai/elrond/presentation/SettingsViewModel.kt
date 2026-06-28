@@ -6,6 +6,7 @@ import ai.elrond.domain.AppAccent
 import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.StylusHoldTool
+import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.PenIconStyle
 import ai.elrond.domain.ToolSelectedTreatment
@@ -226,6 +227,14 @@ class SettingsViewModel @Inject constructor(
 
     fun setPaperStyle(style: PaperStyle) {
         viewModelScope.launch { repository.setPaperStyle(style) }
+    }
+
+    /** Default page scroll direction (Vertical-continuous / Horizontal-turn); FA-20. */
+    val pageNavigationMode: StateFlow<PageNavigationMode> = repository.pageNavigationMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PageNavigationMode.DEFAULT)
+
+    fun setPageNavigationMode(mode: PageNavigationMode) {
+        viewModelScope.launch { repository.setPageNavigationMode(mode) }
     }
 
     /** Editor note-tab layout (Attached vs Separate). */

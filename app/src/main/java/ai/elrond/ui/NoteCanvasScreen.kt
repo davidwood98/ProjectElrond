@@ -3,6 +3,7 @@ package ai.elrond.ui
 import android.content.res.Configuration
 import ai.elrond.presentation.AiUiState
 import ai.elrond.domain.CanvasTool
+import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PageViewOrientation
 import ai.elrond.ui.theme.LeapTheme
 import ai.elrond.presentation.CanvasViewModel
@@ -96,6 +97,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /** How long the unobtrusive page-count pill / orientation prompt stay before fading away (FA-20). */
@@ -144,6 +146,9 @@ fun NoteCanvasScreen(
     // Page → screen transform (FA-20): horizontal centring offset (margins in landscape) + vertical
     // scroll. The page is a fixed portrait sheet; this is the single source for placing it on screen.
     val pageTransform by viewModel.pageTransform.collectAsStateWithLifecycle()
+    // Document → screen transform (FA-20): anchored to page 1, drives the continuous multi-page paper.
+    val documentTransform by viewModel.documentTransform.collectAsStateWithLifecycle()
+    val pageWidthSpacePx by viewModel.pageWidthSpacePx.collectAsStateWithLifecycle()
     // The notebook's pages (FA-20) — drives the page indicator; a horizontal finger swipe turns pages.
     val notebookPages by viewModel.notebookPages.collectAsStateWithLifecycle()
     // The current notebook (all notebookPages share it) — for the active editor-tab highlight.
@@ -166,6 +171,7 @@ fun NoteCanvasScreen(
     val gridSpacing by viewModel.gridSpacing.collectAsStateWithLifecycle()
     val paperColor by viewModel.paperColor.collectAsStateWithLifecycle()
     val viewOrientation by viewModel.viewOrientation.collectAsStateWithLifecycle()
+    val pageNavigationMode by viewModel.pageNavigationMode.collectAsStateWithLifecycle()
     val penIconStyle by settingsViewModel.penIconStyle.collectAsStateWithLifecycle()
     val pageTitle by viewModel.pageTitle.collectAsStateWithLifecycle()
     val pageDateLabel by viewModel.pageDateLabel.collectAsStateWithLifecycle()
@@ -205,6 +211,18 @@ fun NoteCanvasScreen(
     // re-opens on that page; a fresh page when swiping past the last with content on the current one).
     LaunchedEffect(viewModel) {
         viewModel.pageTurnEvents.collect { id -> onOpenNote(id) }
+    }
+
+    // Pinch-zoom indicator (FA-20): a pill on the left showing the zoom %, accent-styled when on a
+    // snap target (100% / fit-width). It appears on each zoom change and fades 5s after the last one.
+    val zoomSnapped by viewModel.zoomSnapped.collectAsStateWithLifecycle()
+    var zoomPillPercent by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(viewModel) {
+        viewModel.zoomEvents.collectLatest { scale ->
+            zoomPillPercent = (scale * 100).roundToInt()
+            delay(AUTO_FADE_MILLIS)
+            zoomPillPercent = null
+        }
     }
 
     BoxWithConstraints(
@@ -251,20 +269,25 @@ fun NoteCanvasScreen(
         val titleTopPx = tabsTopPx + tabsBandHeightPx + titleGapPx
         val pageTopInsetPx = titleTopPx + titleBandHeightPx + pageTopGapPx
         LaunchedEffect(pageTopInsetPx) { viewModel.setPageTopInset(pageTopInsetPx) }
-        // Scroll derived from the transform (offsetY = pageTopInset − scroll); drives the title slide.
-        val headerScrollPx = (pageTopInsetPx - pageTransform.offsetY).coerceAtLeast(0f)
+        // The document scroll (pageTopInset − document origin) drives the title slide, independent of
+        // which page is open (FA-20).
+        val headerScrollPx = (pageTopInsetPx - documentTransform.offsetY).coerceAtLeast(0f)
         val sideStart = leftInset + 14.dp
         val sideEnd = rightInset + 14.dp
 
         // Paper background (Ruled / Plain / Dots) behind the transparent ink layers. The page is a
         // fixed portrait sheet centred on screen (margins in landscape) and scrolled — all from the
         // transform — so the paper sits exactly under the page-mapped ink.
+        val verticalMode = pageNavigationMode == PageNavigationMode.VERTICAL
         PaperBackground(
             paper = paperStyle,
-            transform = pageTransform,
+            transform = documentTransform,
             gridSpacing = gridSpacing,
             paperColor = paperColor,
             landscape = viewOrientation == PageViewOrientation.LANDSCAPE,
+            pageWidthSpacePx = pageWidthSpacePx,
+            pageCount = if (verticalMode) notebookPages.size.coerceAtLeast(1) else 1,
+            pageGapSpacePx = if (verticalMode) CanvasViewModel.VERTICAL_PAGE_GAP_PX else 0f,
             modifier = Modifier.fillMaxSize(),
         )
 
@@ -589,10 +612,12 @@ fun NoteCanvasScreen(
                 gridSpacing = gridSpacing,
                 paperColor = paperColor,
                 viewOrientation = viewOrientation,
+                pageNavigationMode = pageNavigationMode,
                 onPaperStyle = viewModel::setPaperStyle,
                 onGridSpacing = viewModel::setGridSpacing,
                 onPaperColor = viewModel::setPaperColor,
                 onViewOrientation = viewModel::setViewOrientation,
+                onPageNavigationMode = viewModel::setPageNavigationMode,
                 onDismiss = { showPageStyle = false },
             )
         }
@@ -698,6 +723,29 @@ fun NoteCanvasScreen(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     )
                 }
+            }
+        }
+
+        // Zoom indicator pill (FA-20): left-edge, shows the current zoom %, fades after 5s. When the
+        // zoom rests on a snap target (100% / fit-width) it gets an accent border + accent text — the
+        // visual cue that you've snapped.
+        zoomPillPercent?.let { percent ->
+            val accent = LeapTheme.tokens.accent
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = leftPad),
+                shape = MaterialTheme.shapes.large,
+                color = if (zoomSnapped) LeapTheme.tokens.accentSoft else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+                border = if (zoomSnapped) BorderStroke(1.5.dp, accent) else null,
+                shadowElevation = 2.dp,
+            ) {
+                Text(
+                    text = "$percent%",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (zoomSnapped) LeapTheme.tokens.accentStrong else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                )
             }
         }
 

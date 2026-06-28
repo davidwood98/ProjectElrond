@@ -2,6 +2,7 @@ package ai.elrond.ui
 
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.NotebookSummary
+import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PageTransform
 import ai.elrond.domain.PageViewOrientation
 import ai.elrond.domain.PaperColor
@@ -43,6 +44,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -70,7 +72,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -99,6 +100,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -143,6 +146,12 @@ fun PaperBackground(
     gridSpacing: Int = PaperStyle.DEFAULT_GRID_SPACING,
     paperColor: PaperColor = PaperColor.DEFAULT,
     landscape: Boolean = false,
+    /** Page-space sheet width; 0 falls back to deriving it from the centring margin (preview/tests). */
+    pageWidthSpacePx: Float = 0f,
+    /** Number of pages stacked in the continuous document (1 in horizontal mode; FA-20). */
+    pageCount: Int = 1,
+    /** Page-space margin break between stacked pages in vertical-continuous mode (FA-20). */
+    pageGapSpacePx: Float = 0f,
 ) {
     val sheet = paperColor.toSheetColor()
     val desk = Neutral100
@@ -151,69 +160,78 @@ fun PaperBackground(
     // Density 1→0.6× … 5→1.0× … 10→1.5× of the base spacing.
     val densityFactor = 0.5f + gridSpacing.coerceIn(PaperStyle.MIN_GRID_SPACING, PaperStyle.MAX_GRID_SPACING) * 0.1f
     Canvas(modifier = modifier.fillMaxSize().background(desk)) {
-        // The page rectangle on screen: left/top from the transform, width = the screen span between
-        // the two side margins, height its A-ratio extent for the orientation. (scale = 1 until zoom.)
-        // panX is the transient page-turn slide — it shifts the sheet's left but NOT the width (which
-        // derives from the symmetric centring margin), so the paper slides cleanly during a swipe.
+        val scale = if (transform.scale != 0f) transform.scale else 1f
+        // The sheet's on-screen width: from the page-space width × zoom when known (correct under
+        // zoom/pan), else the symmetric centring margin (the old fit-width path used by previews/tests).
+        // panX is the transient page-turn slide — it shifts the sheet's left but not its width.
+        val pageWidth =
+            if (pageWidthSpacePx > 0f) pageWidthSpacePx * scale
+            else (size.width - 2f * transform.offsetX).coerceAtLeast(0f)
         val pageLeft = transform.offsetX + transform.panX
-        val pageWidth = (size.width - 2f * transform.offsetX).coerceAtLeast(0f)
-        val pageTop = transform.offsetY // = -scroll
-        val pageHeight = if (landscape) pageWidth / PageTransform.ASPECT_RATIO else pageWidth * PageTransform.ASPECT_RATIO
         val pageRight = pageLeft + pageWidth
-        val pageBottom = pageTop + pageHeight
+        val pageHeight = if (landscape) pageWidth / PageTransform.ASPECT_RATIO else pageWidth * PageTransform.ASPECT_RATIO
+        val gap = pageGapSpacePx * scale
 
-        drawRect(color = sheet, topLeft = Offset(pageLeft, pageTop), size = Size(pageWidth, pageHeight))
+        // Draw each page of the continuous document, stacked with the margin break. Only sheets that
+        // intersect the viewport are painted.
+        for (i in 0 until pageCount.coerceAtLeast(1)) {
+            val pageTop = transform.offsetY + i * (pageHeight + gap)
+            val pageBottom = pageTop + pageHeight
+            if (pageBottom < 0f || pageTop > size.height) continue // off-screen — skip
 
-        // Lattice, clipped to the sheet and offset by the page scroll so it moves with the ink.
-        clipRect(left = pageLeft, top = pageTop, right = pageRight, bottom = pageBottom) {
-            when (paper) {
-                PaperStyle.PLAIN -> Unit
-                PaperStyle.DOTS -> {
-                    val step = 26.dp.toPx() * densityFactor
-                    val r = 1.4.dp.toPx()
-                    var y = pageTop + step
-                    while (y < pageBottom) {
+            drawRect(color = sheet, topLeft = Offset(pageLeft, pageTop), size = Size(pageWidth, pageHeight))
+
+            // Lattice, clipped to the sheet so it moves with the page.
+            clipRect(left = pageLeft, top = pageTop, right = pageRight, bottom = pageBottom) {
+                when (paper) {
+                    PaperStyle.PLAIN -> Unit
+                    PaperStyle.DOTS -> {
+                        val step = 26.dp.toPx() * densityFactor
+                        val r = 1.4.dp.toPx()
+                        var y = pageTop + step
+                        while (y < pageBottom) {
+                            var x = pageLeft + step
+                            while (x < pageRight) {
+                                drawCircle(color = mark, radius = r, center = Offset(x, y))
+                                x += step
+                            }
+                            y += step
+                        }
+                    }
+                    PaperStyle.RULED -> {
+                        val step = 34.dp.toPx() * densityFactor
+                        val w = 1.dp.toPx()
+                        var y = pageTop + step
+                        while (y < pageBottom) {
+                            drawLine(color = mark, start = Offset(pageLeft, y), end = Offset(pageRight, y), strokeWidth = w)
+                            y += step
+                        }
+                    }
+                    PaperStyle.GRID -> {
+                        val step = 28.dp.toPx() * densityFactor
+                        val w = 1.dp.toPx()
+                        var y = pageTop + step
+                        while (y < pageBottom) {
+                            drawLine(color = mark, start = Offset(pageLeft, y), end = Offset(pageRight, y), strokeWidth = w)
+                            y += step
+                        }
                         var x = pageLeft + step
                         while (x < pageRight) {
-                            drawCircle(color = mark, radius = r, center = Offset(x, y))
+                            drawLine(color = mark, start = Offset(x, pageTop), end = Offset(x, pageBottom), strokeWidth = w)
                             x += step
                         }
-                        y += step
-                    }
-                }
-                PaperStyle.RULED -> {
-                    val step = 34.dp.toPx() * densityFactor
-                    val w = 1.dp.toPx()
-                    var y = pageTop + step
-                    while (y < pageBottom) {
-                        drawLine(color = mark, start = Offset(pageLeft, y), end = Offset(pageRight, y), strokeWidth = w)
-                        y += step
-                    }
-                }
-                PaperStyle.GRID -> {
-                    val step = 28.dp.toPx() * densityFactor
-                    val w = 1.dp.toPx()
-                    var y = pageTop + step
-                    while (y < pageBottom) {
-                        drawLine(color = mark, start = Offset(pageLeft, y), end = Offset(pageRight, y), strokeWidth = w)
-                        y += step
-                    }
-                    var x = pageLeft + step
-                    while (x < pageRight) {
-                        drawLine(color = mark, start = Offset(x, pageTop), end = Offset(x, pageBottom), strokeWidth = w)
-                        x += step
                     }
                 }
             }
-        }
 
-        // Hairline page border so the sheet edge is visible against the desk.
-        drawRect(
-            color = border,
-            topLeft = Offset(pageLeft, pageTop),
-            size = Size(pageWidth, pageHeight),
-            style = Stroke(width = 1.dp.toPx()),
-        )
+            // Hairline page border so the sheet edge is visible against the desk.
+            drawRect(
+                color = border,
+                topLeft = Offset(pageLeft, pageTop),
+                size = Size(pageWidth, pageHeight),
+                style = Stroke(width = 1.dp.toPx()),
+            )
+        }
     }
 }
 
@@ -234,10 +252,12 @@ fun PageStyleDialog(
     gridSpacing: Int,
     paperColor: PaperColor,
     viewOrientation: PageViewOrientation,
+    pageNavigationMode: PageNavigationMode,
     onPaperStyle: (PaperStyle) -> Unit,
     onGridSpacing: (Int) -> Unit,
     onPaperColor: (PaperColor) -> Unit,
     onViewOrientation: (PageViewOrientation) -> Unit,
+    onPageNavigationMode: (PageNavigationMode) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val accent = LeapTheme.tokens.accent
@@ -285,6 +305,21 @@ fun PageStyleDialog(
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                     )
                     Text("Wide", style = MaterialTheme.typography.labelSmall, color = Neutral500)
+                }
+
+                PageStyleLabel("Scroll direction")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val modes = listOf(
+                        PageNavigationMode.VERTICAL to "Vertical",
+                        PageNavigationMode.HORIZONTAL to "Horizontal",
+                    )
+                    modes.forEach { (mode, label) ->
+                        FilterChip(
+                            selected = pageNavigationMode == mode,
+                            onClick = { onPageNavigationMode(mode) },
+                            label = { Text(label) },
+                        )
+                    }
                 }
 
                 PageStyleLabel("Orientation")
@@ -365,6 +400,7 @@ fun EditorHeader(
     modifier: Modifier = Modifier,
 ) {
     var editing by remember { mutableStateOf(false) }
+    val accent = LeapTheme.tokens.accent
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(13.dp))
@@ -372,6 +408,15 @@ fun EditorHeader(
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // The title renders identically whether viewing or editing — same Poppins ExtraBold
+        // headlineSmall, same colour, same position. Editing just swaps the Text for an unstyled
+        // BasicTextField with that exact TextStyle and NO box/border/background, so tapping the
+        // title turns it into a live cursor in place: the text never resizes and no input box
+        // appears around it (FA-20). Tap the title to start; tap away (focus loss) commits.
+        val titleStyle = MaterialTheme.typography.headlineSmall.merge(
+            // headlineSmall is Poppins; bump to ExtraBold for the bolder display look.
+            TextStyle(fontWeight = FontWeight.ExtraBold, color = LeapGrey),
+        )
         if (editing) {
             val focusRequester = remember { FocusRequester() }
             var text by remember(title) { mutableStateOf(title) }
@@ -379,10 +424,12 @@ fun EditorHeader(
             // composition Compose delivers an initial onFocusChanged(isFocused = false) before
             // requestFocus() runs — without this guard that closed the editor the instant it opened.
             var hasFocused by remember { mutableStateOf(false) }
-            OutlinedTextField(
+            BasicTextField(
                 value = text,
                 onValueChange = { text = it },
                 singleLine = true,
+                textStyle = titleStyle,
+                cursorBrush = SolidColor(accent),
                 modifier = Modifier
                     .widthIn(max = 320.dp)
                     .focusRequester(focusRequester)
@@ -405,18 +452,13 @@ fun EditorHeader(
             // target is only the title text (not a full-width strip), so it doesn't swallow S Pen
             // strokes that start elsewhere in the band.
             Text(
-                // headlineSmall is Poppins; bump to ExtraBold for the bolder display look.
                 text = title,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.ExtraBold,
-                color = LeapGrey,
+                style = titleStyle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .widthIn(max = 320.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable { editing = true }
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                    .clickable { editing = true },
             )
         }
         Spacer(Modifier.weight(1f))

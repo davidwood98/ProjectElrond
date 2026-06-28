@@ -25,6 +25,9 @@ import ai.elrond.domain.TriggerMode
 import ai.elrond.domain.UnitSystem
 import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.PageHit
+import ai.elrond.domain.PageLayer
+import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PageTransform
 import ai.elrond.domain.PageViewOrientation
 import ai.elrond.domain.PaperColor
@@ -141,6 +144,8 @@ class CanvasViewModel(
     stylusOnlyFlow: Flow<Boolean>? = null,
     /** Global default paper style — used when this notebook has no per-notebook override (FA-20). */
     globalPaperStyleFlow: Flow<PaperStyle>? = null,
+    /** Global default scroll direction — used when this notebook has no per-notebook override (FA-20). */
+    globalPageNavigationModeFlow: Flow<PageNavigationMode>? = null,
     /** Unit system the AI must use for measurements in answers; null keeps the default (Metric). */
     unitSystemFlow: Flow<UnitSystem>? = null,
     /** Lasso-move snap-back threshold (fraction of canvas size); null keeps the default. */
@@ -215,6 +220,7 @@ class CanvasViewModel(
         prefixNoPromptTimeoutMsFlow = settings.prefixNoPromptTimeoutMs,
         stylusOnlyFlow = settings.stylusOnly,
         globalPaperStyleFlow = settings.paperStyle,
+        globalPageNavigationModeFlow = settings.pageNavigationMode,
         unitSystemFlow = settings.unitSystem,
         lassoSnapBackThresholdFlow = settings.lassoSnapBackThreshold,
         lassoSnapBackEnabledFlow = settings.lassoSnapBackEnabled,
@@ -317,6 +323,27 @@ class CanvasViewModel(
     private val _notebookPages = MutableStateFlow<List<NotePage>>(emptyList())
     val notebookPages: StateFlow<List<NotePage>> = _notebookPages.asStateFlow()
 
+    /**
+     * The pages rendered as a continuous document (FA-20). In HORIZONTAL mode this is just the open
+     * page; in VERTICAL-continuous mode it is every page stacked with a margin break, each editable.
+     * The open page's strokes come from [_finishedStrokes]; the others from [otherPageStrokes].
+     */
+    private val _pageLayers = MutableStateFlow<List<PageLayer>>(emptyList())
+    val pageLayers: StateFlow<List<PageLayer>> = _pageLayers.asStateFlow()
+
+    /** Loaded dry strokes for the NON-open pages (vertical mode), keyed by page id. */
+    private val otherPageStrokes = mutableMapOf<String, List<CanvasStroke>>()
+
+    /** The page a wet stroke is being drawn on (set on pen-down via [beginStrokeOnPage]). */
+    private var pendingStrokePageId: String? = null
+
+    /** Guards against spawning multiple trailing blank pages before [_notebookPages] catches up. */
+    @Volatile
+    private var addingTrailingPage = false
+
+    /** True once the initial centre-on-open scroll has been applied (vertical mode). */
+    private var didInitialPageScroll = false
+
     /** The page open in this editor (its id), for the page indicator. */
     val currentPageId: String? get() = pageId
 
@@ -409,6 +436,20 @@ class CanvasViewModel(
     private var scrollPx: Float = 0f
 
     /**
+     * Pinch-zoom factor (FA-20). 1.0 = 100% = the page fills the shorter screen edge (the stored page
+     * space at 1:1). It multiplies [PageTransform.scale]; everything else (capture, eraser, lasso, AI
+     * notes, paper) already routes through the transform, so zoom is purely this factor + the centring/
+     * pan recompute. Clamped to [[MIN_ZOOM], [MAX_ZOOM]].
+     */
+    private var zoomScale: Float = 1f
+
+    /**
+     * Free horizontal pan (px) used only when the zoomed page is wider than the viewport; the page
+     * origin's screen x. Ignored (page re-centred) while the page fits. See [refreshPageTransform].
+     */
+    private var panXpx: Float = 0f
+
+    /**
      * Transient horizontal page-turn slide (px), folded into [PageTransform.offsetX] (FA-20). During a
      * horizontal finger swipe the page follows the finger; on release it either slides off and turns
      * (commit) or springs elastically back to 0. Always 0 at rest.
@@ -417,6 +458,14 @@ class CanvasViewModel(
 
     /** Drives the release animation (spring-back or slide-off) so a new swipe can cancel it. */
     private var swipeSettleJob: Job? = null
+
+    /** Pinch-zoom level for the on-screen zoom pill; emits the new scale on each user zoom change. */
+    private val _zoomEvents = MutableSharedFlow<Float>(extraBufferCapacity = 16)
+    val zoomEvents: SharedFlow<Float> = _zoomEvents.asSharedFlow()
+
+    /** True while the current zoom sits on a snap target (100% / fit-width) — drives the accent indicator. */
+    private val _zoomSnapped = MutableStateFlow(true)
+    val zoomSnapped: StateFlow<Boolean> = _zoomSnapped.asStateFlow()
 
     /**
      * The single source of truth mapping the page's logical coordinate space ⇄ screen pixels (FA-20):
@@ -428,6 +477,22 @@ class CanvasViewModel(
      */
     private val _pageTransform = MutableStateFlow(PageTransform(scale = 1f, offsetX = 0f, offsetY = 0f))
     val pageTransform: StateFlow<PageTransform> = _pageTransform.asStateFlow()
+
+    /**
+     * The DOCUMENT → screen transform (FA-20): like [pageTransform] but anchored to the document top
+     * (page 1), not the open page. Drives the continuous multi-page dry-ink + paper rendering, which
+     * place each page at `offsetY + page.docTopPx · scale`.
+     */
+    private val _documentTransform = MutableStateFlow(PageTransform(scale = 1f, offsetX = 0f, offsetY = 0f))
+    val documentTransform: StateFlow<PageTransform> = _documentTransform.asStateFlow()
+
+    /** Total document height in page-space px (one page in horizontal mode; all pages + gaps in vertical). */
+    private val _documentHeightPx = MutableStateFlow(0f)
+    val documentHeightPx: StateFlow<Float> = _documentHeightPx.asStateFlow()
+
+    /** Page sheet width in page-space px (the fixed A-ratio sheet width); drives the paper rendering. */
+    private val _pageWidthSpacePx = MutableStateFlow(0f)
+    val pageWidthSpacePx: StateFlow<Float> = _pageWidthSpacePx.asStateFlow()
 
     /** Lasso-move snap-back threshold (fraction of canvas size), kept in sync with settings. */
     @Volatile
@@ -479,6 +544,9 @@ class CanvasViewModel(
     init {
         globalPaperStyleFlow?.let { flow ->
             viewModelScope.launch { flow.collect { globalPaperStyle = it; refreshPageStyle() } }
+        }
+        globalPageNavigationModeFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { globalPageNavigationMode = it; refreshPageStyle() } }
         }
         triggerCommandFlow?.let { flow ->
             viewModelScope.launch { flow.collect { triggerCommand = it } }
@@ -553,7 +621,15 @@ class CanvasViewModel(
                             coverPage = pages.minByOrNull { it.pageNumber } ?: page
                             _pageDateLabel.value = formatPageDate((coverPage ?: page).createdAt)
                             refreshTitle()
+                            addingTrailingPage = false // the page set caught up; allow another auto-add
+                            // Load the other pages' strokes for continuous vertical rendering, then
+                            // rebuild the document layers + apply the initial centre-on-open scroll.
+                            loadOtherPages(pages)
                         }
+                    }
+                    // Keep the open page's layer in sync as its strokes change (draw / erase / undo).
+                    viewModelScope.launch {
+                        _finishedStrokes.collect { rebuildPageLayers() }
                     }
                     // Track the notebook's per-notebook page-style overrides + its name (FA-20).
                     viewModelScope.launch {
@@ -602,6 +678,10 @@ class CanvasViewModel(
     @Volatile
     private var globalPaperStyle: PaperStyle = PaperStyle.DEFAULT
 
+    /** Global default scroll direction, kept current; used when this notebook has no override. */
+    @Volatile
+    private var globalPageNavigationMode: PageNavigationMode = PageNavigationMode.DEFAULT
+
     /** The current notebook (its page-style overrides), or null until loaded. */
     private var currentNotebook: Notebook? = null
 
@@ -621,6 +701,13 @@ class CanvasViewModel(
     /** This notebook's page orientation (PORTRAIT default / LANDSCAPE); drives the page geometry. */
     val viewOrientation: StateFlow<PageViewOrientation> = _viewOrientation.asStateFlow()
 
+    private val _pageNavigationMode = MutableStateFlow(PageNavigationMode.DEFAULT)
+    /**
+     * Effective scroll direction for this notebook (per-notebook override else the global default).
+     * VERTICAL = continuous multi-page scroll; HORIZONTAL = discrete swipe-to-turn pages (FA-20).
+     */
+    val pageNavigationMode: StateFlow<PageNavigationMode> = _pageNavigationMode.asStateFlow()
+
     /** Re-resolves the effective page style from the loaded notebook + the global default. */
     private fun refreshPageStyle() {
         val nb = currentNotebook
@@ -628,11 +715,20 @@ class CanvasViewModel(
         _gridSpacing.value = (nb?.gridSpacing ?: PaperStyle.DEFAULT_GRID_SPACING)
             .coerceIn(PaperStyle.MIN_GRID_SPACING, PaperStyle.MAX_GRID_SPACING)
         _paperColor.value = nb?.paperColor ?: PaperColor.DEFAULT
+        val newMode = nb?.pageNavigationMode ?: globalPageNavigationMode
+        val modeChanged = newMode != _pageNavigationMode.value
+        _pageNavigationMode.value = newMode
         val orientation = nb?.viewOrientation ?: PageViewOrientation.DEFAULT
         if (orientation != _viewOrientation.value) {
             _viewOrientation.value = orientation
             // Orientation changes the page aspect → recompute the page size + transform.
             recomputePageSize()
+            scrollBy(0f)
+        }
+        if (modeChanged) {
+            // Switching to vertical needs the other pages loaded; either way the document re-lays out.
+            if (newMode == PageNavigationMode.VERTICAL) loadOtherPages(_notebookPages.value)
+            else rebuildPageLayers()
             scrollBy(0f)
         }
     }
@@ -651,16 +747,21 @@ class CanvasViewModel(
     fun setViewOrientation(orientation: PageViewOrientation) =
         updatePageStyle(viewOrientation = orientation)
 
+    /** Sets this notebook's scroll direction (per-notebook override; FA-20). */
+    fun setPageNavigationMode(mode: PageNavigationMode) =
+        updatePageStyle(pageNavigationMode = mode)
+
     private fun updatePageStyle(
         paperStyle: PaperStyle? = null,
         gridSpacing: Int? = null,
         paperColor: PaperColor? = null,
         viewOrientation: PageViewOrientation? = null,
+        pageNavigationMode: PageNavigationMode? = null,
     ) {
         val repo = repository ?: return
         val nb = notebookId ?: return
         viewModelScope.launch {
-            repo.updateNotebookPageStyle(nb, paperStyle, gridSpacing, paperColor, viewOrientation)
+            repo.updateNotebookPageStyle(nb, paperStyle, gridSpacing, paperColor, viewOrientation, pageNavigationMode)
         }
     }
 
@@ -689,6 +790,10 @@ class CanvasViewModel(
         recomputePageSize()
         // Re-clamp the scroll if the viewport grew (e.g. rotation) and refresh the transform.
         scrollBy(0f)
+        // The page geometry changed → re-lay out the vertical document and apply the centre-on-open
+        // scroll once the size is first known (page links open centred on their page; FA-20).
+        rebuildPageLayers()
+        applyInitialPageScroll()
     }
 
     /**
@@ -706,11 +811,36 @@ class CanvasViewModel(
         }
     }
 
-    /** On-screen height of the page sheet (its A-ratio height for the current orientation). */
+    /**
+     * On-screen height of one page sheet at 100% (its A-ratio height for the current orientation). The
+     * zoom factor is applied by callers where needed; the per-page sheet stays a fixed A-ratio.
+     */
     private fun pageContentHeightPx(): Float = when (_viewOrientation.value) {
         PageViewOrientation.LANDSCAPE -> pageWidthPx / PageTransform.ASPECT_RATIO
         else -> pageWidthPx * PageTransform.ASPECT_RATIO
     }
+
+    /**
+     * Total scrollable content height at 100% (page-space px). In horizontal mode (and until the
+     * vertical multi-page document is active) this is a single page; vertical-continuous mode overrides
+     * it to span all pages with a margin break between them (see [verticalDocumentHeightPx]).
+     */
+    private fun documentContentHeightPx(): Float =
+        if (_pageNavigationMode.value == PageNavigationMode.VERTICAL) verticalDocumentHeightPx()
+        else pageContentHeightPx()
+
+    /**
+     * Height of the continuous vertical document at 100% (page-space px): every page stacked with a
+     * [VERTICAL_PAGE_GAP_PX] margin break between them (FA-20). The page-turn swipe is disabled in this
+     * mode; you scroll through all pages instead.
+     */
+    private fun verticalDocumentHeightPx(): Float {
+        val count = _notebookPages.value.size.coerceAtLeast(1)
+        return count * pageContentHeightPx() + (count - 1) * VERTICAL_PAGE_GAP_PX
+    }
+
+    /** Page-space top of page [index] within the vertical document (0-based; FA-20). */
+    private fun verticalPageTop(index: Int): Float = index * (pageContentHeightPx() + VERTICAL_PAGE_GAP_PX)
 
     /**
      * Screen Y of the page top at scroll 0 — i.e. the page starts BELOW the title/header band, which
@@ -726,36 +856,255 @@ class CanvasViewModel(
     }
 
     /**
-     * Recomputes [pageTransform] from the page width, centring offset, the top inset and scroll. The
-     * page is centred horizontally and starts at [pageTopInsetPx] (below the header band), shifted up
-     * by the scroll — so scrolling slides the title away and docks the page under the toolbar.
+     * Recomputes [pageTransform] from the page width × [zoomScale], the horizontal placement, the top
+     * inset and scroll. The page is centred horizontally when it fits the viewport; when zoomed wider
+     * than the viewport it is placed by the free horizontal pan ([panXpx]), clamped so an edge can't be
+     * dragged into the page. Vertically it docks at [pageTopInsetPx] and is shifted up by the scroll.
      */
     private fun refreshPageTransform() {
-        val centring = ((canvasWidthPx - pageWidthPx) / 2f).coerceAtLeast(0f)
+        val scaledPageW = pageWidthPx * zoomScale
+        val offsetX = if (pageWidthPx <= 0f || scaledPageW <= canvasWidthPx) {
+            ((canvasWidthPx - scaledPageW) / 2f).coerceAtLeast(0f)
+        } else {
+            panXpx.coerceIn(canvasWidthPx - scaledPageW, 0f)
+        }
+        // The transform stays anchored to the OPEN page so all single-page features (erase, lasso, AI
+        // notes, /Q) keep working unchanged; the document origin is offsetY − primaryDocTop·scale, and
+        // every other page is placed relative to the open page via its layer's docTopPx (FA-20).
+        val documentOriginY = pageTopInsetPx - scrollPx
+        _documentHeightPx.value = documentContentHeightPx()
+        _pageWidthSpacePx.value = pageWidthPx
+        _documentTransform.value = PageTransform(
+            scale = zoomScale,
+            offsetX = offsetX,
+            offsetY = documentOriginY,
+            panX = swipeOffsetX,
+        )
+        // pageTransform IS documentTransform shifted down by the open page's doc-top, so every existing
+        // single-page consumer (erase / lasso / AI notes / /Q) keeps working against the open page.
         _pageTransform.value = PageTransform(
-            scale = 1f,
-            offsetX = centring,
-            offsetY = pageTopInsetPx - scrollPx,
+            scale = zoomScale,
+            offsetX = offsetX,
+            offsetY = documentOriginY + primaryDocTopPx() * zoomScale,
             panX = swipeOffsetX,
         )
     }
 
+    /** Page-space top of the OPEN page within the vertical document (0 in horizontal mode). */
+    private fun primaryDocTopPx(): Float =
+        if (_pageNavigationMode.value == PageNavigationMode.VERTICAL) {
+            verticalPageTop(_notebookPages.value.indexOfFirst { it.id == pageId }.coerceAtLeast(0))
+        } else {
+            0f
+        }
+
+    /** Largest valid vertical scroll (px): scroll until the document bottom reaches the viewport bottom. */
+    private fun maxScrollPx(): Float =
+        (pageTopInsetPx + documentContentHeightPx() * zoomScale - canvasHeightPx).coerceAtLeast(0f)
+
     /**
-     * Scrolls the page vertically by a finger-drag delta (px), clamped to the page bounds (FA-20).
-     * The page height is the fixed-width A-ratio height (width × √2); content above the viewport top
-     * is at scroll &gt; 0. Also called with 0 to re-clamp + refresh the transform after a size change.
+     * Scrolls vertically by a finger-drag delta (px), clamped to the document bounds (FA-20). In
+     * horizontal mode that's one page; in vertical-continuous mode it spans every page. Also called with
+     * 0 to re-clamp + refresh the transform after a size/zoom/page-set change.
      */
     fun scrollBy(dragDeltaY: Float) {
         if (pageWidthPx <= 0f) {
             refreshPageTransform()
             return
         }
-        // The page starts at the top inset and is its content tall; allow scrolling until the bottom
-        // edge reaches the viewport bottom (the inset's worth of title scrolls away too).
-        val maxScroll = (pageTopInsetPx + pageContentHeightPx() - canvasHeightPx).coerceAtLeast(0f)
-        scrollPx = (scrollPx - dragDeltaY).coerceIn(0f, maxScroll)
+        scrollPx = (scrollPx - dragDeltaY).coerceIn(0f, maxScrollPx())
         refreshPageTransform()
     }
+
+    // ── Pinch zoom (FA-20) ────────────────────────────────────────────────────────────────────
+
+    /** True when the zoomed page is wider than the viewport, so a horizontal drag should pan it. */
+    fun canPanHorizontally(): Boolean = pageWidthPx > 0f && pageWidthPx * zoomScale > canvasWidthPx + 0.5f
+
+    /**
+     * Applies one frame of a pinch gesture: scales by [scaleFactor] about the focal screen point
+     * ([focalX], [focalY]) and pans by ([panDx], [panDy]) (the focal's movement between frames), so the
+     * page content under the fingers stays put. Clamped to [[MIN_ZOOM], [MAX_ZOOM]].
+     */
+    fun zoomAndPan(focalX: Float, focalY: Float, scaleFactor: Float, panDx: Float, panDy: Float) {
+        if (pageWidthPx <= 0f) return
+        val oldScale = zoomScale
+        val newScale = (oldScale * scaleFactor).coerceIn(MIN_ZOOM, MAX_ZOOM)
+        val eff = if (oldScale != 0f) newScale / oldScale else 1f
+        // Current page origin on screen, then pan, then scale about the focal point.
+        val t = _pageTransform.value
+        val pannedX = t.offsetX + panDx
+        val pannedY = t.offsetY + panDy
+        panXpx = focalX + (pannedX - focalX) * eff
+        scrollPx = pageTopInsetPx - (focalY + (pannedY - focalY) * eff)
+        zoomScale = newScale
+        scrollPx = scrollPx.coerceIn(0f, maxScrollPx())
+        refreshPageTransform()
+        emitZoom()
+    }
+
+    /** Pans the zoomed page by a screen delta (single-finger drag when zoomed wider than the viewport). */
+    fun panBy(dx: Float, dy: Float) {
+        if (pageWidthPx <= 0f) return
+        panXpx = _pageTransform.value.offsetX + dx
+        scrollPx = (scrollPx - dy).coerceIn(0f, maxScrollPx())
+        refreshPageTransform()
+    }
+
+    /**
+     * Ends a pinch: if the zoom is within [ZOOM_SNAP_THRESHOLD] of a snap target (100% or fit-width)
+     * it snaps exactly to it (FA-20). Always refreshes the snapped indicator.
+     */
+    fun endPinch() {
+        val target = zoomSnapTargets().minByOrNull { abs(it - zoomScale) }
+        if (target != null && abs(target - zoomScale) <= ZOOM_SNAP_THRESHOLD * target) {
+            zoomScale = target
+            scrollPx = scrollPx.coerceIn(0f, maxScrollPx())
+            refreshPageTransform()
+            _zoomEvents.tryEmit(zoomScale) // update the pill to the snapped %
+        }
+        _zoomSnapped.value = isOnSnapTarget()
+    }
+
+    /**
+     * Zoom snap targets: 100% (page at its portrait width) and fit-width (page fills the current screen
+     * width). In portrait both coincide at 1.0; in landscape fit-width is the wider √2× (FA-20).
+     */
+    private fun zoomSnapTargets(): List<Float> {
+        if (pageWidthPx <= 0f || canvasWidthPx <= 0f) return listOf(1f)
+        val fit = canvasWidthPx / pageWidthPx
+        return listOf(1f, fit).map { it.coerceIn(MIN_ZOOM, MAX_ZOOM) }.distinct()
+    }
+
+    private fun isOnSnapTarget(): Boolean = zoomSnapTargets().any { abs(it - zoomScale) < ZOOM_SNAP_EPSILON }
+
+    private fun emitZoom() {
+        _zoomSnapped.value = isOnSnapTarget()
+        _zoomEvents.tryEmit(zoomScale)
+    }
+
+    // ── Vertical continuous multi-page document (FA-20) ─────────────────────────────────────────
+    // In VERTICAL mode the editor renders every page of the notebook stacked with a margin break and
+    // lets the user write on whichever page the pen is over. The open page ([pageId]) keeps the full
+    // single-page feature set (undo/redo, /Q, lasso, thumbnails); the other pages support draw + erase
+    // + autosave (their undo/AI/lasso is a documented follow-up). HORIZONTAL mode is unchanged — one
+    // page, route-nav swipe to turn.
+
+    /** Loads the non-open pages' strokes (vertical mode) then rebuilds the document + centres the open page. */
+    private fun loadOtherPages(pages: List<NotePage>) {
+        val repo = repository ?: return
+        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) {
+            rebuildPageLayers()
+            return
+        }
+        viewModelScope.launch {
+            pages.forEach { p ->
+                if (p.id != pageId && !otherPageStrokes.containsKey(p.id)) {
+                    otherPageStrokes[p.id] = runCatching { repo.loadStrokes(p.id) }.getOrDefault(emptyList())
+                }
+            }
+            // Drop strokes for pages no longer in the notebook (deleted/pruned).
+            val ids = pages.mapTo(HashSet()) { it.id }
+            otherPageStrokes.keys.retainAll { it in ids }
+            rebuildPageLayers()
+            applyInitialPageScroll()
+        }
+    }
+
+    /** Rebuilds [_pageLayers] from the current pages + each page's strokes (open page = [_finishedStrokes]). */
+    private fun rebuildPageLayers() {
+        val pages = _notebookPages.value
+        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) {
+            // Horizontal mode renders only the open page at the document origin.
+            val idx = pages.indexOfFirst { it.id == pageId }.coerceAtLeast(0)
+            _pageLayers.value = listOf(PageLayer(pageId ?: "", idx, 0f, _finishedStrokes.value))
+            return
+        }
+        // docTopPx is the page's absolute top within the document (≥ 0); the renderer/hit-test place
+        // each page at documentTransform.offsetY + docTopPx·scale.
+        _pageLayers.value = pages.mapIndexed { index, p ->
+            val strokes = if (p.id == pageId) _finishedStrokes.value else otherPageStrokes[p.id].orEmpty()
+            PageLayer(p.id, index, verticalPageTop(index), strokes)
+        }
+    }
+
+    /** On first load in vertical mode, scrolls so the opened page is centred in the viewport (FA-20 links). */
+    private fun applyInitialPageScroll() {
+        if (didInitialPageScroll || _pageNavigationMode.value != PageNavigationMode.VERTICAL) return
+        if (pageWidthPx <= 0f || canvasHeightPx <= 0f) return // wait until the canvas size is known
+        val pages = _notebookPages.value
+        val idx = pages.indexOfFirst { it.id == pageId }
+        if (idx < 0) return
+        didInitialPageScroll = true
+        if (idx == 0) return // page 1 already opens at the top
+        scrollToPageCentered(idx)
+    }
+
+    /** Scrolls so page [index] sits centred in the visible canvas (vertical mode). */
+    private fun scrollToPageCentered(index: Int) {
+        val pageTop = verticalPageTop(index) * zoomScale
+        val pageH = pageContentHeightPx() * zoomScale
+        val viewportH = (canvasHeightPx - pageTopInsetPx).coerceAtLeast(0f)
+        val target = pageTop - (viewportH - pageH) / 2f
+        scrollPx = target.coerceIn(0f, maxScrollPx())
+        refreshPageTransform()
+    }
+
+    /**
+     * The page under a screen point and its on-screen placement, for routing a pen/eraser touch (FA-20).
+     * Horizontal mode always returns the open page; vertical mode finds the page whose band contains
+     * [screenY] (null in a gap so a stray mark in the margin is ignored).
+     */
+    fun pageHitAt(screenY: Float): PageHit? {
+        val t = _documentTransform.value
+        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) {
+            return pageId?.let { PageHit(it, t.offsetX, t.offsetY, t.scale) }
+        }
+        val pageH = pageContentHeightPx() * t.scale
+        _pageLayers.value.forEach { layer ->
+            val top = t.offsetY + layer.docTopPx * t.scale
+            if (screenY in top..(top + pageH)) return PageHit(layer.pageId, t.offsetX, top, t.scale)
+        }
+        return null
+    }
+
+    /** Records which page the next finished wet stroke belongs to (set by the ink view on pen-down). */
+    fun beginStrokeOnPage(targetPageId: String?) {
+        pendingStrokePageId = targetPageId
+    }
+
+    /** Appends finished strokes to a NON-open page (vertical mode) and autosaves it. */
+    private fun onStrokesFinishedOnPage(targetPageId: String, strokes: Collection<Stroke>) {
+        if (strokes.isEmpty()) return
+        val current = otherPageStrokes[targetPageId].orEmpty()
+        val updated = current + strokes.map { CanvasStroke(newStrokeId(), it) }
+        otherPageStrokes[targetPageId] = updated
+        rebuildPageLayers()
+        saveExtraPage(targetPageId, updated)
+        ensureTrailingBlankPage()
+    }
+
+    private fun saveExtraPage(targetPageId: String, strokes: List<CanvasStroke>) {
+        val repo = repository ?: return
+        viewModelScope.launch { runCatching { repo.replaceStrokes(targetPageId, strokes) } }
+    }
+
+    /**
+     * Vertical mode: once the last page has any ink, make sure a trailing blank page exists so the user
+     * can always keep scrolling/writing into a fresh sheet. Guarded so it adds at most one at a time.
+     */
+    private fun ensureTrailingBlankPage() {
+        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL || addingTrailingPage) return
+        val repo = repository ?: return
+        val nb = notebookId ?: return
+        val last = _notebookPages.value.lastOrNull() ?: return
+        if (!pageHasStrokes(last.id)) return
+        addingTrailingPage = true
+        viewModelScope.launch { runCatching { repo.addPage(nb) } }
+    }
+
+    private fun pageHasStrokes(id: String): Boolean =
+        if (id == pageId) _finishedStrokes.value.isNotEmpty() else otherPageStrokes[id]?.isNotEmpty() == true
 
     /** Opens a specific page of this notebook (FA-20 page index). */
     fun goToPage(targetPageId: String) {
@@ -862,8 +1211,12 @@ class CanvasViewModel(
         }
     }
 
-    /** Live horizontal page-turn slide: the page follows the finger by [dxScreen] px (FA-20). */
+    /**
+     * Live horizontal page-turn slide: the page follows the finger by [dxScreen] px (FA-20). No-op in
+     * VERTICAL-continuous mode, where pages are reached by scrolling, not by a horizontal swipe.
+     */
     fun swipeBy(dxScreen: Float) {
+        if (_pageNavigationMode.value == PageNavigationMode.VERTICAL) return
         swipeSettleJob?.cancel()
         val limit = if (pageWidthPx > 0f) pageWidthPx else canvasWidthPx
         swipeOffsetX = (swipeOffsetX + dxScreen).coerceIn(-limit, limit)
@@ -877,6 +1230,7 @@ class CanvasViewModel(
      * always resolves cleanly.
      */
     fun releaseSwipe() {
+        if (_pageNavigationMode.value == PageNavigationMode.VERTICAL) return
         swipeSettleJob?.cancel()
         swipeSettleJob = viewModelScope.launch {
             val forward = swipeOffsetX < 0f
@@ -991,10 +1345,30 @@ class CanvasViewModel(
             if (aiNotes != lastPersistedAiNotes) {
                 flushScope.launch { runCatching { repository.replaceAiNotes(pageId, aiNotes) } }
             }
+            pruneTrailingBlankPages(repository)
         }
         // Release the native handwriting recognizer held for this screen.
         runCatching { recognizer?.close() }
         super.onCleared()
+    }
+
+    /**
+     * On close, deletes the trailing blank pages the auto-next-page logic created but never used, so the
+     * page index / badge never fill with empties (FA-20). Keeps at least one page; stops at the first
+     * non-empty page from the end. The open page is kept if it has any AI notes even with no strokes.
+     */
+    private fun pruneTrailingBlankPages(repository: NoteRepository) {
+        val pages = _notebookPages.value
+        if (pages.size <= 1) return
+        val openHasAiNotes = _aiNotes.value.any { !it.isError }
+        val toDelete = mutableListOf<String>()
+        for (p in pages.reversed()) {
+            if (pages.size - toDelete.size <= 1) break // always keep at least one page
+            val empty = !pageHasStrokes(p.id) && !(p.id == pageId && openHasAiNotes)
+            if (empty) toDelete.add(p.id) else break
+        }
+        if (toDelete.isEmpty()) return
+        flushScope.launch { toDelete.forEach { runCatching { repository.deletePage(it) } } }
     }
 
     /** Pressure-sensitive pen brush for user ink. Lazy so JVM unit tests never touch ink natives. */
@@ -1113,12 +1487,22 @@ class CanvasViewModel(
     /** Called by the canvas when wet strokes complete and become dry strokes. */
     fun onStrokesFinished(strokes: Collection<Stroke>) {
         if (strokes.isEmpty()) return
+        // Vertical mode: a stroke drawn on another page of the continuous document routes to that page
+        // (draw + autosave + auto-next-page), not the open page's full single-page pipeline.
+        val target = pendingStrokePageId
+        pendingStrokePageId = null
+        if (target != null && target != pageId) {
+            onStrokesFinishedOnPage(target, strokes)
+            return
+        }
         pushUndoSnapshot(_finishedStrokes.value)
         clearSelection() // a fresh pen stroke isn't part of any lasso selection
         contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
         thumbnailDirty = true // ink changed — the note-card thumbnail is now stale
         val newStrokes = strokes.map { CanvasStroke(newStrokeId(), it) }
         _finishedStrokes.update { current -> current + newStrokes }
+        // Vertical mode: if the open page is the last page, ensure a fresh blank page follows it.
+        ensureTrailingBlankPage()
 
         // Prefix `/Q`: while listening, every new stroke is part of the question — track its id and
         // restart the inactivity timer (don't run the trigger detector; the timer drives the send).
@@ -1149,6 +1533,34 @@ class CanvasViewModel(
     /** Marks the start of an eraser gesture so all its removals undo as one step. */
     fun beginEraseGesture() {
         eraseGestureSnapshot = _finishedStrokes.value
+    }
+
+    /**
+     * Erases at a screen point, routing to whichever page is under it (FA-20 vertical document). The
+     * open page uses the full [eraseAt] (with undo); other pages erase + autosave directly. In
+     * horizontal mode this is always the open page.
+     */
+    fun eraseAtScreen(x: Float, y: Float, radius: Float = ERASER_RADIUS) {
+        val hit = pageHitAt(y)
+        if (hit == null || hit.pageId == pageId) {
+            eraseAt(x, y, radius)
+            return
+        }
+        val before = otherPageStrokes[hit.pageId].orEmpty()
+        if (before.isEmpty()) return
+        // Reuse the same screen→page mapping as the open-page eraser, via this hit page's transform.
+        val t = hit.transform()
+        val pageRadius = t.screenToPageLength(radius)
+        val box = ImmutableBox.fromCenterAndDimensions(
+            ImmutableVec(t.screenToPageX(x), t.screenToPageY(y)),
+            pageRadius * 2,
+            pageRadius * 2,
+        )
+        val after = before.filterNot { it.stroke.shape.computeCoverageIsGreaterThan(box, 0f) }
+        if (after.size == before.size) return
+        otherPageStrokes[hit.pageId] = after
+        rebuildPageLayers()
+        saveExtraPage(hit.pageId, after)
     }
 
     /** Erase any stroke whose geometry intersects the eraser position. */
@@ -2067,6 +2479,18 @@ class CanvasViewModel(
         private const val SWIPE_SLIDE_OFF_MS: Long = 160L
         private const val SWIPE_SNAP_BACK_MS: Long = 240L
         private const val SWIPE_FRAME_MS: Long = 16L
+
+        // ── Pinch zoom (FA-20) ──────────────────────────────────────────────────────────────
+        /** Pinch-zoom range: 50%–400% of the fit-to-shorter-edge baseline. */
+        const val MIN_ZOOM: Float = 0.5f
+        const val MAX_ZOOM: Float = 4f
+        /** A release within this fraction of a snap target (100% / fit-width) snaps to it. */
+        private const val ZOOM_SNAP_THRESHOLD: Float = 0.07f
+        /** Tolerance for the "currently on a snap" accent indicator. */
+        private const val ZOOM_SNAP_EPSILON: Float = 0.01f
+
+        /** The desk-coloured margin break between pages in the continuous vertical document (px). */
+        const val VERTICAL_PAGE_GAP_PX: Float = 28f
 
         /** Shown briefly when a re-triggered selection only holds already-captured items. */
         const val ALREADY_EXISTS_MESSAGE: String = "Already on your to-do list"

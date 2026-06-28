@@ -1,0 +1,32 @@
+package ai.elrond.domain
+
+/**
+ * One rendered page of a notebook in the editor's continuous document (FA-20 vertical scroll). In
+ * horizontal mode the document is a single layer; in vertical-continuous mode every page is a layer
+ * stacked top-to-bottom with a margin break between them.
+ *
+ * [docTopPx] is the page's top in **page-space** (unscaled) within the document; the renderer maps it
+ * to the screen through the live [PageTransform] (`screenTop = transform.offsetY + docTopPx ·
+ * transform.scale`). [strokes] are this page's dry strokes, stored in that page's own page-space.
+ */
+data class PageLayer(
+    val pageId: String,
+    val index: Int,
+    val docTopPx: Float,
+    val strokes: List<CanvasStroke>,
+)
+
+/**
+ * The page under a screen point and its on-screen placement (FA-20). Returned by the ViewModel so the
+ * ink view can map a pen/eraser touch into the right page's space and route the finished stroke there.
+ * `screen = page · `[scale]` + (`[originX]`, `[originY]`)`.
+ */
+data class PageHit(
+    val pageId: String,
+    val originX: Float,
+    val originY: Float,
+    val scale: Float,
+) {
+    /** The screen ⇄ page mapping for this hit page, so callers reuse [PageTransform.screenToPageX] etc. */
+    fun transform(): PageTransform = PageTransform(scale = scale, offsetX = originX, offsetY = originY)
+}

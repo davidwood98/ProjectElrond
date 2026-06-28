@@ -7,6 +7,7 @@ import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotebookSummary
 import ai.elrond.domain.notebookTitle
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PageViewOrientation
 import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
@@ -67,6 +68,7 @@ class NoteRepository(
         gridSpacing: Int? = null,
         paperColor: PaperColor? = null,
         viewOrientation: PageViewOrientation? = null,
+        pageNavigationMode: PageNavigationMode? = null,
     ) {
         val current = notebookDao.getById(notebookId) ?: return
         notebookDao.update(
@@ -75,6 +77,7 @@ class NoteRepository(
                 gridSpacing = gridSpacing ?: current.gridSpacing,
                 paperColor = paperColor?.name ?: current.paperColor,
                 viewOrientation = viewOrientation?.name ?: current.viewOrientation,
+                pageNavigationMode = pageNavigationMode?.name ?: current.pageNavigationMode,
                 modifiedAt = clock(),
             ),
         )

@@ -206,6 +206,50 @@ Compose-free ViewModel layer).
 Tests: `PageTransformTest` (+panX cases), new `FingerNavTest` (axis-lock decision), `CalendarViewModelTest`
 (+`notebooksForDay` added-vs-edited). New swipe/scroll/tabs/menu/fade UI is device-verify-only.
 
+## Vertical continuous scroll + pinch zoom + in-place title (2026-06-28) — DEVICE-VERIFY PENDING
+
+Four user-requested additions. **No schema change — DB stays v14.** `:app:testDebugUnitTest` +
+`:aibackend:test` green (incl. new `CanvasViewModelZoomTest`, 7); `:app:compileDebugKotlin` +
+`:app:compileDebugAndroidTestKotlin` build on the WSL Linux SDK. **The render/scroll/zoom/touch
+surfaces are device-verify-only (the mesh renderer is hardware-only)** — not yet run on a Galaxy Tab S.
+A `/simplify` pass (4 reviewers) ran over the diff; consensus fixes applied (see end). Scope was
+confirmed with the user up front (all three together; landscape = two snaps 100% + fit-width; zoom
+50–400%; auto-next-page; **horizontal mode unchanged**; vertical blends pages with a margin break,
+auto-next-page once the current page has strokes, prune on exit).
+
+- **In-place title editing.** `EditorChrome.EditorHeader` rename swapped from an `OutlinedTextField`
+  (visible box) to a `BasicTextField` using the *exact* title `TextStyle` (Poppins ExtraBold
+  `headlineSmall`, `LeapGrey`) with a transparent background, no border, accent cursor. Tapping the
+  title turns it into a cursor in place (no resize, no box); tap-off (focus loss) + IME Done commit.
+- **Pinch zoom (50–400%).** `PageTransform.scale` is now driven by a pinch gesture detected in
+  `InkCanvas` (`fingerSpan` → `CanvasViewModel.zoomAndPan` focal scale+pan; `endPinch` snaps). Magnetic
+  snaps: **100%** (page at portrait width) and **fit-width** (page fills the current screen width) —
+  in portrait they coincide; in landscape fit-width is the wider √2×. A left-edge **zoom pill** shows
+  the %, accent-styled when on a snap, fading 5s after the last change. When zoomed wider than the
+  viewport a single-finger horizontal drag pans (`panBy`/`canPanHorizontally`); the wet-ink world
+  transform now includes `1/scale` so drawing is correct under zoom. Pinch works in pen/eraser/hand
+  modes (not Lasso — follow-up).
+- **Scroll-direction setting.** `PageNavigationMode {VERTICAL, HORIZONTAL}` surfaced in BOTH the
+  per-notebook ⋮ → Page style dialog and global Settings (new `SettingsRepository.pageNavigationMode`
+  default VERTICAL), resolved per-notebook-override-else-global in `CanvasViewModel` (mirrors the
+  paper-style pattern).
+- **Vertical continuous multi-page scroll** (the Phase-3 hard part + the in-place-paging foundation).
+  In VERTICAL mode the editor renders every page of the notebook as a continuous document with a
+  desk-coloured **margin break** (`VERTICAL_PAGE_GAP_PX`) + hairline between pages; you write/erase on
+  whichever page the pen is over; a blank next page auto-creates once the current last page has ink;
+  trailing empties prune on close; page links open the notebook **scrolled to centre** the target page.
+  HORIZONTAL mode is **unchanged** (single page + route-nav swipe). Architecture: one `DryStrokesView`
+  + one `PaperBackground` now render N `PageLayer`s (the single-page case is the degenerate 1-layer
+  form); `documentTransform` (document-top anchored) drives rendering while `pageTransform` (open-page
+  anchored) keeps every existing single-page feature working unchanged. See the
+  `fa20-vertical-multipage-seam` memory for the open-page-vs-other-page stroke seam (other pages have
+  **no undo/AI/lasso yet** — the documented follow-up).
+- `/simplify` applied: `eraseAtScreen` reuses `PageTransform.screenTo*` via `PageHit.transform()`;
+  dropped the redundant `_verticalScrollPx` (derive from `documentTransform`); removed a double
+  `_zoomSnapped` write in `endPinch`. Skipped (justified): per-stroke `rebuildPageLayers` alloc (per
+  discrete action, not per frame), the `.toPx()` hoist in `PaperBackground` (1–2 visible pages), and
+  unifying the dual stroke model (deferred until other-page undo/AI forces it).
+
 ## Build status (commits on `fa-20-notebooks`)
 
 Phase 0 (`9c7cb23`), 1a (`e6c6723`), 1b-i/ii/iii (`48e1aee`/`62aa52e`/`d43fda9`), page index

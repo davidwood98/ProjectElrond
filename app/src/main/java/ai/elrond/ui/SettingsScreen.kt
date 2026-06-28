@@ -4,6 +4,7 @@ import ai.elrond.domain.AiColorMode
 import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.FingerGestureAction
+import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.StylusHoldTool
 import ai.elrond.domain.PenIconStyle
@@ -111,6 +112,7 @@ fun SettingsScreen(
     val penIconStyle by viewModel.penIconStyle.collectAsStateWithLifecycle()
     val appAccent by viewModel.appAccent.collectAsStateWithLifecycle()
     val paperStyle by viewModel.paperStyle.collectAsStateWithLifecycle()
+    val pageNavigationMode by viewModel.pageNavigationMode.collectAsStateWithLifecycle()
     val aiLoaderStyle by viewModel.aiLoaderStyle.collectAsStateWithLifecycle()
     val aiColorMode by viewModel.aiColorMode.collectAsStateWithLifecycle()
     val unitSystem by viewModel.unitSystem.collectAsStateWithLifecycle()
@@ -425,6 +427,29 @@ fun SettingsScreen(
                         selected = paperStyle == style,
                         onClick = { viewModel.setPaperStyle(style) },
                         label = { Text(style.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                    )
+                }
+            }
+
+            Text(
+                "Scroll direction",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+            Text(
+                "Vertical scrolls continuously between pages; horizontal turns one page at a time.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                listOf(
+                    PageNavigationMode.VERTICAL to "Vertical",
+                    PageNavigationMode.HORIZONTAL to "Horizontal",
+                ).forEach { (mode, label) ->
+                    FilterChip(
+                        selected = pageNavigationMode == mode,
+                        onClick = { viewModel.setPageNavigationMode(mode) },
+                        label = { Text(label) },
                     )
                 }
             }
