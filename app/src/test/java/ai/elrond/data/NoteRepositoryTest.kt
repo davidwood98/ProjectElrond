@@ -64,6 +64,20 @@ class NoteRepositoryTest {
     }
 
     @Test
+    fun `createNote creates a notebook and its first page in it`() = runTest {
+        val notebookSlot = slot<NotebookEntity>()
+        val pageSlot = slot<NotePageEntity>()
+        coEvery { notebookDao.insert(capture(notebookSlot)) } returns Unit
+        coEvery { pageDao.insert(capture(pageSlot)) } returns Unit
+
+        val page = repository.createNote()
+
+        // The first page belongs to the freshly created notebook, and that page is returned.
+        assertEquals(notebookSlot.captured.id, pageSlot.captured.notebookId)
+        assertEquals(pageSlot.captured.id, page.id)
+    }
+
+    @Test
     fun `renamePage touches modifiedAt`() = runTest {
         repository.renamePage("page-1", "New title")
 

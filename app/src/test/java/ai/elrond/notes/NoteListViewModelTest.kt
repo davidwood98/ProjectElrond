@@ -81,10 +81,9 @@ class NoteListViewModelTest {
     }
 
     @Test
-    fun `createNote bootstraps default notebook and reports new page id`() = runTest(dispatcher) {
+    fun `createNote creates a note and reports the new page id`() = runTest(dispatcher) {
         every { repository.observeTimeline() } returns flowOf(emptyList())
-        coEvery { repository.ensureDefaultNotebook() } returns Notebook("nb-1", "My Notes", 1L)
-        coEvery { repository.createPage("nb-1") } returns page("new-page")
+        coEvery { repository.createNote() } returns page("new-page")
         val viewModel = NoteListViewModel(repository, thumbnailCache)
 
         var openedId: String? = null

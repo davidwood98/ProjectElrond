@@ -60,11 +60,10 @@ class NoteListViewModel @Inject constructor(
         viewModelScope.launch { repository.renamePage(pageId, title.trim().ifEmpty { null }) }
     }
 
-    /** Creates a page in the default notebook and reports its id for navigation. */
+    /** Creates a new notebook with its first page and reports the page id for navigation (FA-20). */
     fun createNote(onCreated: (pageId: String) -> Unit) {
         viewModelScope.launch {
-            val notebook = repository.ensureDefaultNotebook()
-            val page = repository.createPage(notebookId = notebook.id)
+            val page = repository.createNote()
             onCreated(page.id)
         }
     }

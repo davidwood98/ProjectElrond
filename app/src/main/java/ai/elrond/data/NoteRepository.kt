@@ -55,6 +55,16 @@ class NoteRepository(
     fun observeTimeline(): Flow<List<NotePage>> =
         pageDao.observeTimeline().map { entities -> entities.map(NotePageEntity::toDomain) }
 
+    /**
+     * Creates a fresh notebook with its first page and returns that page (FA-20: each note is its own
+     * notebook). The page's timestamp-based title doubles as the notebook's display title, so no
+     * separate notebook title is stored.
+     */
+    suspend fun createNote(): NotePage {
+        val notebook = createNotebook(name = "")
+        return createPage(notebook.id)
+    }
+
     /** Creates a page; with no [customTitle] the page shows its timestamp-based title. */
     suspend fun createPage(notebookId: String, customTitle: String? = null): NotePage {
         val now = clock()

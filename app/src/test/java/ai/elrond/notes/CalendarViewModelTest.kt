@@ -98,8 +98,7 @@ class CalendarViewModelTest {
     fun `createNote bootstraps a notebook and reports the new page id`() = runTest(dispatcher) {
         every { repository.observeTimeline() } returns flowOf(emptyList())
         every { repository.observeEditEvents() } returns flowOf(emptyList())
-        coEvery { repository.ensureDefaultNotebook() } returns Notebook("nb", "My Notes", 1L)
-        coEvery { repository.createPage("nb") } returns page("new", "2026-06-10")
+        coEvery { repository.createNote() } returns page("new", "2026-06-10")
         val viewModel = CalendarViewModel(repository, zone)
 
         var created: String? = null

@@ -57,8 +57,7 @@ class CalendarViewModel(
 
     fun createNote(onCreated: (pageId: String) -> Unit) {
         viewModelScope.launch {
-            val notebook = repository.ensureDefaultNotebook()
-            val page = repository.createPage(notebookId = notebook.id)
+            val page = repository.createNote()
             onCreated(page.id)
         }
     }

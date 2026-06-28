@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SubjectEntity::class,
         NoteSubjectEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -253,6 +253,34 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v12 (FA-20) explodes the legacy single-notebook model: each existing note_page becomes its
+         * OWN notebook (id `nb-<pageId>`, display title copied from the page), then the old shared
+         * default notebook — now empty — is removed. Data-only (no schema change), so it is
+         * behaviour-preserving: the library lists pages via observeTimeline regardless of notebook.
+         * From here every note is its own notebook — the prerequisite for the multi-page editor.
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. One notebook per existing page (deterministic id derived from the page id).
+                db.execSQL(
+                    """
+                    INSERT INTO notebooks (id, name, createdAt, modifiedAt,
+                        pageNavigationMode, paperStyle, viewOrientation, templateId)
+                    SELECT 'nb-' || id, COALESCE(customTitle, ''), createdAt, modifiedAt,
+                        NULL, NULL, NULL, NULL
+                    FROM note_pages
+                    """.trimIndent(),
+                )
+                // 2. Repoint each page to its own new notebook.
+                db.execSQL("UPDATE note_pages SET notebookId = 'nb-' || id")
+                // 3. Drop notebooks that now have no pages (the old shared default).
+                db.execSQL(
+                    "DELETE FROM notebooks WHERE id NOT IN (SELECT DISTINCT notebookId FROM note_pages)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -265,6 +293,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
                     MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+                    MIGRATION_11_12,
                 ).build().also { instance = it }
             }
     }

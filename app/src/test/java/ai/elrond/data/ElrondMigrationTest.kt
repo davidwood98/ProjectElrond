@@ -38,6 +38,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_8_9,
         ElrondDatabase.MIGRATION_9_10,
         ElrondDatabase.MIGRATION_10_11,
+        ElrondDatabase.MIGRATION_11_12,
     )
 
     /**
@@ -61,11 +62,11 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v11_and_validates_final_schema() {
+    fun migrates_v1_to_v12_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v11 schema (incl. the FA-20
-        // notebook/page columns).
-        helper.runMigrationsAndValidate(TEST_DB, 11, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v12 schema (FA-20 notebook/page
+        // columns; v12 is a data-only explode, so its schema matches v11).
+        helper.runMigrationsAndValidate(TEST_DB, 12, true, *allMigrations).close()
     }
 
     @Test
@@ -207,6 +208,40 @@ class ElrondMigrationTest {
         assertEquals(1, rows.size)
         assertEquals("p1", rows[0].first)
         assertEquals(2L, rows[0].second) // epoch-day 2
+    }
+
+    @Test
+    fun migration_11_to_12_explodes_each_page_into_its_own_notebook() {
+        helper.createDatabase(TEST_DB, 11).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt, modifiedAt) VALUES ('def', 'My Notes', 1, 1)")
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, " +
+                    "lastOpenedAt, tags, contextSummary, pageNumber, isBookmarked) " +
+                    "VALUES ('p1', 'def', 'Note one', 10, 20, 20, '', NULL, 1, 0)",
+            )
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, " +
+                    "lastOpenedAt, tags, contextSummary, pageNumber, isBookmarked) " +
+                    "VALUES ('p2', 'def', NULL, 30, 40, 40, '', NULL, 1, 0)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 12, true, *allMigrations)
+
+        val pageNotebooks = mutableMapOf<String, String>()
+        db.query("SELECT id, notebookId FROM note_pages ORDER BY id").use { c ->
+            while (c.moveToNext()) pageNotebooks[c.getString(0)] = c.getString(1)
+        }
+        val notebookIds = mutableSetOf<String>()
+        db.query("SELECT id FROM notebooks").use { c ->
+            while (c.moveToNext()) notebookIds.add(c.getString(0))
+        }
+        db.close()
+
+        // Each page now owns its own notebook; the empty shared default ('def') is removed.
+        assertEquals("nb-p1", pageNotebooks["p1"])
+        assertEquals("nb-p2", pageNotebooks["p2"])
+        assertEquals(setOf("nb-p1", "nb-p2"), notebookIds)
     }
 
     private fun columnNames(db: SupportSQLiteDatabase, table: String): Set<String> {

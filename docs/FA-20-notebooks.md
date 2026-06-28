@@ -60,20 +60,32 @@ on the WSL SDK: `compileDebugKotlin` + migration-v11 + `PageTransform` tests gre
 > the UI is still page-centric would create an inconsistent half-state with no user benefit. Same end
 > state, cleaner commits, app runnable at every step.
 
-**Phase 1 — Notebook-centric navigation + horizontal swipe.** The behaviour flip: open a notebook
-(route `notebook/{notebookId}`), Library shows notebooks, **explode each note into its own notebook +
-re-key `note_subjects` → notebookId** (its own migration), notebook-scoped editor tabs/Recents, and a
-pager of per-page canvases wiring all interactions through `PageTransform`'s inverse (palm rejection,
-lasso, `/Q`, AI-note placement, popup clamping; wet ink via
-`InProgressStrokesView.motionEventToWorldTransform`). Stylus draws/lassos; finger swipe navigates only
-when finger-draw is OFF. Auto-create a page past the last; prune trailing empties on close. Open to
-last-viewed page. Zoom scale present but pinch gated off.
+**Phase 1a — Notebook-per-note foundation (DONE).** `MIGRATION_11_12` (data-only) explodes each
+existing note into its own notebook (`nb-<pageId>`) and drops the empty default; `NoteRepository.createNote()`
+creates a notebook + first page, and both create-note call sites (NoteListViewModel, CalendarViewModel) use
+it. **Behaviour-preserving** — the library still lists pages, the route stays `note/{pageId}`, the editor is
+unchanged. Establishes the invariant "every note is its own notebook" that the multi-page editor needs.
+Verified on the WSL SDK: compile + the migration-v12 explode test + create-note tests green; `12.json` exported.
 
-**Phase 2 — Page index + browser + link resolution.** Lightbox thumbnail grid (per-page WebP via
-extended `ThumbnailCache`): tap = nav; toolbar Select = multi-select (delete + bookmark);
-press-hold-drag = reorder (Select is a separate mode, so long-press isn't overloaded); manual +.
-Browser page-count badge; page-1 thumbnail. Todo links resolve live page number; calendar
-day-sheet drills to page.
+**Phase 1b — Horizontal-swipe paged canvas.** The editor opens the (cover) page's notebook and renders its
+pages as a pager; stylus draws/lassos, finger swipe navigates (disabled in finger-draw mode); auto-create a
+page past the last, prune trailing empties on close; open to last-viewed page; **all interactions wired
+through `PageTransform`'s inverse** (palm rejection, lasso, `/Q`, AI-note placement, popup clamping; wet ink
+via `InProgressStrokesView.motionEventToWorldTransform`); notebook-scoped tabs. The notebook's title = its
+cover page's title (becomes "the title above page 1"). Zoom scale present, pinch gated off. Device-verified.
+
+> **Decomposition note (vs. the original table):** the `note_subjects` re-key and "browser shows notebooks
+> with a page-count badge" moved from Phase 1 into **Phase 2**, matching the original plan's "browser badge +
+> link resolution" grouping — they are not prerequisites for the paged canvas and would be invisible churn
+> while every notebook holds exactly one page. The route deliberately stays `note/{pageId}` (the page to open;
+> the editor loads *that page's notebook*), so deep links and "open notebook scrolled to page X" work for free.
+
+**Phase 2 — Browser-as-notebooks + page index + link resolution.** Re-key `note_subjects`
+pageId → notebookId (its own migration) and switch the Library grid/tabs/filter to notebooks with a
+**page-count badge** + page-1 thumbnail (filing becomes per-notebook). Page-index lightbox grid (per-page
+WebP via extended `ThumbnailCache`): tap = nav; toolbar Select = multi-select (delete + bookmark);
+press-hold-drag = reorder (Select is a separate mode, so long-press isn't overloaded); manual +. Todo links
+resolve the live page number; calendar day-sheet drills Day → notebook → edited pages.
 
 **Phase 3 — Vertical scroll (hard part).** Windowed rendering (only on-screen ±1 pages get a live
 ink layer); wet-ink front-buffer translated by scroll offset. Thin rule line between pages, paper
