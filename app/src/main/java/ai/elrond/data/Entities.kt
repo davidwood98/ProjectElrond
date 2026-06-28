@@ -234,17 +234,18 @@ data class SubjectEntity(
 )
 
 /**
- * Note→subject membership (Subjects feature, DB v10). [pageId] is the primary key, so a note belongs
- * to **at most one** subject (file-explorer model); no row = unfiled. Both foreign keys cascade, so
- * deleting a note or a subject removes the membership (never the note itself via the subject side).
+ * Notebook→subject membership (Subjects feature; re-keyed from the page to the **notebook** in FA-20
+ * DB v13). [notebookId] is the primary key, so a notebook files into **at most one** subject
+ * (file-explorer model); no row = unfiled. Both foreign keys cascade, so deleting a notebook or a
+ * subject removes the membership (never the notebook's pages via the subject side).
  */
 @Entity(
     tableName = "note_subjects",
     foreignKeys = [
         ForeignKey(
-            entity = NotePageEntity::class,
+            entity = NotebookEntity::class,
             parentColumns = ["id"],
-            childColumns = ["pageId"],
+            childColumns = ["notebookId"],
             onDelete = ForeignKey.CASCADE,
         ),
         ForeignKey(
@@ -257,7 +258,7 @@ data class SubjectEntity(
     indices = [Index("subjectId")],
 )
 data class NoteSubjectEntity(
-    @PrimaryKey val pageId: String,
+    @PrimaryKey val notebookId: String,
     val subjectId: String,
 )
 

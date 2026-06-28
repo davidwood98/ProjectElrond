@@ -2,6 +2,7 @@ package ai.elrond.ui
 
 import ai.elrond.data.CalendarProviderType
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.NotebookSummary
 import ai.elrond.domain.TodoItem
 import ai.elrond.domain.TodoPriority
 import ai.elrond.domain.TodoStatus
@@ -190,13 +191,13 @@ private fun ViewOptionsButton() {
 
 // ─────────────────────────────────── Notes ───────────────────────────────────
 
-/** Per-card actions, bundled to keep [NotesGrid]/[NoteCardItem] signatures small (FA-16). */
+/** Per-card actions, bundled to keep [NotesGrid]/[NotebookCardItem] signatures small (FA-16). */
 private class NoteCardCallbacks(
     val onOpenNote: (String) -> Unit,
-    val onRename: (NotePage) -> Unit,
-    val onMove: (NotePage) -> Unit,
+    val onRename: (NotebookSummary) -> Unit,
+    val onMove: (NotebookSummary) -> Unit,
     /** Long-press the card OR the ⋮ Delete item — both open the delete confirmation. */
-    val onDelete: (NotePage) -> Unit,
+    val onDelete: (NotebookSummary) -> Unit,
     val onTapSubject: (String) -> Unit,
 )
 
@@ -210,8 +211,8 @@ fun NotesSection(
     eventsViewModel: EventsViewModel,
     subjectViewModel: SubjectViewModel,
 ) {
-    val notes by noteListViewModel.pages.collectAsStateWithLifecycle()
-    val recents by noteListViewModel.recentNotes.collectAsStateWithLifecycle()
+    val notebooks by noteListViewModel.notebooks.collectAsStateWithLifecycle()
+    val recents by noteListViewModel.recentNotebooks.collectAsStateWithLifecycle()
     val subjectsById by subjectViewModel.subjectsById.collectAsStateWithLifecycle()
     val noteSubjects by subjectViewModel.noteSubjects.collectAsStateWithLifecycle()
     val selectedSubjectId by subjectViewModel.selectedSubjectId.collectAsStateWithLifecycle()
@@ -222,9 +223,9 @@ fun NotesSection(
     // separate tab per orientation (the Activity recreates on rotation). A fixed key makes both
     // orientations read/write the one slot, so the current tab persists across rotation.
     var tab by rememberSaveable(key = "library.notesTab") { mutableStateOf(NotesTab.ALL) }
-    var deleteCandidate by remember { mutableStateOf<NotePage?>(null) }
-    var renameCandidate by remember { mutableStateOf<NotePage?>(null) }
-    var assignCandidate by remember { mutableStateOf<NotePage?>(null) }
+    var deleteCandidate by remember { mutableStateOf<NotebookSummary?>(null) }
+    var renameCandidate by remember { mutableStateOf<NotebookSummary?>(null) }
+    var assignCandidate by remember { mutableStateOf<NotebookSummary?>(null) }
 
     val callbacks = NoteCardCallbacks(
         onOpenNote = onOpenNote,
@@ -247,7 +248,7 @@ fun NotesSection(
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp),
             )
             HorizontalDivider(modifier = Modifier.padding(top = 10.dp))
-            val shown = notes.filter { noteSubjects[it.id] == selectedSubjectId }
+            val shown = notebooks.filter { noteSubjects[it.notebookId] == selectedSubjectId }
             if (shown.isEmpty()) {
                 PlaceholderState(
                     "No notes in this subject yet",
@@ -281,8 +282,8 @@ fun NotesSection(
                     // RECENTS = opened in the last 24h; UNFILED = notes with no subject; ALL = everything.
                     val shown = when (tab) {
                         NotesTab.RECENTS -> recents
-                        NotesTab.UNFILED -> notes.filter { it.id !in noteSubjects }
-                        else -> notes
+                        NotesTab.UNFILED -> notebooks.filter { it.notebookId !in noteSubjects }
+                        else -> notebooks
                     }
                     if (shown.isEmpty()) {
                         when (tab) {
@@ -308,34 +309,40 @@ fun NotesSection(
         }
     }
 
-    deleteCandidate?.let { page ->
+    deleteCandidate?.let { notebook ->
         AlertDialog(
             onDismissRequest = { deleteCandidate = null },
-            title = { Text("Delete this note?") },
-            text = { Text(page.displayTitle()) },
+            title = { Text(if (notebook.pageCount > 1) "Delete this notebook?" else "Delete this note?") },
+            text = {
+                Text(
+                    if (notebook.pageCount > 1) "${notebook.title} — all ${notebook.pageCount} pages"
+                    else notebook.title,
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    noteListViewModel.deleteNote(page.id)
+                    noteListViewModel.deleteNotebook(notebook.notebookId, notebook.coverPageId)
                     deleteCandidate = null
                 }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { deleteCandidate = null }) { Text("Cancel") } },
         )
     }
-    renameCandidate?.let { page ->
+    renameCandidate?.let { notebook ->
         SubjectNameDialog(
             title = "Rename note",
-            initial = page.customTitle ?: "",
+            initial = notebook.title,
             confirmLabel = "Save",
-            onConfirm = { noteListViewModel.renameNote(page.id, it); renameCandidate = null },
+            // The notebook's title is its cover page's title — rename that page.
+            onConfirm = { noteListViewModel.renameNote(notebook.coverPageId, it); renameCandidate = null },
             onDismiss = { renameCandidate = null },
         )
     }
-    assignCandidate?.let { page ->
+    assignCandidate?.let { notebook ->
         SubjectPickerDialog(
             tree = subjectTree,
-            currentSubjectId = noteSubjects[page.id],
-            onPick = { subjectViewModel.assignNote(page.id, it); assignCandidate = null },
+            currentSubjectId = noteSubjects[notebook.notebookId],
+            onPick = { subjectViewModel.assignNote(notebook.notebookId, it); assignCandidate = null },
             onDismiss = { assignCandidate = null },
         )
     }
@@ -408,7 +415,7 @@ private fun <T> UnderlineTabRow(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NotesGrid(
-    notes: List<NotePage>,
+    notebooks: List<NotebookSummary>,
     noteListViewModel: NoteListViewModel,
     subjectsById: Map<String, ai.elrond.domain.Subject>,
     noteSubjects: Map<String, String>,
@@ -421,11 +428,11 @@ private fun NotesGrid(
         verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
-        items(notes, key = { it.id }) { page ->
-            NoteCardItem(
-                page = page,
+        items(notebooks, key = { it.notebookId }) { notebook ->
+            NotebookCardItem(
+                notebook = notebook,
                 noteListViewModel = noteListViewModel,
-                subjectId = noteSubjects[page.id],
+                subjectId = noteSubjects[notebook.notebookId],
                 subjectsById = subjectsById,
                 callbacks = callbacks,
             )
@@ -434,14 +441,14 @@ private fun NotesGrid(
 }
 
 /**
- * A single note card — white surface, hairline border, thumbnail, title + date (FA-15 restyle), plus
- * a ⋮ menu (Rename / Move to subject / Delete) and the subject breadcrumb (FA-16). Long-press still
- * opens the delete confirmation.
+ * A single notebook card (FA-20) — cover-page thumbnail, a page-count badge when it has more than one
+ * page, title (the cover page's title) + date, a ⋮ menu (Rename / Move to subject / Delete) and the
+ * subject breadcrumb. Tapping opens the notebook's most-recently-viewed page; long-press deletes.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteCardItem(
-    page: NotePage,
+private fun NotebookCardItem(
+    notebook: NotebookSummary,
     noteListViewModel: NoteListViewModel,
     subjectId: String?,
     subjectsById: Map<String, ai.elrond.domain.Subject>,
@@ -455,20 +462,36 @@ private fun NoteCardItem(
         modifier = Modifier
             .testTag(LIBRARY_NOTE_CARD_TAG)
             .combinedClickable(
-                onClick = { callbacks.onOpenNote(page.id) },
-                onLongClick = { callbacks.onDelete(page) },
+                onClick = { callbacks.onOpenNote(notebook.lastViewedPageId) },
+                onLongClick = { callbacks.onDelete(notebook) },
             ),
     ) {
         Column {
             Box {
                 NoteThumbnail(
-                    page = page,
+                    pageId = notebook.coverPageId,
+                    modifiedAt = notebook.modifiedAt,
                     viewModel = noteListViewModel,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(150.dp)
                         .background(MaterialTheme.colorScheme.surfaceContainerLowest),
                 )
+                if (notebook.pageCount > 1) {
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.92f),
+                        modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
+                    ) {
+                        Text(
+                            "${notebook.pageCount} pages",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = LeapGrey,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                }
                 // Favourite star — placeholder (no backend yet).
                 Icon(
                     Icons.Outlined.StarBorder,
@@ -482,14 +505,14 @@ private fun NoteCardItem(
                 Row(verticalAlignment = Alignment.Top) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            page.displayTitle(),
+                            notebook.title,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            NOTE_DATE.format(Instant.ofEpochMilli(page.modifiedAt).atZone(ZoneId.systemDefault())),
+                            NOTE_DATE.format(Instant.ofEpochMilli(notebook.modifiedAt).atZone(ZoneId.systemDefault())),
                             style = MaterialTheme.typography.bodySmall,
                             color = Neutral500,
                             modifier = Modifier.padding(top = 6.dp),
@@ -500,9 +523,9 @@ private fun NoteCardItem(
                             Icon(Icons.Filled.MoreVert, contentDescription = "Note actions", tint = Neutral500, modifier = Modifier.size(20.dp))
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; callbacks.onRename(page) })
-                            DropdownMenuItem(text = { Text("Move to subject") }, onClick = { menuOpen = false; callbacks.onMove(page) })
-                            DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; callbacks.onDelete(page) })
+                            DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; callbacks.onRename(notebook) })
+                            DropdownMenuItem(text = { Text("Move to subject") }, onClick = { menuOpen = false; callbacks.onMove(notebook) })
+                            DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; callbacks.onDelete(notebook) })
                         }
                     }
                 }

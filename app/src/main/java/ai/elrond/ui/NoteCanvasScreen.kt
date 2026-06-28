@@ -135,7 +135,7 @@ fun NoteCanvasScreen(
     val noteSubjects by subjectViewModel.noteSubjects.collectAsStateWithLifecycle()
     // subjectId → its notes (null key = unfiled), so the Quick Nav tree can render notes under subjects.
     val notesBySubject = remember(libraryNotes, noteSubjects) {
-        libraryNotes.groupBy { noteSubjects[it.id] }
+        libraryNotes.groupBy { noteSubjects[it.notebookId] }
     }
     var showPages by remember { mutableStateOf(false) }
     var showLibrary by remember { mutableStateOf(false) }
@@ -506,7 +506,7 @@ fun NoteCanvasScreen(
                 currentPageId = pageId,
                 onToggleSubject = subjectViewModel::toggleExpanded,
                 onLocateCurrent = {
-                    noteSubjects[pageId]?.let { subjectViewModel.expandToSubject(it) }
+                    currentNotebookId?.let { nb -> noteSubjects[nb] }?.let { subjectViewModel.expandToSubject(it) }
                 },
                 onOpenNote = { id ->
                     showLibrary = false

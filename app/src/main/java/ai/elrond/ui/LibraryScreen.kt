@@ -93,13 +93,13 @@ fun LibraryScreen(
     subjectViewModel: SubjectViewModel = hiltViewModel(),
 ) {
     var nav by rememberSaveable { mutableStateOf(LibraryNav.NOTES) }
-    val notes by noteListViewModel.pages.collectAsStateWithLifecycle()
+    val notebooks by noteListViewModel.notebooks.collectAsStateWithLifecycle()
     val todoCount by todoViewModel.activeCount.collectAsStateWithLifecycle()
 
     val sidebar: @Composable (onItem: () -> Unit) -> Unit = { onItem ->
         LibrarySidebar(
             current = nav,
-            noteCount = notes.size,
+            noteCount = notebooks.size,
             todoCount = todoCount,
             subjectViewModel = subjectViewModel,
             onSelect = { nav = it; onItem() },

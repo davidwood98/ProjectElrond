@@ -43,7 +43,7 @@ class SubjectViewModel @Inject constructor(
         .map { SubjectTree.build(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** pageId → its (single) subjectId; a missing key means the note is unfiled. */
+    /** notebookId → its (single) subjectId; a missing key means the notebook is unfiled. */
     val noteSubjects: StateFlow<Map<String, String>> = subjectRepository.observeNoteSubjects()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
@@ -139,8 +139,8 @@ class SubjectViewModel @Inject constructor(
 
     // --- Note assignment ---
 
-    /** Files [pageId] into [subjectId] (or un-files it when null). */
-    fun assignNote(pageId: String, subjectId: String?) {
-        viewModelScope.launch { subjectRepository.assignNote(pageId, subjectId) }
+    /** Files notebook [notebookId] into [subjectId] (or un-files it when null). */
+    fun assignNote(notebookId: String, subjectId: String?) {
+        viewModelScope.launch { subjectRepository.assignNote(notebookId, subjectId) }
     }
 }

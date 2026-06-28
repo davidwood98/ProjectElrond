@@ -30,8 +30,20 @@ fun NoteThumbnail(
     viewModel: NoteListViewModel,
     modifier: Modifier = Modifier,
 ) {
-    val bitmap by produceState<Bitmap?>(null, page.id, page.modifiedAt) {
-        value = viewModel.thumbnail(page.id)
+    NoteThumbnail(pageId = page.id, modifiedAt = page.modifiedAt, viewModel = viewModel, modifier = modifier)
+}
+
+/** Thumbnail by page id + modifiedAt (FA-20) — for notebook cards / the page index that hold a cover
+ *  page id rather than a full [NotePage]. */
+@Composable
+fun NoteThumbnail(
+    pageId: String,
+    modifiedAt: Long,
+    viewModel: NoteListViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val bitmap by produceState<Bitmap?>(null, pageId, modifiedAt) {
+        value = viewModel.thumbnail(pageId)
     }
     val cached = bitmap
     if (cached != null) {
@@ -42,8 +54,8 @@ fun NoteThumbnail(
             modifier = modifier.testTag(THUMBNAIL_IMAGE_TAG),
         )
     } else {
-        val preview by produceState<List<List<Pair<Float, Float>>>>(emptyList(), page.id, page.modifiedAt) {
-            value = viewModel.preview(page.id)
+        val preview by produceState<List<List<Pair<Float, Float>>>>(emptyList(), pageId, modifiedAt) {
+            value = viewModel.preview(pageId)
         }
         StrokeThumbnail(polylines = preview, modifier = modifier.testTag(THUMBNAIL_FALLBACK_TAG))
     }

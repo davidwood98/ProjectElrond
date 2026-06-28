@@ -28,6 +28,10 @@ interface NotebookDao {
 
     @Query("SELECT * FROM notebooks ORDER BY createdAt LIMIT 1")
     suspend fun first(): NotebookEntity?
+
+    /** Deletes a notebook; its pages (and their strokes/ai-notes/edit-events) cascade via FKs (FA-20). */
+    @Query("DELETE FROM notebooks WHERE id = :id")
+    suspend fun deleteById(id: String)
 }
 
 @Dao
@@ -228,16 +232,16 @@ interface SubjectDao {
 
 @Dao
 interface NoteSubjectDao {
-    /** Assign a note to a subject; REPLACE keeps the one-row-per-page (single-subject) invariant. */
+    /** File a notebook into a subject; REPLACE keeps the one-row-per-notebook (single-subject) invariant. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(membership: NoteSubjectEntity)
 
-    /** Unfile a note (remove its subject membership). */
-    @Query("DELETE FROM note_subjects WHERE pageId = :pageId")
-    suspend fun deleteByPage(pageId: String)
+    /** Unfile a notebook (remove its subject membership). */
+    @Query("DELETE FROM note_subjects WHERE notebookId = :notebookId")
+    suspend fun deleteByNotebook(notebookId: String)
 
-    @Query("SELECT * FROM note_subjects WHERE pageId = :pageId")
-    suspend fun getForPage(pageId: String): NoteSubjectEntity?
+    @Query("SELECT * FROM note_subjects WHERE notebookId = :notebookId")
+    suspend fun getForNotebook(notebookId: String): NoteSubjectEntity?
 
     @Query("SELECT * FROM note_subjects")
     fun observeAll(): Flow<List<NoteSubjectEntity>>

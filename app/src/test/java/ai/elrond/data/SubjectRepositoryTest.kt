@@ -45,13 +45,8 @@ class SubjectRepositoryTest {
     @After
     fun tearDown() = db.close()
 
-    private suspend fun seedPage(id: String) {
-        if (db.notebookDao().first() == null) {
-            db.notebookDao().insert(NotebookEntity(id = "nb1", name = "N", createdAt = 0))
-        }
-        db.notePageDao().insert(
-            NotePageEntity(id = id, notebookId = "nb1", customTitle = null, createdAt = 0, modifiedAt = 0),
-        )
+    private suspend fun seedNotebook(id: String) {
+        db.notebookDao().insert(NotebookEntity(id = id, name = "N", createdAt = 0))
     }
 
     @Test
@@ -78,45 +73,45 @@ class SubjectRepositoryTest {
     }
 
     @Test
-    fun `deleting a subject cascades to descendant subjects and their note memberships`() = runTest {
-        seedPage("p1")
+    fun `deleting a subject cascades to descendant subjects and their notebook memberships`() = runTest {
+        seedNotebook("nb1")
         val parent = repo.createSubject(null, "Parent")
         val child = repo.createSubject(parent.id, "Child")
-        repo.assignNote("p1", child.id) // a note filed deep in the subtree
+        repo.assignNote("nb1", child.id) // a notebook filed deep in the subtree
 
         repo.deleteSubject(parent.id)
 
-        // Both subjects gone; the note's membership cascade-cleared, but the note itself survives.
+        // Both subjects gone; the membership cascade-cleared, but the notebook itself survives.
         assertTrue(repo.observeSubjects().first().isEmpty())
-        assertNull(repo.subjectForNote("p1"))
-        assertTrue(db.notePageDao().getById("p1") != null)
+        assertNull(repo.subjectForNotebook("nb1"))
+        assertTrue(db.notebookDao().getById("nb1") != null)
     }
 
     @Test
-    fun `a note files into at most one subject (reassign replaces, null unfiles)`() = runTest {
-        seedPage("p1")
+    fun `a notebook files into at most one subject (reassign replaces, null unfiles)`() = runTest {
+        seedNotebook("nb1")
         val s1 = repo.createSubject(null, "S1")
         val s2 = repo.createSubject(null, "S2")
 
-        repo.assignNote("p1", s1.id)
-        assertEquals(s1.id, repo.subjectForNote("p1"))
+        repo.assignNote("nb1", s1.id)
+        assertEquals(s1.id, repo.subjectForNotebook("nb1"))
 
-        repo.assignNote("p1", s2.id) // reassign — single row replaced, not added
-        assertEquals(s2.id, repo.subjectForNote("p1"))
-        assertEquals(mapOf("p1" to s2.id), repo.observeNoteSubjects().first())
+        repo.assignNote("nb1", s2.id) // reassign — single row replaced, not added
+        assertEquals(s2.id, repo.subjectForNotebook("nb1"))
+        assertEquals(mapOf("nb1" to s2.id), repo.observeNoteSubjects().first())
 
-        repo.assignNote("p1", null) // unfile
-        assertNull(repo.subjectForNote("p1"))
+        repo.assignNote("nb1", null) // unfile
+        assertNull(repo.subjectForNotebook("nb1"))
         assertTrue(repo.observeNoteSubjects().first().isEmpty())
     }
 
     @Test
-    fun `deleting a note cascades its subject membership`() = runTest {
-        seedPage("p1")
+    fun `deleting a notebook cascades its subject membership`() = runTest {
+        seedNotebook("nb1")
         val s = repo.createSubject(null, "S")
-        repo.assignNote("p1", s.id)
+        repo.assignNote("nb1", s.id)
 
-        db.notePageDao().deleteById("p1")
+        db.notebookDao().deleteById("nb1")
 
         assertTrue(repo.observeNoteSubjects().first().isEmpty())
     }

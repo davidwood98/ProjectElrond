@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SubjectEntity::class,
         NoteSubjectEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -281,6 +281,38 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v13 (FA-20) re-keys note_subjects from the page to the **notebook** so filing is per-notebook.
+         * Recreates the table keyed by notebookId and maps each old (pageId → subjectId) to the page's
+         * owning notebook (1:1 after v12, so no collisions; INSERT OR IGNORE is belt-and-braces).
+         */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE note_subjects_new (
+                        notebookId TEXT NOT NULL PRIMARY KEY,
+                        subjectId TEXT NOT NULL,
+                        FOREIGN KEY(notebookId) REFERENCES notebooks(id) ON DELETE CASCADE,
+                        FOREIGN KEY(subjectId) REFERENCES subjects(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO note_subjects_new (notebookId, subjectId)
+                    SELECT np.notebookId, ns.subjectId
+                    FROM note_subjects ns JOIN note_pages np ON np.id = ns.pageId
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE note_subjects")
+                db.execSQL("ALTER TABLE note_subjects_new RENAME TO note_subjects")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_note_subjects_subjectId ON note_subjects(subjectId)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -293,7 +325,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
                     MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-                    MIGRATION_11_12,
+                    MIGRATION_11_12, MIGRATION_12_13,
                 ).build().also { instance = it }
             }
     }

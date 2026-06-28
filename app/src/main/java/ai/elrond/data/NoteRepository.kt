@@ -155,6 +155,11 @@ class NoteRepository(
         pageDao.deleteById(pageId)
     }
 
+    /** Deletes a notebook and all its pages (FA-20); strokes/ai-notes/edit-events cascade via FKs. */
+    suspend fun deleteNotebook(notebookId: String) {
+        notebookDao.deleteById(notebookId)
+    }
+
     // --- Strokes ---
 
     suspend fun saveStrokes(pageId: String, strokes: List<CanvasStroke>, isAiInk: Boolean = false) {

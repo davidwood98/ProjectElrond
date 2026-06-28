@@ -28,9 +28,9 @@ class SubjectRepository(
     fun observeSubjects(): Flow<List<Subject>> =
         subjectDao.observeAll().map { rows -> rows.map(SubjectEntity::toDomain) }
 
-    /** Note→subject map (pageId → subjectId); a missing key means the note is unfiled. */
+    /** Notebook→subject map (notebookId → subjectId); a missing key means the notebook is unfiled. */
     fun observeNoteSubjects(): Flow<Map<String, String>> =
-        noteSubjectDao.observeAll().map { rows -> rows.associate { it.pageId to it.subjectId } }
+        noteSubjectDao.observeAll().map { rows -> rows.associate { it.notebookId to it.subjectId } }
 
     /**
      * Creates a subject under [parentId] (null = root) with a random palette colour, placed last
@@ -75,16 +75,17 @@ class SubjectRepository(
         }
     }
 
-    /** Files [pageId] into [subjectId], or un-files it when [subjectId] is null. */
-    suspend fun assignNote(pageId: String, subjectId: String?) {
+    /** Files notebook [notebookId] into [subjectId], or un-files it when [subjectId] is null. */
+    suspend fun assignNote(notebookId: String, subjectId: String?) {
         if (subjectId == null) {
-            noteSubjectDao.deleteByPage(pageId)
+            noteSubjectDao.deleteByNotebook(notebookId)
         } else {
-            noteSubjectDao.upsert(NoteSubjectEntity(pageId = pageId, subjectId = subjectId))
+            noteSubjectDao.upsert(NoteSubjectEntity(notebookId = notebookId, subjectId = subjectId))
         }
     }
 
-    suspend fun subjectForNote(pageId: String): String? = noteSubjectDao.getForPage(pageId)?.subjectId
+    suspend fun subjectForNotebook(notebookId: String): String? =
+        noteSubjectDao.getForNotebook(notebookId)?.subjectId
 
     companion object {
         const val DEFAULT_NAME = "New subject"

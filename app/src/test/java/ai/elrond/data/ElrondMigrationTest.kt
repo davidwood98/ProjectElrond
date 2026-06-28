@@ -39,6 +39,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_9_10,
         ElrondDatabase.MIGRATION_10_11,
         ElrondDatabase.MIGRATION_11_12,
+        ElrondDatabase.MIGRATION_12_13,
     )
 
     /**
@@ -62,11 +63,42 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v12_and_validates_final_schema() {
+    fun migrates_v1_to_v13_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v12 schema (FA-20 notebook/page
-        // columns; v12 is a data-only explode, so its schema matches v11).
-        helper.runMigrationsAndValidate(TEST_DB, 12, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v13 schema (FA-20: notebook/page
+        // columns + the note_subjects re-key to notebookId).
+        helper.runMigrationsAndValidate(TEST_DB, 13, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_12_to_13_rekeys_note_subjects_to_the_notebook() {
+        helper.createDatabase(TEST_DB, 12).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt, modifiedAt) VALUES ('nb1', 'N', 1, 1)")
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, " +
+                    "lastOpenedAt, tags, contextSummary, pageNumber, isBookmarked) " +
+                    "VALUES ('p1', 'nb1', NULL, 1, 1, 1, '', NULL, 1, 0)",
+            )
+            execSQL(
+                "INSERT INTO subjects (id, parentId, name, colorId, sortOrder, createdAt, modifiedAt) " +
+                    "VALUES ('s1', NULL, 'Maths', 0, 0, 1, 1)",
+            )
+            // v12 note_subjects is still keyed by pageId.
+            execSQL("INSERT INTO note_subjects (pageId, subjectId) VALUES ('p1', 's1')")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 13, true, *allMigrations)
+
+        val cols = columnNames(db, "note_subjects")
+        val rows = mutableListOf<Pair<String, String>>()
+        db.query("SELECT notebookId, subjectId FROM note_subjects").use { c ->
+            while (c.moveToNext()) rows.add(c.getString(0) to c.getString(1))
+        }
+        db.close()
+
+        assertTrue("note_subjects should be keyed by notebookId after v12→v13", "notebookId" in cols)
+        // The page's membership migrated to its owning notebook.
+        assertEquals(listOf("nb1" to "s1"), rows)
     }
 
     @Test

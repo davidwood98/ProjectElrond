@@ -75,6 +75,14 @@ class NoteListViewModel @Inject constructor(
         openedIds.mapNotNull { pid -> pageToNotebook[pid]?.let(summaryById::get) }.distinctBy { it.notebookId }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** Notebooks opened within the last 24h (FA-20), most-recently-opened first — the Recents tab. */
+    val recentNotebooks: StateFlow<List<NotebookSummary>> = notebooks
+        .map { list ->
+            val cutoff = System.currentTimeMillis() - RECENT_WINDOW_MS
+            list.filter { it.lastOpenedAt >= cutoff }.sortedByDescending { it.lastOpenedAt }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     /** Renames a note; a blank title reverts it to the auto-generated timestamp title. */
     fun renameNote(pageId: String, title: String) {
         viewModelScope.launch { repository.renamePage(pageId, title.trim().ifEmpty { null }) }
@@ -92,6 +100,14 @@ class NoteListViewModel @Inject constructor(
         viewModelScope.launch {
             repository.deletePage(pageId)
             thumbnailCache.delete(pageId) // drop the cached WebP so stale files don't accumulate
+        }
+    }
+
+    /** Deletes a whole notebook (all its pages) and drops the cached cover thumbnail (FA-20). */
+    fun deleteNotebook(notebookId: String, coverPageId: String) {
+        viewModelScope.launch {
+            repository.deleteNotebook(notebookId)
+            thumbnailCache.delete(coverPageId)
         }
     }
 
