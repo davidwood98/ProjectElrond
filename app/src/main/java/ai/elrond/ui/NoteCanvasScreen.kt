@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -87,7 +88,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -209,6 +212,18 @@ fun NoteCanvasScreen(
         // its offset is derived from topGap so the toolbar→title spacing stays constant.
         val headerTop = topGap + 62.dp * toolbarScale + 6.dp
 
+        // FA-20: the page starts BELOW the title/header band, and the band scrolls away with the top
+        // of the page. We measure the band height, tell the VM where the page top sits (so its
+        // transform docks the page below the band), and slide the band up by the same scroll.
+        val density = LocalDensity.current
+        var headerBandHeightPx by remember { mutableStateOf(0) }
+        val headerTopPx = with(density) { headerTop.toPx() }
+        val pageTopGapPx = with(density) { 8.dp.toPx() }
+        val pageTopInsetPx = headerTopPx + headerBandHeightPx + pageTopGapPx
+        LaunchedEffect(pageTopInsetPx) { viewModel.setPageTopInset(pageTopInsetPx) }
+        // Scroll derived from the transform (offsetY = pageTopInset − scroll); drives the band slide.
+        val headerScrollPx = (pageTopInsetPx - pageTransform.offsetY).coerceAtLeast(0f)
+
         // Paper background (Ruled / Plain / Dots) behind the transparent ink layers. The page is a
         // fixed portrait sheet centred on screen (margins in landscape) and scrolled — all from the
         // transform — so the paper sits exactly under the page-mapped ink.
@@ -293,6 +308,32 @@ fun NoteCanvasScreen(
                     }
                 }
             },
+        )
+
+        // Note title + created date in the grey header band. Composed BEFORE the toolbar so the
+        // toolbar draws on top as the band scrolls up under it (FA-20). The band sits just below the
+        // toolbar at rest and slides away with the page top as you scroll.
+        EditorHeader(
+            title = pageTitle,
+            dateLabel = pageDateLabel,
+            onRename = viewModel::renamePage,
+            tabs = {
+                NoteTabPills(
+                    tabs = sessionNotebooks,
+                    currentNotebookId = currentNotebookId,
+                    currentTitle = pageTitle,
+                    onSelectTab = { id -> if (id != pageId) onOpenNote(id) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .offset { IntOffset(0, (headerTopPx - headerScrollPx).roundToInt()) }
+                .onSizeChanged { headerBandHeightPx = it.height }
+                // Inset-aware so the band can't slide under a side cutout/nav bar; keeps its own 14dp
+                // visual margin (slightly tighter than the toolbar's "side spacing").
+                .padding(start = leftInset + 14.dp, end = rightInset + 14.dp),
         )
 
         // ── Leap note toolbar (Claude Design "Note Tool Icons" handoff) ──────────────────────
@@ -490,29 +531,6 @@ fun NoteCanvasScreen(
                 }
             }
         }
-
-        // Note title + created date in the grey header band, below the toolbar. The note tabs sit at
-        // the top of the band, just above the title (active tab keeps its accent fill).
-        EditorHeader(
-            title = pageTitle,
-            dateLabel = pageDateLabel,
-            onRename = viewModel::renamePage,
-            tabs = {
-                NoteTabPills(
-                    tabs = sessionNotebooks,
-                    currentNotebookId = currentNotebookId,
-                    currentTitle = pageTitle,
-                    onSelectTab = { id -> if (id != pageId) onOpenNote(id) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            },
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                // Inset-aware so the band can't slide under a side cutout/nav bar; keeps its own 14dp
-                // visual margin (slightly tighter than the toolbar's "side spacing").
-                .padding(start = leftInset + 14.dp, end = rightInset + 14.dp, top = headerTop),
-        )
 
         if (showPages) {
             PagesOverlay(

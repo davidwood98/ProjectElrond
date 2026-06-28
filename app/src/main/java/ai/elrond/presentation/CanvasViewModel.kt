@@ -686,12 +686,26 @@ class CanvasViewModel(
     }
 
     /**
-     * Recomputes [pageTransform] from the current page width, centring offset and scroll. The page is
-     * centred horizontally (equal margins in landscape, none in portrait) and shifted up by the scroll.
+     * Screen Y of the page top at scroll 0 — i.e. the page starts BELOW the title/header band, which
+     * scrolls away with the page (FA-20). Reported by the UI ([setPageTopInset]); 0 until then.
+     */
+    private var pageTopInsetPx: Float = 0f
+
+    /** Reports the editor header-band bottom (px) so the page docks below it and the title scrolls off. */
+    fun setPageTopInset(px: Float) {
+        if (px == pageTopInsetPx) return
+        pageTopInsetPx = px
+        scrollBy(0f)
+    }
+
+    /**
+     * Recomputes [pageTransform] from the page width, centring offset, the top inset and scroll. The
+     * page is centred horizontally and starts at [pageTopInsetPx] (below the header band), shifted up
+     * by the scroll — so scrolling slides the title away and docks the page under the toolbar.
      */
     private fun refreshPageTransform() {
         val offsetX = ((canvasWidthPx - pageWidthPx) / 2f).coerceAtLeast(0f)
-        _pageTransform.value = PageTransform(scale = 1f, offsetX = offsetX, offsetY = -scrollPx)
+        _pageTransform.value = PageTransform(scale = 1f, offsetX = offsetX, offsetY = pageTopInsetPx - scrollPx)
     }
 
     /**
@@ -704,7 +718,9 @@ class CanvasViewModel(
             refreshPageTransform()
             return
         }
-        val maxScroll = (pageContentHeightPx() - canvasHeightPx).coerceAtLeast(0f)
+        // The page starts at the top inset and is its content tall; allow scrolling until the bottom
+        // edge reaches the viewport bottom (the inset's worth of title scrolls away too).
+        val maxScroll = (pageTopInsetPx + pageContentHeightPx() - canvasHeightPx).coerceAtLeast(0f)
         scrollPx = (scrollPx - dragDeltaY).coerceIn(0f, maxScroll)
         refreshPageTransform()
     }
