@@ -114,3 +114,44 @@ seam now, UI later), hard page limits.
 - Repositories (notebook CRUD, page reorder, reparent seam, subjects re-key) → Robolectric.
 - ViewModel page lifecycle → JVM.
 - Rendering / scroll / swipe / reorder gestures → instrumented + device (Galaxy Tab S).
+
+---
+
+## Build status (commits on `fa-20-notebooks`)
+
+Phase 0 (`9c7cb23`), 1a (`e6c6723`), 1b-i/ii/iii (`48e1aee`/`62aa52e`/`d43fda9`), page index
+(`2a21d80`), notebook tabs + last-viewed (`77bc821`), browser-as-notebooks + `note_subjects`
+re-key v13 (`2e0a5c8`). All compile; full app unit suite green; schemas v11/v12/v13 exported.
+
+**Phase 2 substantive work done & committed:** page index, notebook tabs, open-to-last-viewed,
+browser-as-notebooks, subjects re-key. **Minor remaining polish (next session):** calendar day-sheet
+*Day → notebook → pages* grouping, and the "Notebook → Page N" label on todo source links (both are
+cosmetic — the calendar + todo links already function at the page level).
+
+## ⚠️ Device-test feedback (1b-i scroll) — DIAGNOSIS for the next session
+
+On a Galaxy Tab S, section-A tests passed; **section B (single-page scroll) is broken**:
+
+- **B2 (root cause): dry ink doesn't scroll live.** The Compose `PaperBackground` scrolls per-frame
+  (it recomposes on `pageScrollPx`), but the dry-ink `DryStrokesView` (a plain `View` using
+  `setScroll` → `Matrix.setTranslate` + `invalidate()`) stays **static during the drag and snaps to the
+  scrolled position on release**. So `invalidate()` is not producing per-frame redraws during the
+  gesture. **Fix direction (the FA-10 lesson):** drive the dry-layer scroll with a **per-frame GPU
+  transform**, not redraw-on-invalidate — e.g. `dryStrokesView.translationY = -scroll` on a View laid
+  out at the **full page height** (so translating reveals off-screen ink), or render the dry strokes in
+  a Compose layer (`drawIntoCanvas` + `graphicsLayer { translationY = -scroll }`, sized to the page) as
+  `SelectionStrokes` already does. The current screen-height View + `invalidate` is the wrong mechanism.
+- **B3 (eraser hits the wrong place when scrolled): a consequence of B2.** The eraser hit-tests at
+  `eventY + scroll` (the logical world position) while the ink is *drawn* at the static (unscrolled)
+  position — so you erase where the ink *would* be, not where you see it. Fixing B2 (visual == logical)
+  should resolve it; re-verify after.
+- **B1 (landscape rotation rotates the page with the toolbar):** the agreed model — page stays a fixed
+  portrait A-ratio sheet, **independent of device orientation**, with a separate per-notebook
+  view-orientation toggle — was **not implemented** (deferred). The canvas is currently full-bleed and
+  follows the device. Needs: lock the page to portrait logical space and only change the `PageTransform`
+  on rotation / the view-toggle (don't reflow). See the FA-20 orientation decision.
+
+**Recommendation:** fix B in a **fresh session** (this one is very deep). Start from this section + the
+committed code; the scroll plumbing (`CanvasViewModel.pageScrollPx`/`scrollBy`, `InkCanvas`
+`DryStrokesView`/touch listener, `PaperBackground`) is all in place — the fix is the dry-layer render
+mechanism, not the data flow.
