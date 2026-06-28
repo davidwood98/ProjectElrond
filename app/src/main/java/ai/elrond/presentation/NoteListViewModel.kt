@@ -30,32 +30,6 @@ class NoteListViewModel @Inject constructor(
     val pages: StateFlow<List<NotePage>> = repository.observeTimeline()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /**
-     * "Recent" notes (FA-15): only those opened within the last 24h, most-recently-opened first.
-     * Backs the home Recents tab. (The editor note tabs use [sessionNotes] — a session-scoped,
-     * in-memory list — since FA-16.) Re-evaluated on each DB change (and an open updates
-     * `lastOpenedAt`, which triggers one), so it stays fresh as notes are visited.
-     */
-    val recentNotes: StateFlow<List<NotePage>> = repository.observeTimeline()
-        .map { pages ->
-            val cutoff = System.currentTimeMillis() - RECENT_WINDOW_MS
-            pages.filter { it.lastOpenedAt >= cutoff }.sortedByDescending { it.lastOpenedAt }
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /**
-     * Notes opened in the current foreground session (FA-16) — backs the editor's note tabs (which
-     * show "this session" instead of the old 24h "Recent" window). Ordered most-recently-opened
-     * first; the [SessionNotesTracker] is cleared when the app backgrounds, so this resets per session.
-     */
-    val sessionNotes: StateFlow<List<NotePage>> = combine(
-        sessionNotesTracker.openedPageIds,
-        repository.observeTimeline(),
-    ) { ids, pages ->
-        val byId = pages.associateBy { it.id }
-        ids.mapNotNull { byId[it] }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
     /** One summary per notebook (FA-20), most-recently-opened first — backs the browser grid. */
     val notebooks: StateFlow<List<NotebookSummary>> = repository.observeNotebookSummaries()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -67,10 +41,10 @@ class NoteListViewModel @Inject constructor(
      */
     val sessionNotebooks: StateFlow<List<NotebookSummary>> = combine(
         sessionNotesTracker.openedPageIds,
-        repository.observeNotebookSummaries(),
-        repository.observeTimeline(),
-    ) { openedIds, summaries, pages ->
-        val pageToNotebook = pages.associate { it.id to it.notebookId }
+        notebooks, // reuse the stateIn'd flow, not a second observeNotebookSummaries() subscription
+        pages, // reuse the stateIn'd timeline for the page→notebook lookup
+    ) { openedIds, summaries, pageList ->
+        val pageToNotebook = pageList.associate { it.id to it.notebookId }
         val summaryById = summaries.associateBy { it.notebookId }
         openedIds.mapNotNull { pid -> pageToNotebook[pid]?.let(summaryById::get) }.distinctBy { it.notebookId }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())

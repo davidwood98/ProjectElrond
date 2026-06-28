@@ -155,3 +155,11 @@ On a Galaxy Tab S, section-A tests passed; **section B (single-page scroll) is b
 committed code; the scroll plumbing (`CanvasViewModel.pageScrollPx`/`scrollBy`, `InkCanvas`
 `DryStrokesView`/touch listener, `PaperBackground`) is all in place — the fix is the dry-layer render
 mechanism, not the data flow.
+
+**Also (from the `/simplify` altitude review) — do this as part of the B rework:** the scroll is
+currently hand-threaded as `± scrollPx` across ~10 sites (InkCanvas dry/wet, eraser, `SelectionLayer`
+box/handles/ghost, `AiInkNoteView`, `PaperBackground`, the AI-state overlays) while `PageTransform`
+(the type built to centralise exactly this) is used only for `ASPECT_RATIO`. While reworking the
+render mechanism, route those conversions through one `PageTransform` (give it a `toMatrix()` and use
+`pageToScreenY`/`screenToPageY`/`pageToScreenLength`) so the eventual pinch-zoom (Phase 5) is a one-line
+`scale` change rather than a hunt across files.

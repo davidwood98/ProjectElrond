@@ -1,7 +1,7 @@
 package ai.elrond.notes
 
-import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.NotebookSummary
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.data.SessionNotesTracker
 import ai.elrond.data.ThumbnailCache
@@ -42,12 +42,22 @@ class NoteListViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun page(id: String, lastOpenedAt: Long = 0L) = NotePage(
+    private fun page(id: String, lastOpenedAt: Long = 0L, notebookId: String = "nb-1") = NotePage(
         id = id,
-        notebookId = "nb-1",
+        notebookId = notebookId,
         customTitle = null,
         createdAt = 1L,
         modifiedAt = 2L,
+        lastOpenedAt = lastOpenedAt,
+    )
+
+    private fun summary(notebookId: String, lastOpenedAt: Long = 0L) = NotebookSummary(
+        notebookId = notebookId,
+        title = notebookId,
+        coverPageId = "$notebookId-p1",
+        pageCount = 1,
+        modifiedAt = 2L,
+        lastViewedPageId = "$notebookId-p1",
         lastOpenedAt = lastOpenedAt,
     )
 
@@ -63,21 +73,23 @@ class NoteListViewModelTest {
     }
 
     @Test
-    fun `recentNotes keeps only notes opened in the last 24h, most recent first`() = runTest(dispatcher) {
+    fun `recentNotebooks keeps only notebooks opened in the last 24h, most recent first`() = runTest(dispatcher) {
         val now = System.currentTimeMillis()
-        val recentNew = page("recent-new", lastOpenedAt = now)
-        val recentOld = page("recent-old", lastOpenedAt = now - 60_000L) // a minute ago
-        val stale = page("stale", lastOpenedAt = now - 48L * 60 * 60 * 1000) // 2 days ago
-        val never = page("never", lastOpenedAt = 0L)
-        every { repository.observeTimeline() } returns
-            flowOf(listOf(recentOld, stale, recentNew, never))
+        every { repository.observeNotebookSummaries() } returns flowOf(
+            listOf(
+                summary("recent-old", lastOpenedAt = now - 60_000L), // a minute ago
+                summary("stale", lastOpenedAt = now - 48L * 60 * 60 * 1000), // 2 days ago
+                summary("recent-new", lastOpenedAt = now),
+                summary("never", lastOpenedAt = 0L),
+            ),
+        )
         val viewModel = NoteListViewModel(repository, thumbnailCache)
 
-        backgroundScope.launch { viewModel.recentNotes.collect { } }
+        backgroundScope.launch { viewModel.recentNotebooks.collect { } }
         advanceUntilIdle()
 
         // Only the two within 24h, ordered most-recently-opened first; stale + never excluded.
-        assertEquals(listOf("recent-new", "recent-old"), viewModel.recentNotes.value.map { it.id })
+        assertEquals(listOf("recent-new", "recent-old"), viewModel.recentNotebooks.value.map { it.notebookId })
     }
 
     @Test
@@ -94,17 +106,22 @@ class NoteListViewModelTest {
     }
 
     @Test
-    fun `sessionNotes maps the tracked session ids to pages in stable open order`() = runTest(dispatcher) {
-        every { repository.observeTimeline() } returns flowOf(listOf(page("p1"), page("p2")))
+    fun `sessionNotebooks maps tracked pages to their notebooks, de-duped in open order`() = runTest(dispatcher) {
+        // p1 & p3 belong to nbB, p2 to nbA. Opening p1, p2, p3 → tabs [nbB, nbA] (open order, deduped).
+        every { repository.observeTimeline() } returns flowOf(
+            listOf(page("p1", notebookId = "nbB"), page("p2", notebookId = "nbA"), page("p3", notebookId = "nbB")),
+        )
+        every { repository.observeNotebookSummaries() } returns flowOf(listOf(summary("nbB"), summary("nbA")))
         val tracker = SessionNotesTracker()
-        tracker.recordOpened("p2") // opened first → stays first
-        tracker.recordOpened("p1")
+        tracker.recordOpened("p1") // nbB first
+        tracker.recordOpened("p2") // nbA
+        tracker.recordOpened("p3") // nbB again → no new tab
         val viewModel = NoteListViewModel(repository, thumbnailCache, tracker)
 
-        backgroundScope.launch { viewModel.sessionNotes.collect { } }
+        backgroundScope.launch { viewModel.sessionNotebooks.collect { } }
         advanceUntilIdle()
 
-        assertEquals(listOf("p2", "p1"), viewModel.sessionNotes.value.map { it.id })
+        assertEquals(listOf("nbB", "nbA"), viewModel.sessionNotebooks.value.map { it.notebookId })
     }
 
     @Test
