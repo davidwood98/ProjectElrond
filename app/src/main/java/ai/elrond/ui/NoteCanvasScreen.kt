@@ -106,6 +106,8 @@ fun NoteCanvasScreen(
     val canRedo by viewModel.canRedo.collectAsStateWithLifecycle()
     // Vertical scroll within the page (FA-20); the page is fit-to-width and taller than the viewport.
     val pageScrollPx by viewModel.pageScrollPx.collectAsStateWithLifecycle()
+    // The notebook's pages (FA-20) — drives the page indicator; a horizontal finger swipe turns pages.
+    val notebookPages by viewModel.notebookPages.collectAsStateWithLifecycle()
     val pendingExtraction by viewModel.pendingExtraction.collectAsStateWithLifecycle()
     val todoCount by todoViewModel.activeCount.collectAsStateWithLifecycle()
     var showTodoPanel by remember { mutableStateOf(false) }
@@ -153,6 +155,11 @@ fun NoteCanvasScreen(
         viewModel.createdNoteEvents.collect { id ->
             if (selectOnCreate) selectedNoteId = id
         }
+    }
+    // FA-20: a horizontal page-turn swipe emits the target page id — navigate to it (the editor
+    // re-opens on that page; a fresh page when swiping past the last with content on the current one).
+    LaunchedEffect(viewModel) {
+        viewModel.pageTurnEvents.collect { id -> onOpenNote(id) }
     }
 
     BoxWithConstraints(
@@ -555,6 +562,27 @@ fun NoteCanvasScreen(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 28.dp),
         )
+
+        // Page indicator (FA-20): "Page n / total" when the notebook has more than one page. A
+        // horizontal finger swipe turns pages; swiping past the last (with content) adds a new one.
+        if (notebookPages.size > 1) {
+            val pageIdx = notebookPages.indexOfFirst { it.id == pageId }
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 6.dp),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+                shadowElevation = 2.dp,
+            ) {
+                Text(
+                    text = "Page ${if (pageIdx >= 0) pageIdx + 1 else 1} / ${notebookPages.size}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                )
+            }
+        }
 
         // Unclear-request pop-up: rendered last (top-most) and CENTRED on screen, so its
         // Yes/No / Edit-prompt / Okay controls are always reachable even when the /Q was near a

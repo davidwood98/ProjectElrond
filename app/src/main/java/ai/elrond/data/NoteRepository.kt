@@ -51,6 +51,27 @@ class NoteRepository(
     fun observePages(notebookId: String): Flow<List<NotePage>> =
         pageDao.observeByNotebook(notebookId).map { entities -> entities.map(NotePageEntity::toDomain) }
 
+    /** The notebook's pages in page order (FA-20) — backs the multi-page editor + page indicator. */
+    fun observePagesOrdered(notebookId: String): Flow<List<NotePage>> =
+        pageDao.observeByNotebookOrdered(notebookId).map { entities -> entities.map(NotePageEntity::toDomain) }
+
+    /** Adds a new page after the notebook's current last page (FA-20); its number is max + 1. */
+    suspend fun addPage(notebookId: String): NotePage {
+        val now = clock()
+        val nextNumber = (pageDao.maxPageNumber(notebookId) ?: 0) + 1
+        val entity = NotePageEntity(
+            id = newId(),
+            notebookId = notebookId,
+            customTitle = null,
+            createdAt = now,
+            modifiedAt = now,
+            lastOpenedAt = now,
+            pageNumber = nextNumber,
+        )
+        pageDao.insert(entity)
+        return entity.toDomain()
+    }
+
     /** All pages ordered by last edit — the "created X / last edited Y" timeline. */
     fun observeTimeline(): Flow<List<NotePage>> =
         pageDao.observeTimeline().map { entities -> entities.map(NotePageEntity::toDomain) }

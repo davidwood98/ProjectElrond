@@ -47,6 +47,14 @@ interface NotePageDao {
     @Query("SELECT * FROM note_pages WHERE notebookId = :notebookId ORDER BY modifiedAt DESC")
     fun observeByNotebook(notebookId: String): Flow<List<NotePageEntity>>
 
+    /** Pages within a notebook in page order (FA-20) — backs the multi-page editor + page indicator. */
+    @Query("SELECT * FROM note_pages WHERE notebookId = :notebookId ORDER BY pageNumber, createdAt")
+    fun observeByNotebookOrdered(notebookId: String): Flow<List<NotePageEntity>>
+
+    /** Highest page number in a notebook, or null when it has no pages (FA-20). */
+    @Query("SELECT MAX(pageNumber) FROM note_pages WHERE notebookId = :notebookId")
+    suspend fun maxPageNumber(notebookId: String): Int?
+
     /** All pages ordered by last edit — backs the "created X / last edited Y" timeline. */
     @Query("SELECT * FROM note_pages ORDER BY modifiedAt DESC")
     fun observeTimeline(): Flow<List<NotePageEntity>>

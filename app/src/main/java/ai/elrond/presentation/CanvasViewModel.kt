@@ -23,6 +23,7 @@ import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.QueryTriggerDetector
 import ai.elrond.domain.TriggerMode
 import ai.elrond.domain.UnitSystem
+import ai.elrond.domain.NotePage
 import ai.elrond.domain.PageTransform
 import ai.elrond.domain.defaultAiNotePosition
 import ai.elrond.domain.groupStrokesIntoLines
@@ -300,6 +301,20 @@ class CanvasViewModel(
     private val _createdNoteEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val createdNoteEvents: SharedFlow<String> = _createdNoteEvents.asSharedFlow()
 
+    /** The open page's notebook id (set once the page loads); drives the multi-page pager (FA-20). */
+    private var notebookId: String? = null
+
+    /** The notebook's pages ordered by page number — backs the page indicator + page turns (FA-20). */
+    private val _notebookPages = MutableStateFlow<List<NotePage>>(emptyList())
+    val notebookPages: StateFlow<List<NotePage>> = _notebookPages.asStateFlow()
+
+    /** The page open in this editor (its id), for the page indicator. */
+    val currentPageId: String? get() = pageId
+
+    /** Emits the page id to navigate to when the user swipes to turn the page (FA-20). */
+    private val _pageTurnEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val pageTurnEvents: SharedFlow<String> = _pageTurnEvents.asSharedFlow()
+
     /** Tasks the AI extracted from the page, awaiting the user's confirmation to save. */
     private val _pendingExtraction = MutableStateFlow<PendingTaskExtraction?>(null)
     val pendingExtraction: StateFlow<PendingTaskExtraction?> = _pendingExtraction.asStateFlow()
@@ -496,6 +511,12 @@ class CanvasViewModel(
                 runCatching { repository.getPage(pageId) }.getOrNull()?.let { page ->
                     _pageTitle.value = page.displayTitle()
                     _pageDateLabel.value = formatPageDate(page.createdAt)
+                    notebookId = page.notebookId
+                    // Track the notebook's ordered pages for the page indicator + swipe page-turns.
+                    viewModelScope.launch {
+                        repository.observePagesOrdered(page.notebookId)
+                            .collect { _notebookPages.value = it }
+                    }
                 }
                 // Record the open so this note rises to the top of "Recent" / the note tabs (FA-15).
                 runCatching { repository.markOpened(pageId) }
@@ -551,6 +572,32 @@ class CanvasViewModel(
         val contentHeight = canvasWidthPx * PageTransform.ASPECT_RATIO
         val maxScroll = (contentHeight - canvasHeightPx).coerceAtLeast(0f)
         _pageScrollPx.value = (_pageScrollPx.value - dragDeltaY).coerceIn(0f, maxScroll)
+    }
+
+    /**
+     * Turns to the previous/next page (FA-20). Forward past the last page creates a new blank page —
+     * but only when the current page has content, so repeatedly swiping past the end never spawns
+     * blank pages. Emits the target page id for the screen to navigate to.
+     */
+    fun turnPage(forward: Boolean) {
+        val repo = repository ?: return
+        val nb = notebookId ?: return
+        val pages = _notebookPages.value
+        val idx = pages.indexOfFirst { it.id == pageId }
+        if (idx < 0) return
+        viewModelScope.launch {
+            val targetId = when {
+                forward && idx < pages.lastIndex -> pages[idx + 1].id
+                forward -> {
+                    val hasContent = _finishedStrokes.value.isNotEmpty() ||
+                        _aiNotes.value.any { !it.isError }
+                    if (hasContent) repo.addPage(nb).id else null
+                }
+                !forward && idx > 0 -> pages[idx - 1].id
+                else -> null
+            }
+            targetId?.let { _pageTurnEvents.emit(it) }
+        }
     }
 
     private fun defaultNoteWidth(): Float {

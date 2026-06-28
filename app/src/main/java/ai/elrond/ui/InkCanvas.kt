@@ -33,6 +33,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
@@ -220,9 +221,14 @@ private fun createTouchListener(
     var currentStrokeId: InProgressStrokeId? = null
     var currentIsFinger = false
     var erasing = false
-    // A lone finger drag scrolls the page vertically (FA-20); tracked separately from drawing.
+    // A lone finger drag scrolls vertically OR swipes horizontally to turn pages (FA-20); the axis
+    // locks after a small slop so scroll and page-turn don't fight.
     var scrollPointerId: Int? = null
+    var scrollStartX = 0f
+    var scrollStartY = 0f
     var lastScrollY = 0f
+    var scrollAxis = 0 // 0 = undecided, 1 = vertical (scroll), 2 = horizontal (page turn)
+    var pageTurnFired = false
 
     return View.OnTouchListener { view, event ->
         // Track finger + S Pen-button gestures BEFORE the lasso bail-out, so they keep working in
@@ -265,13 +271,17 @@ private fun createTouchListener(
                         erasing = false
                         return@OnTouchListener true
                     }
-                    // Swallow a rejected finger pointer; a lone finger drag scrolls the page (FA-20).
+                    // Swallow a rejected finger pointer; a lone finger drag scrolls/turns pages (FA-20).
                     if (rejectFinger) {
                         if (currentPointerId == null && scrollPointerId == null &&
                             event.actionMasked == MotionEvent.ACTION_DOWN
                         ) {
                             scrollPointerId = event.getPointerId(event.actionIndex)
-                            lastScrollY = event.getY(event.actionIndex)
+                            scrollStartX = event.getX(event.actionIndex)
+                            scrollStartY = event.getY(event.actionIndex)
+                            lastScrollY = scrollStartY
+                            scrollAxis = 0
+                            pageTurnFired = false
                         }
                         return@OnTouchListener true
                     }
@@ -305,13 +315,30 @@ private fun createTouchListener(
                 }
 
                 MotionEvent.ACTION_MOVE -> {
-                    // A lone finger drag scrolls the page (FA-20), before any stylus handling.
+                    // A lone finger drag scrolls or swipes to turn pages (FA-20), before stylus
+                    // handling. The axis locks after a small slop.
                     scrollPointerId?.let { sid ->
                         val si = event.findPointerIndex(sid)
                         if (si >= 0) {
-                            val y = event.getY(si)
-                            viewModel.scrollBy(y - lastScrollY)
-                            lastScrollY = y
+                            val fx = event.getX(si)
+                            val fy = event.getY(si)
+                            val totalDx = fx - scrollStartX
+                            val totalDy = fy - scrollStartY
+                            if (scrollAxis == 0 &&
+                                (abs(totalDx) > AXIS_LOCK_SLOP_PX || abs(totalDy) > AXIS_LOCK_SLOP_PX)
+                            ) {
+                                scrollAxis = if (abs(totalDx) > abs(totalDy)) 2 else 1
+                                lastScrollY = fy // start scrolling from the lock point
+                            }
+                            if (scrollAxis == 1) {
+                                viewModel.scrollBy(fy - lastScrollY)
+                                lastScrollY = fy
+                            } else if (scrollAxis == 2 && !pageTurnFired &&
+                                abs(totalDx) > PAGE_SWIPE_THRESHOLD_PX
+                            ) {
+                                pageTurnFired = true
+                                viewModel.turnPage(forward = totalDx < 0)
+                            }
                         }
                         return@OnTouchListener true
                     }
@@ -332,7 +359,11 @@ private fun createTouchListener(
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                     // Only finish when the tracked pointer lifts; a finger lifting is ignored.
                     val pointerId = event.getPointerId(event.actionIndex)
-                    if (pointerId == scrollPointerId) scrollPointerId = null
+                    if (pointerId == scrollPointerId) {
+                        scrollPointerId = null
+                        scrollAxis = 0
+                        pageTurnFired = false
+                    }
                     if (pointerId == currentPointerId) {
                         currentStrokeId?.let { strokeId ->
                             inProgressStrokesView.finishStroke(event, pointerId, strokeId)
@@ -353,6 +384,8 @@ private fun createTouchListener(
                     currentIsFinger = false
                     erasing = false
                     scrollPointerId = null
+                    scrollAxis = 0
+                    pageTurnFired = false
                     true
                 }
 
@@ -627,3 +660,8 @@ internal class StylusButtonTracker(private val viewModel: CanvasViewModel) {
         const val DOUBLE_CLICK_WINDOW_MS = 300L
     }
 }
+
+/** Finger-swipe tuning (FA-20): how far the drag travels before the scroll/turn axis locks, and how
+ *  far a horizontal swipe must travel to turn the page. Raw px (device-tunable). */
+private const val AXIS_LOCK_SLOP_PX = 20f
+private const val PAGE_SWIPE_THRESHOLD_PX = 140f
