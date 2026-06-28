@@ -115,6 +115,44 @@ seam now, UI later), hard page limits.
 - ViewModel page lifecycle → JVM.
 - Rendering / scroll / swipe / reorder gestures → instrumented + device (Galaxy Tab S).
 
+## Device-feedback batch 2 (2026-06-28) — 8 items, DONE
+
+A second device-test round on the notebooks editor. **DB is now v14**
+(`MIGRATION_13_14`). App + aibackend unit suites green; main + androidTest compile on the WSL
+Linux SDK. Compose surfaces are device-verify-only. Committed in coherent batches (`ab5019b`,
+`87626b0`, `50456ae`, `ad2429c`, `f1a8ed1`).
+
+- **Todo/calendar source links → notebook title only** (no "→ Page N"); the link still opens the
+  exact source page. `SourceNoteLabel` simplified.
+- **Pages > 1 carry no title of their own.** The notebook's title is its cover (page 1); the editor
+  header/date derive from the cover via the ordered-pages flow and rename targets the cover, so
+  swapping pages never changes the header or tab name.
+- **Lasso respects finger-draw.** With stylus-only on, a finger no longer starts a selection/paste —
+  the lasso follows the same palm-rejection rule as the pen.
+- **Page starts below the title band; the title scrolls away.** `CanvasViewModel.setPageTopInset`
+  reports the band bottom; the page transform docks the page below it (`offsetY = pageTopInset −
+  scroll`) and the band (composed before the toolbar so the toolbar stays on top) slides up with the
+  page top.
+- **Calendar day-sheet groups by notebook.** One tile per notebook: a *created* notebook shows
+  "Created" and opens on tap; an *edited* notebook shows "Edited" + an "N pages" pill and taps to a
+  per-page menu (`CalendarViewModel.notebooksForDay` / `DayNotebook`).
+- **Pages index: drag-reorder + multi-select.** Press-hold-drag a page (it lifts, the page under it
+  shows an accent drop indicator, release commits via `reorderPages`); a "Select" tick-box mode adds
+  multi-delete (`deletePagesFromNotebook`, always keeps ≥1).
+- **Schema v14 + per-notebook page style.** `MIGRATION_13_14` adds `notebooks.gridSpacing` +
+  `paperColor`; new `PaperStyle.GRID` + `PaperColor` enum. The editor ⋮ → **Page style** dialog
+  (was a disabled placeholder) sets, **per notebook**: paper style (Lines/Dots/Grid/Blank), a
+  spacing-density slider (1–10, 5 = the old default), an orientation dropdown, and paper-colour dots.
+  The VM resolves the effective style (per-notebook override else the global Settings default).
+- **Per-notebook orientation + rotation prompt.** `viewOrientation` swaps the page *sheet's* aspect
+  (LANDSCAPE = a wide A-ratio sheet) via `recomputePageSize`; strokes/toolbar stay upright, nothing
+  reflows. On device rotation an unobtrusive corner button offers to switch the whole notebook to
+  match the device. `PaperBackground` renders Grid + density + colour, sized for the orientation.
+
+Tests: `SourceNoteLabelTest` updated; `ElrondMigrationTest` → v14 + a v13→v14 column test;
+`CanvasViewModelPageTransformTest` unchanged-green. New page-style/orientation/reorder/timeline UI
+is device-verify-only.
+
 ---
 
 ## Build status (commits on `fa-20-notebooks`)
