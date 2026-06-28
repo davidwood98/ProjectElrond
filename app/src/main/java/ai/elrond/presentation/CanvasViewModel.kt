@@ -23,8 +23,12 @@ import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.QueryTriggerDetector
 import ai.elrond.domain.TriggerMode
 import ai.elrond.domain.UnitSystem
+import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.PageTransform
+import ai.elrond.domain.PageViewOrientation
+import ai.elrond.domain.PaperColor
+import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.defaultAiNotePosition
 import ai.elrond.domain.groupStrokesIntoLines
 import ai.elrond.domain.selectQuestionLines
@@ -133,6 +137,8 @@ class CanvasViewModel(
     /** Prefix-mode no-prompt timeout (ms) before an abandoned command reverts; null keeps default. */
     prefixNoPromptTimeoutMsFlow: Flow<Long>? = null,
     stylusOnlyFlow: Flow<Boolean>? = null,
+    /** Global default paper style — used when this notebook has no per-notebook override (FA-20). */
+    globalPaperStyleFlow: Flow<PaperStyle>? = null,
     /** Unit system the AI must use for measurements in answers; null keeps the default (Metric). */
     unitSystemFlow: Flow<UnitSystem>? = null,
     /** Lasso-move snap-back threshold (fraction of canvas size); null keeps the default. */
@@ -206,6 +212,7 @@ class CanvasViewModel(
         prefixTriggerDelayMsFlow = settings.prefixTriggerDelayMs,
         prefixNoPromptTimeoutMsFlow = settings.prefixNoPromptTimeoutMs,
         stylusOnlyFlow = settings.stylusOnly,
+        globalPaperStyleFlow = settings.paperStyle,
         unitSystemFlow = settings.unitSystem,
         lassoSnapBackThresholdFlow = settings.lassoSnapBackThreshold,
         lassoSnapBackEnabledFlow = settings.lassoSnapBackEnabled,
@@ -458,6 +465,9 @@ class CanvasViewModel(
     private var unitSystem: UnitSystem = UnitSystem.DEFAULT
 
     init {
+        globalPaperStyleFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { globalPaperStyle = it; refreshPageStyle() } }
+        }
         triggerCommandFlow?.let { flow ->
             viewModelScope.launch { flow.collect { triggerCommand = it } }
         }
@@ -533,6 +543,13 @@ class CanvasViewModel(
                             _pageDateLabel.value = formatPageDate(cover.createdAt)
                         }
                     }
+                    // Track the notebook's per-notebook page-style overrides (FA-20).
+                    viewModelScope.launch {
+                        repository.observeNotebook(page.notebookId).collect { nb ->
+                            currentNotebook = nb
+                            refreshPageStyle()
+                        }
+                    }
                 }
                 // Record the open so this note rises to the top of "Recent" / the note tabs (FA-15).
                 runCatching { repository.markOpened(pageId) }
@@ -553,6 +570,73 @@ class CanvasViewModel(
     private val _pageDateLabel = MutableStateFlow("")
     /** The open note's creation date, e.g. "8 Feb 2026", shown beside the title. */
     val pageDateLabel: StateFlow<String> = _pageDateLabel.asStateFlow()
+
+    // ── Per-notebook page style (FA-20: paper style / grid density / colour / orientation) ───────
+    /** Global default paper style, kept current; used when this notebook has no override. */
+    @Volatile
+    private var globalPaperStyle: PaperStyle = PaperStyle.DEFAULT
+
+    /** The current notebook (its page-style overrides), or null until loaded. */
+    private var currentNotebook: Notebook? = null
+
+    private val _paperStyle = MutableStateFlow(PaperStyle.DEFAULT)
+    /** Effective paper style for this notebook (per-notebook override else the global default). */
+    val paperStyle: StateFlow<PaperStyle> = _paperStyle.asStateFlow()
+
+    private val _gridSpacing = MutableStateFlow(PaperStyle.DEFAULT_GRID_SPACING)
+    /** Effective line/dot/grid spacing density (1–10) for this notebook. */
+    val gridSpacing: StateFlow<Int> = _gridSpacing.asStateFlow()
+
+    private val _paperColor = MutableStateFlow(PaperColor.DEFAULT)
+    /** Effective paper tint for this notebook. */
+    val paperColor: StateFlow<PaperColor> = _paperColor.asStateFlow()
+
+    private val _viewOrientation = MutableStateFlow(PageViewOrientation.DEFAULT)
+    /** This notebook's page orientation (PORTRAIT default / LANDSCAPE); drives the page geometry. */
+    val viewOrientation: StateFlow<PageViewOrientation> = _viewOrientation.asStateFlow()
+
+    /** Re-resolves the effective page style from the loaded notebook + the global default. */
+    private fun refreshPageStyle() {
+        val nb = currentNotebook
+        _paperStyle.value = nb?.paperStyle ?: globalPaperStyle
+        _gridSpacing.value = (nb?.gridSpacing ?: PaperStyle.DEFAULT_GRID_SPACING)
+            .coerceIn(PaperStyle.MIN_GRID_SPACING, PaperStyle.MAX_GRID_SPACING)
+        _paperColor.value = nb?.paperColor ?: PaperColor.DEFAULT
+        val orientation = nb?.viewOrientation ?: PageViewOrientation.DEFAULT
+        if (orientation != _viewOrientation.value) {
+            _viewOrientation.value = orientation
+            // Orientation changes the page aspect → recompute the page size + transform.
+            recomputePageSize()
+            scrollBy(0f)
+        }
+    }
+
+    /** Sets this notebook's paper style (per-notebook override; FA-20). */
+    fun setPaperStyle(style: PaperStyle) = updatePageStyle(paperStyle = style)
+
+    /** Sets this notebook's grid/line/dot spacing density (1–10). */
+    fun setGridSpacing(value: Int) =
+        updatePageStyle(gridSpacing = value.coerceIn(PaperStyle.MIN_GRID_SPACING, PaperStyle.MAX_GRID_SPACING))
+
+    /** Sets this notebook's paper tint. */
+    fun setPaperColor(color: PaperColor) = updatePageStyle(paperColor = color)
+
+    /** Sets this notebook's page orientation (whole-notebook; FA-20). */
+    fun setViewOrientation(orientation: PageViewOrientation) =
+        updatePageStyle(viewOrientation = orientation)
+
+    private fun updatePageStyle(
+        paperStyle: PaperStyle? = null,
+        gridSpacing: Int? = null,
+        paperColor: PaperColor? = null,
+        viewOrientation: PageViewOrientation? = null,
+    ) {
+        val repo = repository ?: return
+        val nb = notebookId ?: return
+        viewModelScope.launch {
+            repo.updateNotebookPageStyle(nb, paperStyle, gridSpacing, paperColor, viewOrientation)
+        }
+    }
 
     /**
      * Renames the notebook — i.e. its cover (page 1) title, since that IS the notebook's title and
@@ -575,16 +659,31 @@ class CanvasViewModel(
     fun setCanvasSize(widthPx: Float, heightPx: Float) {
         canvasWidthPx = widthPx
         canvasHeightPx = heightPx
-        // The page is a fixed portrait sheet: its width = the shorter screen edge, so rotating the
-        // device doesn't reflow it (B1). In portrait that's the full width (offsetX 0); in landscape
-        // it's the (smaller) height, leaving equal side margins via the centring offset below.
-        pageWidthPx = if (widthPx > 0f && heightPx > 0f) minOf(widthPx, heightPx) else widthPx
+        recomputePageSize()
         // Re-clamp the scroll if the viewport grew (e.g. rotation) and refresh the transform.
         scrollBy(0f)
     }
 
-    /** On-screen height of the fixed-width page (its A-ratio height). */
-    private fun pageContentHeightPx(): Float = pageWidthPx * PageTransform.ASPECT_RATIO
+    /**
+     * Recomputes the page sheet's on-screen width from the canvas size + this notebook's orientation
+     * (FA-20). The sheet is a fixed A-ratio rectangle whose SHORT edge = the shorter screen edge, so
+     * rotating the device never reflows it and stroke sizes are preserved (scale stays 1 until zoom):
+     * PORTRAIT → width = short edge (tall sheet); LANDSCAPE → width = short edge × √2 (wide sheet).
+     */
+    private fun recomputePageSize() {
+        val shortEdge =
+            if (canvasWidthPx > 0f && canvasHeightPx > 0f) minOf(canvasWidthPx, canvasHeightPx) else canvasWidthPx
+        pageWidthPx = when (_viewOrientation.value) {
+            PageViewOrientation.LANDSCAPE -> shortEdge * PageTransform.ASPECT_RATIO
+            else -> shortEdge
+        }
+    }
+
+    /** On-screen height of the page sheet (its A-ratio height for the current orientation). */
+    private fun pageContentHeightPx(): Float = when (_viewOrientation.value) {
+        PageViewOrientation.LANDSCAPE -> pageWidthPx / PageTransform.ASPECT_RATIO
+        else -> pageWidthPx * PageTransform.ASPECT_RATIO
+    }
 
     /**
      * Recomputes [pageTransform] from the current page width, centring offset and scroll. The page is

@@ -40,6 +40,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_10_11,
         ElrondDatabase.MIGRATION_11_12,
         ElrondDatabase.MIGRATION_12_13,
+        ElrondDatabase.MIGRATION_13_14,
     )
 
     /**
@@ -63,11 +64,35 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v13_and_validates_final_schema() {
+    fun migrates_v1_to_v14_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v13 schema (FA-20: notebook/page
-        // columns + the note_subjects re-key to notebookId).
-        helper.runMigrationsAndValidate(TEST_DB, 13, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v14 schema (FA-20: notebook/page
+        // columns, note_subjects re-key, and the per-notebook gridSpacing/paperColor columns).
+        helper.runMigrationsAndValidate(TEST_DB, 14, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_13_to_14_adds_page_style_columns() {
+        helper.createDatabase(TEST_DB, 13).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt, modifiedAt) VALUES ('nb1', 'N', 1, 1)")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, *allMigrations)
+        val cols = columnNames(db, "notebooks")
+        // Existing rows get NULL for the new columns (= inherit the default).
+        var gridSpacing = -1
+        var hasPaperColor = false
+        db.query("SELECT gridSpacing, paperColor FROM notebooks WHERE id = 'nb1'").use { c ->
+            if (c.moveToNext()) {
+                gridSpacing = if (c.isNull(0)) -1 else c.getInt(0)
+                hasPaperColor = !c.isNull(1)
+            }
+        }
+        db.close()
+        assertTrue("notebooks.gridSpacing should exist", "gridSpacing" in cols)
+        assertTrue("notebooks.paperColor should exist", "paperColor" in cols)
+        assertEquals("pre-existing rows keep NULL gridSpacing", -1, gridSpacing)
+        assertTrue("pre-existing rows keep NULL paperColor", !hasPaperColor)
     }
 
     @Test

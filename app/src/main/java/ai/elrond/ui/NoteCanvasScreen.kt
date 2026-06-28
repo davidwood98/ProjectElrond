@@ -1,7 +1,10 @@
 package ai.elrond.ui
 
+import android.content.res.Configuration
 import ai.elrond.presentation.AiUiState
 import ai.elrond.domain.CanvasTool
+import ai.elrond.domain.PageViewOrientation
+import ai.elrond.ui.theme.LeapTheme
 import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.domain.PendingSuggestion
@@ -24,8 +27,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.asPaddingValues
@@ -37,9 +42,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Checkbox
@@ -74,6 +82,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -122,8 +131,13 @@ fun NoteCanvasScreen(
     // The active-tool highlight style (A soft tile / B filled / C underline), from Settings.
     val toolTreatment by settingsViewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
     var showMoreMenu by remember { mutableStateOf(false) }
-    // FA-14 appearance tweaks + editor header state.
-    val paperStyle by settingsViewModel.paperStyle.collectAsStateWithLifecycle()
+    var showPageStyle by remember { mutableStateOf(false) }
+    // FA-20: page style is per-notebook (paper / grid density / colour / orientation), resolved by
+    // the CanvasViewModel (per-notebook override else the global default).
+    val paperStyle by viewModel.paperStyle.collectAsStateWithLifecycle()
+    val gridSpacing by viewModel.gridSpacing.collectAsStateWithLifecycle()
+    val paperColor by viewModel.paperColor.collectAsStateWithLifecycle()
+    val viewOrientation by viewModel.viewOrientation.collectAsStateWithLifecycle()
     val penIconStyle by settingsViewModel.penIconStyle.collectAsStateWithLifecycle()
     val pageTitle by viewModel.pageTitle.collectAsStateWithLifecycle()
     val pageDateLabel by viewModel.pageDateLabel.collectAsStateWithLifecycle()
@@ -198,7 +212,14 @@ fun NoteCanvasScreen(
         // Paper background (Ruled / Plain / Dots) behind the transparent ink layers. The page is a
         // fixed portrait sheet centred on screen (margins in landscape) and scrolled — all from the
         // transform — so the paper sits exactly under the page-mapped ink.
-        PaperBackground(paper = paperStyle, transform = pageTransform, modifier = Modifier.fillMaxSize())
+        PaperBackground(
+            paper = paperStyle,
+            transform = pageTransform,
+            gridSpacing = gridSpacing,
+            paperColor = paperColor,
+            landscape = viewOrientation == PageViewOrientation.LANDSCAPE,
+            modifier = Modifier.fillMaxSize(),
+        )
 
         InkCanvas(
             viewModel = viewModel,
@@ -448,12 +469,14 @@ fun NoteCanvasScreen(
                             viewModel.clearPage()
                         },
                     )
-                    // Handoff menu items not yet wired to a backend — shown disabled.
                     DropdownMenuItem(
                         text = { Text("Page style") },
-                        enabled = false,
-                        onClick = {},
+                        onClick = {
+                            showMoreMenu = false
+                            showPageStyle = true
+                        },
                     )
+                    // Handoff menu items not yet wired to a backend — shown disabled.
                     DropdownMenuItem(
                         text = { Text("Export") },
                         enabled = false,
@@ -502,6 +525,19 @@ fun NoteCanvasScreen(
                 onToggleBookmark = viewModel::setPageBookmark,
                 onMovePage = viewModel::movePage,
                 onDismiss = { showPages = false },
+            )
+        }
+        if (showPageStyle) {
+            PageStyleDialog(
+                paperStyle = paperStyle,
+                gridSpacing = gridSpacing,
+                paperColor = paperColor,
+                viewOrientation = viewOrientation,
+                onPaperStyle = viewModel::setPaperStyle,
+                onGridSpacing = viewModel::setGridSpacing,
+                onPaperColor = viewModel::setPaperColor,
+                onViewOrientation = viewModel::setViewOrientation,
+                onDismiss = { showPageStyle = false },
             )
         }
         if (showLibrary) {
@@ -599,6 +635,48 @@ fun NoteCanvasScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 )
+            }
+        }
+
+        // Orientation prompt (FA-20): when the device is rotated so its orientation no longer matches
+        // the notebook's page orientation, an unobtrusive corner button offers to switch the whole
+        // notebook's pages to match (the page sheet's aspect swaps; strokes/toolbar stay upright).
+        val deviceLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val deviceOrientation =
+            if (deviceLandscape) PageViewOrientation.LANDSCAPE else PageViewOrientation.PORTRAIT
+        val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        AnimatedVisibility(
+            visible = deviceOrientation != viewOrientation,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = rightPad, bottom = bottomInset + 16.dp),
+        ) {
+            Surface(
+                onClick = { viewModel.setViewOrientation(deviceOrientation) },
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, LeapTheme.tokens.toolbarBorder),
+                shadowElevation = 4.dp,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.ScreenRotation,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = LeapTheme.tokens.accent,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (deviceLandscape) "Landscape page" else "Portrait page",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             }
         }
 

@@ -3,6 +3,8 @@ package ai.elrond.ui
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.NotebookSummary
 import ai.elrond.domain.PageTransform
+import ai.elrond.domain.PageViewOrientation
+import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.SubjectNode
 import ai.elrond.presentation.NoteListViewModel
@@ -12,6 +14,7 @@ import ai.elrond.ui.theme.LeapTheme
 import ai.elrond.ui.theme.Neutral100
 import ai.elrond.ui.theme.Neutral200
 import ai.elrond.ui.theme.Neutral400
+import ai.elrond.ui.theme.Neutral300
 import ai.elrond.ui.theme.Neutral500
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -40,10 +43,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.CheckBox
@@ -53,12 +59,16 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -82,6 +92,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import kotlin.math.roundToInt
 
 /**
  * Editor chrome from the Claude Design "Canvas" handoff (FA-14): the paper background, the note
@@ -93,44 +104,57 @@ import androidx.compose.ui.window.Dialog
  * drawer's note list IS live (it navigates between real notes).
  */
 
+/** Maps a [PaperColor] to its on-screen sheet tint (the enum → Color bridge lives in the ui layer). */
+fun PaperColor.toSheetColor(): Color = when (this) {
+    PaperColor.WHITE -> Color(0xFFFFFFFF)
+    PaperColor.CREAM -> Color(0xFFFBF6EC)
+    PaperColor.YELLOW -> Color(0xFFFCF8D8)
+    PaperColor.DRAFTING_BLUE -> Color(0xFFEAF1F8)
+}
+
 /**
- * Paper background drawn behind the ink: Ruled / Plain / Dots (from the paper-style setting).
+ * Paper background drawn behind the ink: Ruled / Dots / Grid / Plain, in the notebook's paper colour
+ * (FA-20). The lattice spacing scales with [gridSpacing] (1 = compact … 10 = sparse; 5 = default).
  *
- * The page is a **fixed portrait A-ratio sheet** placed by [transform]: in portrait it fills the
- * width; in landscape it stays the same (portrait) width and is centred, leaving a "desk" margin on
- * each side (FA-20 B1). The sheet is the white surface with the rule/dot lattice clipped to it; the
- * surrounding desk is a neutral tint with a hairline page border, so the page edge reads clearly.
- * Everything is positioned through [transform] so the paper sits exactly under the page-mapped ink.
+ * The page is a fixed A-ratio sheet placed by [transform]: it fills the shorter screen edge and is
+ * centred (a "desk" margin appears on the long axis), so rotating the device never reflows it.
+ * [landscape] flips the sheet's aspect (a wide sheet instead of tall). The sheet is the chosen paper
+ * colour with the rule/dot/grid lattice clipped to it; the desk is a neutral tint with a hairline
+ * page border. Everything is positioned through [transform] so the paper sits under the page-mapped ink.
  */
 @Composable
 fun PaperBackground(
     paper: PaperStyle,
     modifier: Modifier = Modifier,
     transform: PageTransform = PageTransform(scale = 1f, offsetX = 0f, offsetY = 0f),
+    gridSpacing: Int = PaperStyle.DEFAULT_GRID_SPACING,
+    paperColor: PaperColor = PaperColor.DEFAULT,
+    landscape: Boolean = false,
 ) {
-    val surface = MaterialTheme.colorScheme.surface
+    val sheet = paperColor.toSheetColor()
     val desk = Neutral100
     val border = Neutral200
     val mark = Neutral200
+    // Density 1→0.6× … 5→1.0× … 10→1.5× of the base spacing.
+    val densityFactor = 0.5f + gridSpacing.coerceIn(PaperStyle.MIN_GRID_SPACING, PaperStyle.MAX_GRID_SPACING) * 0.1f
     Canvas(modifier = modifier.fillMaxSize().background(desk)) {
         // The page rectangle on screen: left/top from the transform, width = the screen span between
-        // the two side margins, height its A-ratio extent. (scale = 1 until pinch-zoom, Phase 5.)
+        // the two side margins, height its A-ratio extent for the orientation. (scale = 1 until zoom.)
         val pageLeft = transform.offsetX
         val pageWidth = (size.width - 2f * transform.offsetX).coerceAtLeast(0f)
         val pageTop = transform.offsetY // = -scroll
-        val pageHeight = pageWidth * PageTransform.ASPECT_RATIO
+        val pageHeight = if (landscape) pageWidth / PageTransform.ASPECT_RATIO else pageWidth * PageTransform.ASPECT_RATIO
         val pageRight = pageLeft + pageWidth
         val pageBottom = pageTop + pageHeight
 
-        // White sheet.
-        drawRect(color = surface, topLeft = Offset(pageLeft, pageTop), size = Size(pageWidth, pageHeight))
+        drawRect(color = sheet, topLeft = Offset(pageLeft, pageTop), size = Size(pageWidth, pageHeight))
 
-        // Rule/dot lattice, clipped to the sheet and offset by the page scroll so it moves with ink.
+        // Lattice, clipped to the sheet and offset by the page scroll so it moves with the ink.
         clipRect(left = pageLeft, top = pageTop, right = pageRight, bottom = pageBottom) {
             when (paper) {
                 PaperStyle.PLAIN -> Unit
                 PaperStyle.DOTS -> {
-                    val step = 26.dp.toPx()
+                    val step = 26.dp.toPx() * densityFactor
                     val r = 1.4.dp.toPx()
                     var y = pageTop + step
                     while (y < pageBottom) {
@@ -143,12 +167,26 @@ fun PaperBackground(
                     }
                 }
                 PaperStyle.RULED -> {
-                    val step = 34.dp.toPx()
+                    val step = 34.dp.toPx() * densityFactor
                     val w = 1.dp.toPx()
                     var y = pageTop + step
                     while (y < pageBottom) {
                         drawLine(color = mark, start = Offset(pageLeft, y), end = Offset(pageRight, y), strokeWidth = w)
                         y += step
+                    }
+                }
+                PaperStyle.GRID -> {
+                    val step = 28.dp.toPx() * densityFactor
+                    val w = 1.dp.toPx()
+                    var y = pageTop + step
+                    while (y < pageBottom) {
+                        drawLine(color = mark, start = Offset(pageLeft, y), end = Offset(pageRight, y), strokeWidth = w)
+                        y += step
+                    }
+                    var x = pageLeft + step
+                    while (x < pageRight) {
+                        drawLine(color = mark, start = Offset(x, pageTop), end = Offset(x, pageBottom), strokeWidth = w)
+                        x += step
                     }
                 }
             }
@@ -168,6 +206,136 @@ fun PaperBackground(
 // Opaque light-grey band so the paper texture (ruled lines / dots) doesn't bleed through the title +
 // tabs. Neutral100 matches the previous translucent band's apparent colour over white paper.
 private val HeaderBandColor = Neutral100
+
+/**
+ * Per-notebook page-style dialog (FA-20): paper style (Lines / Dots / Grid / Blank), spacing density
+ * (1–10), orientation (Portrait / Landscape), and paper colour. Edits apply to the whole notebook
+ * (the global default lives in Settings); changes are live as the user picks them.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun PageStyleDialog(
+    paperStyle: PaperStyle,
+    gridSpacing: Int,
+    paperColor: PaperColor,
+    viewOrientation: PageViewOrientation,
+    onPaperStyle: (PaperStyle) -> Unit,
+    onGridSpacing: (Int) -> Unit,
+    onPaperColor: (PaperColor) -> Unit,
+    onViewOrientation: (PageViewOrientation) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val accent = LeapTheme.tokens.accent
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface) {
+            Column(
+                modifier = Modifier
+                    .width(360.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text("Page style", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    "Applies to this notebook",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                PageStyleLabel("Paper")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val styles = listOf(
+                        PaperStyle.RULED to "Lines",
+                        PaperStyle.DOTS to "Dots",
+                        PaperStyle.GRID to "Grid",
+                        PaperStyle.PLAIN to "Blank",
+                    )
+                    styles.forEach { (style, label) ->
+                        FilterChip(
+                            selected = paperStyle == style,
+                            onClick = { onPaperStyle(style) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+
+                PageStyleLabel("Spacing density")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Compact", style = MaterialTheme.typography.labelSmall, color = Neutral500)
+                    Slider(
+                        value = gridSpacing.toFloat(),
+                        onValueChange = { onGridSpacing(it.roundToInt()) },
+                        valueRange = PaperStyle.MIN_GRID_SPACING.toFloat()..PaperStyle.MAX_GRID_SPACING.toFloat(),
+                        steps = PaperStyle.MAX_GRID_SPACING - PaperStyle.MIN_GRID_SPACING - 1,
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    )
+                    Text("Wide", style = MaterialTheme.typography.labelSmall, color = Neutral500)
+                }
+
+                PageStyleLabel("Orientation")
+                OrientationDropdown(viewOrientation, onViewOrientation)
+
+                PageStyleLabel("Paper colour")
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    PaperColor.entries.forEach { color ->
+                        val selected = paperColor == color
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(color.toSheetColor())
+                                .border(
+                                    width = if (selected) 2.5.dp else 1.dp,
+                                    color = if (selected) accent else Neutral300,
+                                    shape = CircleShape,
+                                )
+                                .clickable { onPaperColor(color) },
+                        )
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Done") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PageStyleLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun OrientationDropdown(
+    current: PageViewOrientation,
+    onSelect: (PageViewOrientation) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val label = if (current == PageViewOrientation.LANDSCAPE) "Landscape" else "Portrait"
+    Box {
+        OutlinedButton(onClick = { open = true }) {
+            Text(label)
+            Spacer(Modifier.width(6.dp))
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            listOf(PageViewOrientation.PORTRAIT to "Portrait", PageViewOrientation.LANDSCAPE to "Landscape")
+                .forEach { (orientation, text) ->
+                    DropdownMenuItem(
+                        text = { Text(text) },
+                        onClick = { onSelect(orientation); open = false },
+                    )
+                }
+        }
+    }
+}
 
 /**
  * The editor header (FA-15): a distinct light-grey band holding the open note's title (bold Poppins,

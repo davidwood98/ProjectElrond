@@ -4,10 +4,11 @@ package ai.elrond.domain
  * The on-screen orientation a notebook's pages are presented in (FA-20), independent of the
  * physical device orientation. Persisted per notebook.
  *
- * The page's logical coordinate space is always portrait; [LANDSCAPE] rigidly rotates the whole
- * page 90° and fits it to the screen for readability (strokes rotate *with* the page — nothing
- * reflows, and stored coordinates never change). Physical device rotation is the primary way to
- * write in landscape; this setting is the explicit, persisted preference for a given notebook.
+ * The strokes/toolbar stay upright with the device UI — they do NOT rotate. Instead the page *sheet*
+ * itself swaps aspect: [PORTRAIT] is a tall A-ratio sheet (the default); [LANDSCAPE] is a wide
+ * A-ratio sheet (its short edge becomes the height), fitted + centred on screen. When the device is
+ * rotated an unobtrusive corner button offers to switch the whole notebook's page orientation to
+ * match; it can also be set from the page-style menu. Stored stroke coordinates never change.
  */
 enum class PageViewOrientation {
     PORTRAIT,

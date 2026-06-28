@@ -15,6 +15,10 @@ data class NotebookEntity(
     val pageNavigationMode: String? = null,
     val paperStyle: String? = null,
     val viewOrientation: String? = null,
+    /** Per-notebook line/dot/grid spacing density (1–10); null = default (FA-20). */
+    val gridSpacing: Int? = null,
+    /** Per-notebook paper tint (PaperColor name); null = default white (FA-20). */
+    val paperColor: String? = null,
     /** Placeholder for a future page-template id (FA-20 deferred); unused for now. */
     val templateId: String? = null,
     /** Last time the notebook (or one of its pages) changed; for recency ordering. */

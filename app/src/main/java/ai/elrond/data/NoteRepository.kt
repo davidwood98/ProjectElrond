@@ -6,6 +6,9 @@ import ai.elrond.domain.NoteEditDay
 import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotebookSummary
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.PageViewOrientation
+import ai.elrond.domain.PaperColor
+import ai.elrond.domain.PaperStyle
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -47,6 +50,34 @@ class NoteRepository(
     /** Returns the first notebook, creating the default one on first launch. */
     suspend fun ensureDefaultNotebook(): Notebook =
         notebookDao.first()?.toDomain() ?: createNotebook(DEFAULT_NOTEBOOK_NAME)
+
+    /** Observes a single notebook by id (its per-notebook page-style settings) (FA-20). */
+    fun observeNotebook(notebookId: String): Flow<Notebook?> =
+        notebookDao.observeAll().map { all -> all.firstOrNull { it.id == notebookId }?.toDomain() }
+
+    /**
+     * Updates a notebook's per-notebook page-style overrides (FA-20). A null argument leaves that
+     * field unchanged; pass an explicit value (incl. the enum/Int) to set it. Storing null in a
+     * column means "inherit the global default", but these setters always write a concrete choice.
+     */
+    suspend fun updateNotebookPageStyle(
+        notebookId: String,
+        paperStyle: PaperStyle? = null,
+        gridSpacing: Int? = null,
+        paperColor: PaperColor? = null,
+        viewOrientation: PageViewOrientation? = null,
+    ) {
+        val current = notebookDao.getById(notebookId) ?: return
+        notebookDao.update(
+            current.copy(
+                paperStyle = paperStyle?.name ?: current.paperStyle,
+                gridSpacing = gridSpacing ?: current.gridSpacing,
+                paperColor = paperColor?.name ?: current.paperColor,
+                viewOrientation = viewOrientation?.name ?: current.viewOrientation,
+                modifiedAt = clock(),
+            ),
+        )
+    }
 
     // --- Pages ---
 

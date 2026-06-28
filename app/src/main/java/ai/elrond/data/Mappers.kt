@@ -5,6 +5,7 @@ import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PageViewOrientation
+import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.Subject
 import ai.elrond.domain.TodoItem
@@ -19,6 +20,8 @@ fun NotebookEntity.toDomain(): Notebook = Notebook(
     pageNavigationMode = pageNavigationMode?.let(PageNavigationMode::fromName),
     paperStyle = paperStyle?.let(PaperStyle::fromName),
     viewOrientation = viewOrientation?.let(PageViewOrientation::fromName),
+    gridSpacing = gridSpacing,
+    paperColor = paperColor?.let(PaperColor::fromName),
     templateId = templateId,
     modifiedAt = modifiedAt,
 )

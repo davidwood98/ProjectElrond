@@ -15,6 +15,10 @@ data class Notebook(
     val paperStyle: PaperStyle? = null,
     /** Per-notebook view orientation; null = follow the default (FA-20). */
     val viewOrientation: PageViewOrientation? = null,
+    /** Per-notebook line/dot/grid spacing density (1–10); null = the default (FA-20). */
+    val gridSpacing: Int? = null,
+    /** Per-notebook paper tint; null = the default (white) (FA-20). */
+    val paperColor: PaperColor? = null,
     /** Placeholder for a future page-template id (FA-20 deferred). */
     val templateId: String? = null,
     val modifiedAt: Long = createdAt,
