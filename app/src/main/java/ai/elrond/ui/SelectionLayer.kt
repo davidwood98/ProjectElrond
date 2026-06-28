@@ -81,7 +81,11 @@ fun SelectionLayer(
     val selection by viewModel.selection.collectAsStateWithLifecycle()
     val clipboard by viewModel.clipboard.collectAsStateWithLifecycle()
     val finishedStrokes by viewModel.finishedStrokes.collectAsStateWithLifecycle()
-    // Container size in px (== canvas/stroke coordinate space) — clamps the floating menu on-screen.
+    // Page scroll offset (FA-20): strokes are stored in page coords, and the page may be scrolled
+    // (you can't scroll in lasso mode, but you may have scrolled in pen mode first). The overlay
+    // renders the box/ink at (world − scroll) and captures the lasso at (screen + scroll).
+    val pageScrollPx by viewModel.pageScrollPx.collectAsStateWithLifecycle()
+    // Container size in px — clamps the floating menu on-screen.
     var layerSize by remember { mutableStateOf(IntSize.Zero) }
 
     Box(
@@ -92,6 +96,7 @@ fun SelectionLayer(
         // Background: drag → new lasso; tap → paste (armed) or deselect.
         LassoCatcher(
             clipboardActive = clipboard.active,
+            scrollPx = pageScrollPx,
             onLasso = viewModel::selectByLasso,
             onTap = { x, y ->
                 if (clipboard.active) viewModel.pasteAt(x, y) else viewModel.clearSelection()
@@ -110,8 +115,8 @@ fun SelectionLayer(
                     StrokeTransforms.recolorStroke(it.stroke, fadedGhostColor(it.stroke.brush.colorIntArgb))
                 }
             }
-            SelectionStrokes(selectedStrokes, ghostStrokes, sel.transform)
-            SelectionBox(sel, viewModel, layerSize)
+            SelectionStrokes(selectedStrokes, ghostStrokes, sel.transform, pageScrollPx)
+            SelectionBox(sel, viewModel, layerSize, pageScrollPx)
         }
 
         if (clipboard.active) {
@@ -128,6 +133,7 @@ fun SelectionLayer(
 @Composable
 private fun LassoCatcher(
     clipboardActive: Boolean,
+    scrollPx: Float,
     onLasso: (List<GestureTriggerDetector.Point>) -> Unit,
     onTap: (Float, Float) -> Unit,
 ) {
@@ -160,9 +166,11 @@ private fun LassoCatcher(
                         }
                     }
                     if (dragging) {
-                        onLasso(points.map { GestureTriggerDetector.Point(it.x, it.y) })
+                        // Convert the screen-space lasso to page coords (y + scroll) so it hit-tests
+                        // against the stored strokes (FA-20).
+                        onLasso(points.map { GestureTriggerDetector.Point(it.x, it.y + scrollPx) })
                     } else {
-                        onTap(down.position.x, down.position.y)
+                        onTap(down.position.x, down.position.y + scrollPx)
                     }
                     path.value = emptyList()
                 }
@@ -190,7 +198,12 @@ private fun LassoCatcher(
 
 /** Dashed bounding box: drag to move, corner handles to scale, with the floating toolbar above. */
 @Composable
-private fun SelectionBox(sel: SelectionState, viewModel: CanvasViewModel, layerSize: IntSize) {
+private fun SelectionBox(
+    sel: SelectionState,
+    viewModel: CanvasViewModel,
+    layerSize: IntSize,
+    scrollPx: Float,
+) {
     val density = LocalDensity.current
     val accent = LeapTheme.tokens.accent
     val box = sel.displayBounds
@@ -198,7 +211,7 @@ private fun SelectionBox(sel: SelectionState, viewModel: CanvasViewModel, layerS
     with(density) {
         Box(
             Modifier
-                .absoluteOffset(x = box.left.toDp(), y = box.top.toDp())
+                .absoluteOffset(x = box.left.toDp(), y = (box.top - scrollPx).toDp())
                 .size(width = box.width.coerceAtLeast(1f).toDp(), height = box.height.coerceAtLeast(1f).toDp())
                 .border(
                     width = 1.5.dp,
@@ -228,7 +241,7 @@ private fun SelectionBox(sel: SelectionState, viewModel: CanvasViewModel, layerS
         }
     }
 
-    SelectionToolbar(sel, viewModel, layerSize)
+    SelectionToolbar(sel, viewModel, layerSize, scrollPx)
 }
 
 /** A draggable corner handle that scales the selection about the opposite corner. */
@@ -271,7 +284,12 @@ private fun ScaleHandle(
  * container sizes ([layerSize]), so the clamp is exact rather than guessed.
  */
 @Composable
-private fun SelectionToolbar(sel: SelectionState, viewModel: CanvasViewModel, layerSize: IntSize) {
+private fun SelectionToolbar(
+    sel: SelectionState,
+    viewModel: CanvasViewModel,
+    layerSize: IntSize,
+    scrollPx: Float,
+) {
     val box = sel.displayBounds
     var menuOpen by remember { mutableStateOf(false) }
     var toolbarSize by remember { mutableStateOf(IntSize.Zero) }
@@ -287,8 +305,8 @@ private fun SelectionToolbar(sel: SelectionState, viewModel: CanvasViewModel, la
                 val maxX = (layerSize.width - w - margin).coerceAtLeast(margin)
                 val x = (box.centerX - w / 2f).coerceIn(margin, maxX)
                 // Prefer above the box; drop below when there's no room, then clamp vertically.
-                val above = box.top - h - gap
-                val rawY = if (above >= margin) above else box.bottom + gap
+                val above = (box.top - scrollPx) - h - gap
+                val rawY = if (above >= margin) above else (box.bottom - scrollPx) + gap
                 val maxY = (layerSize.height - h - margin).coerceAtLeast(margin)
                 val y = rawY.coerceIn(margin, maxY)
                 IntOffset(x.roundToInt(), y.roundToInt())
@@ -400,11 +418,12 @@ internal fun SelectionStrokes(
     selected: List<InkStroke>,
     ghost: List<InkStroke>,
     transform: LiveTransform,
+    scrollPx: Float = 0f,
 ) {
     val renderer = remember { CanvasStrokeRenderer.create() }
     // Faded origin ghost — drawn once at the original position, shown only while transforming.
     if (!transform.isIdentity) {
-        StrokeCanvas(ghost, renderer, Modifier)
+        StrokeCanvas(ghost, renderer, Modifier, scrollPx)
     }
     // Live move/scale via a GPU graphicsLayer (reliable per-frame update; no mesh redraw).
     key(selected) {
@@ -417,25 +436,33 @@ internal fun SelectionStrokes(
                 scaleX = transform.scaleX
                 scaleY = transform.scaleY
                 // Scale about the same pivot LiveTransform uses, expressed as a fraction of the layer.
+                // The strokes draw at (world − scroll), so the on-screen pivot y is (pivotY − scroll).
                 transformOrigin = if (size.width > 0f && size.height > 0f) {
-                    TransformOrigin(transform.pivotX / size.width, transform.pivotY / size.height)
+                    TransformOrigin(transform.pivotX / size.width, (transform.pivotY - scrollPx) / size.height)
                 } else {
                     TransformOrigin(0f, 0f)
                 }
             },
+            scrollPx,
         )
     }
 }
 
 /** Rasterises [strokes] at their own coordinates (identity) with the ink renderer. */
 @Composable
-private fun StrokeCanvas(strokes: List<InkStroke>, renderer: CanvasStrokeRenderer, modifier: Modifier) {
-    val identity = remember { Matrix() }
+private fun StrokeCanvas(
+    strokes: List<InkStroke>,
+    renderer: CanvasStrokeRenderer,
+    modifier: Modifier,
+    scrollPx: Float = 0f,
+) {
+    // Page(world) → screen: translate by -scroll (FA-20); scale stays 1 in fit-width mode.
+    val transform = remember(scrollPx) { Matrix().apply { setTranslate(0f, -scrollPx) } }
     Canvas(modifier.fillMaxSize()) {
         drawIntoCanvas { canvas ->
             val nativeCanvas = canvas.nativeCanvas
             strokes.forEach { stroke ->
-                renderer.draw(canvas = nativeCanvas, stroke = stroke, strokeToScreenTransform = identity)
+                renderer.draw(canvas = nativeCanvas, stroke = stroke, strokeToScreenTransform = transform)
             }
         }
     }
