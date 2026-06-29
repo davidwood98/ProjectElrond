@@ -1609,19 +1609,21 @@ class CanvasViewModel(
         )
     }
 
-    /** Applies a baked move/scale to an AI box: position via [t], with width/height/font scaled. */
+    /** Applies a baked move/scale to an AI box (FA-21): position via [t]; a scale grows width + font. */
     private fun transformAiNote(note: AiInkNote, t: LiveTransform): AiInkNote {
         val newX = t.applyX(note.x).coerceAtLeast(0f)
         val newY = t.applyY(note.y).coerceAtLeast(0f)
-        // Keep width / height / font in proportion (FA-21): if the scale would push the box past the
-        // page edge, damp the WHOLE transform (font included) by the same fit factor — clamping width
-        // alone would leave the font oversized for a now-too-narrow box.
-        val desiredWidth = note.widthPx * t.scaleX
-        val maxW = maxWidthAt(newX)
-        val fit = if (desiredWidth > maxW && desiredWidth > 0f) maxW / desiredWidth else 1f
-        val newWidth = (desiredWidth * fit).coerceAtLeast(AiInkNote.MIN_WIDTH_PX)
-        val newHeight = note.heightPx?.let { (it * t.scaleY * fit).coerceAtLeast(AiInkNote.MIN_HEIGHT_PX) }
-        val newFont = (note.fontScale * t.brushScale * fit)
+        // A pure MOVE must never resize the text. (widthPx is the wrap CAP, usually wider than the
+        // hugged box, so a page-edge width clamp here would silently shrink the font on every move.)
+        if (t.scaleX == 1f && t.scaleY == 1f) {
+            return note.copy(x = newX, y = newY)
+        }
+        // A scale grows width cap AND font by the same factor so the box stays proportional and the
+        // text keeps fitting (no page-edge clamp — that fought the scale; the box can be moved back
+        // if it runs off the edge).
+        val newWidth = (note.widthPx * t.scaleX).coerceAtLeast(AiInkNote.MIN_WIDTH_PX)
+        val newHeight = note.heightPx?.let { (it * t.scaleY).coerceAtLeast(AiInkNote.MIN_HEIGHT_PX) }
+        val newFont = (note.fontScale * t.brushScale)
             .coerceIn(AiInkNote.MIN_FONT_SCALE, AiInkNote.MAX_FONT_SCALE)
         return note.copy(x = newX, y = newY, widthPx = newWidth, heightPx = newHeight, fontScale = newFont)
     }

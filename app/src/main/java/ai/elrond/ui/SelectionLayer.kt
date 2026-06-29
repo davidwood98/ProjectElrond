@@ -495,12 +495,15 @@ private fun SelectionToolbar(
                         text = { Text("Cut") },
                         onClick = { menuOpen = false; viewModel.cutSelection() },
                     )
-                    DropdownMenuItem(
-                        // Toggle shows the ACTION it performs (FA-21): default is locked.
-                        text = { Text(if (sel.lockRatio) "Unlock aspect" else "Lock aspect") },
-                        onClick = { viewModel.setLockRatio(!sel.lockRatio); menuOpen = false },
-                    )
+                    // The aspect-lock toggle + grouping are stroke-only: an AI box is always
+                    // ratio-locked (corner scales the font; edge handles reflow the width), so its
+                    // menu omits Unlock aspect (FA-21).
                     if (!hasAi) {
+                        DropdownMenuItem(
+                            // Toggle shows the ACTION it performs (FA-21): default is locked.
+                            text = { Text(if (sel.lockRatio) "Unlock aspect" else "Lock aspect") },
+                            onClick = { viewModel.setLockRatio(!sel.lockRatio); menuOpen = false },
+                        )
                         if (sel.grouped) {
                             DropdownMenuItem(
                                 text = { Text("Ungroup") },

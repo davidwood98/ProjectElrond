@@ -294,18 +294,11 @@ fun NoteCanvasScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
-        InkCanvas(
-            viewModel = viewModel,
-            modifier = Modifier.fillMaxSize(),
-            stylusButtonTracker = stylusButtonTracker,
-            // Tapping/drawing on the canvas commits + closes the inline title editor (FA-20).
-            onInteract = { focusManager.clearFocus() },
-        )
-
-        // AI answers as handwriting-style ink, inline at their trigger position. They're passive (no
-        // pointer input), so the pen writes straight over them; selection + the box/handles/toolbar
-        // are handled by the ViewModel + SelectionDecorations below (FA-21). Error/clarify notes are
-        // NOT placed here — they render as a centred pop-up below (always on-screen).
+        // AI answers as handwriting-style ink, inline at their trigger position — rendered BELOW the
+        // ink canvas so handwritten strokes always sit in FRONT of the AI text (FA-21). They're
+        // passive (no pointer input); the pen hits the ink layer above and draws over them, and the
+        // selection box/handles/toolbar render on top via SelectionDecorations. Error/clarify notes
+        // are NOT placed here — they render as a centred pop-up below (always on-screen).
         aiNotes.forEach { note ->
             if (!note.isError) {
                 key(note.id) {
@@ -319,6 +312,14 @@ fun NoteCanvasScreen(
                 }
             }
         }
+
+        InkCanvas(
+            viewModel = viewModel,
+            modifier = Modifier.fillMaxSize(),
+            stylusButtonTracker = stylusButtonTracker,
+            // Tapping/drawing on the canvas commits + closes the inline title editor (FA-20).
+            onInteract = { focusManager.clearFocus() },
+        )
 
         // On-canvas AI activity: loading dots while thinking, red ink on failure.
         when (val state = aiState) {

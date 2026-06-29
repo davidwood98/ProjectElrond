@@ -1532,8 +1532,9 @@ confirmed findings were applied (below).
   no full-screen input — empty areas fall through to the canvas. **Toolbar variants:** a stroke
   selection shows Duplicate / Delete / **AI (logo 2× bigger, 40dp)** + a ⋮ kebab (Copy / Cut /
   **Unlock↔Lock aspect** toggle / Group); a selection **including an AI box** drops the AI button and
-  **promotes Copy** to the top row (`[Copy][Delete]` + kebab Duplicate / Cut / lock). The ⋮ glyph is
-  enlarged (`KEBAB_GLYPH_SP`).
+  **promotes Copy** to the top row (`[Copy][Delete]` + kebab Duplicate / Cut — **no aspect toggle**:
+  an AI box is always ratio-locked, corner scales the font and edge handles reflow the width). The ⋮
+  glyph is enlarged (`KEBAB_GLYPH_SP`).
 - **Write-over + hold-to-select live in `InkCanvas`.** A deselected AI note has zero pointer input,
   so the pen writes over it. `InkCanvas`'s touch listener arms a 1.5s `Handler` hold over an AI box
   (`aiNoteAt`); movement past slop cancels it (a real stroke → write-over), a fired hold cancels the
