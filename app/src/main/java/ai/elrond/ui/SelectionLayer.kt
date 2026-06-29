@@ -111,6 +111,7 @@ fun SelectionLayer(
             // A finger rejected from lassoing (palm rejection) still scrolls / turns pages, so the
             // lasso tool behaves like every other tool for navigation (FA-20).
             onScroll = viewModel::scrollBy,
+            onScrollRelease = viewModel::releaseScroll,
             onSwipe = viewModel::swipeBy,
             onSwipeRelease = viewModel::releaseSwipe,
         )
@@ -150,6 +151,7 @@ private fun LassoCatcher(
     onLasso: (List<GestureTriggerDetector.Point>) -> Unit,
     onTap: (Float, Float) -> Unit,
     onScroll: (Float) -> Unit,
+    onScrollRelease: () -> Unit,
     onSwipe: (Float) -> Unit,
     onSwipeRelease: () -> Unit,
 ) {
@@ -194,6 +196,7 @@ private fun LassoCatcher(
                             }
                         }
                         if (axis == 2) onSwipeRelease()
+                        if (axis == 1) onScrollRelease()
                         return@awaitEachGesture
                     }
                     val points = mutableListOf(down.position)

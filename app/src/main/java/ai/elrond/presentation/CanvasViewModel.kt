@@ -25,7 +25,6 @@ import ai.elrond.domain.TriggerMode
 import ai.elrond.domain.UnitSystem
 import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotePage
-import ai.elrond.domain.PageHit
 import ai.elrond.domain.PageLayer
 import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PageTransform
@@ -324,22 +323,11 @@ class CanvasViewModel(
     val notebookPages: StateFlow<List<NotePage>> = _notebookPages.asStateFlow()
 
     /**
-     * The pages rendered as a continuous document (FA-20). In HORIZONTAL mode this is just the open
-     * page; in VERTICAL-continuous mode it is every page stacked with a margin break, each editable.
-     * The open page's strokes come from [_finishedStrokes]; the others from [otherPageStrokes].
+     * The single rendered page layer — the open page (FA-20). Kept as a list so the ink view's render
+     * path is unchanged; continuous multi-page is a future feature.
      */
     private val _pageLayers = MutableStateFlow<List<PageLayer>>(emptyList())
     val pageLayers: StateFlow<List<PageLayer>> = _pageLayers.asStateFlow()
-
-    /** Loaded dry strokes for the NON-open pages, for read-only continuous rendering (vertical mode). */
-    private val otherPageStrokes = mutableMapOf<String, List<CanvasStroke>>()
-
-    /** Guards against spawning multiple trailing blank pages before [_notebookPages] catches up. */
-    @Volatile
-    private var addingTrailingPage = false
-
-    /** True once the initial centre-on-open scroll has been applied (vertical mode). */
-    private var didInitialPageScroll = false
 
     /** The page open in this editor (its id), for the page indicator. */
     val currentPageId: String? get() = pageId
@@ -431,6 +419,13 @@ class CanvasViewModel(
 
     /** Vertical scroll offset (px) within the current page; 0 = top (FA-20). */
     private var scrollPx: Float = 0f
+
+    /**
+     * Elastic page-turn overscroll (px) for VERTICAL mode (FA-20): a drag past the page's top/bottom
+     * edge pulls the page (damped); release turns the page or springs back. >0 = pulled down (toward the
+     * previous page), <0 = pulled up (toward the next page). Always 0 at rest.
+     */
+    private var overscrollY: Float = 0f
 
     /**
      * Pinch-zoom factor (FA-20). 1.0 = 100% = the page fills the shorter screen edge (the stored page
@@ -618,10 +613,6 @@ class CanvasViewModel(
                             coverPage = pages.minByOrNull { it.pageNumber } ?: page
                             _pageDateLabel.value = formatPageDate((coverPage ?: page).createdAt)
                             refreshTitle()
-                            addingTrailingPage = false // the page set caught up; allow another auto-add
-                            // Load the other pages' strokes for continuous vertical rendering, then
-                            // rebuild the document layers + apply the initial centre-on-open scroll.
-                            loadOtherPages(pages)
                         }
                     }
                     // Keep the open page's layer in sync as its strokes change (draw / erase / undo).
@@ -723,16 +714,8 @@ class CanvasViewModel(
             scrollBy(0f)
         }
         if (modeChanged) {
-            // Switching to vertical: reload the other pages fresh from storage (drop any stale state
-            // from the horizontal session, where each page was its own route) so they render at their
-            // own doc-tops, not overlaid; either way the document re-lays out.
-            if (newMode == PageNavigationMode.VERTICAL) {
-                otherPageStrokes.clear()
-                loadOtherPages(_notebookPages.value)
-            } else {
-                rebuildPageLayers()
-            }
-            scrollBy(0f)
+            overscrollY = 0f
+            scrollBy(0f) // re-clamp + refresh for the new scroll/turn axis
         }
     }
 
@@ -793,10 +776,6 @@ class CanvasViewModel(
         recomputePageSize()
         // Re-clamp the scroll if the viewport grew (e.g. rotation) and refresh the transform.
         scrollBy(0f)
-        // The page geometry changed → re-lay out the vertical document and apply the centre-on-open
-        // scroll once the size is first known (page links open centred on their page; FA-20).
-        rebuildPageLayers()
-        applyInitialPageScroll()
     }
 
     /**
@@ -824,28 +803,6 @@ class CanvasViewModel(
     }
 
     /**
-     * Total scrollable content height at 100% (page-space px). In horizontal mode (and until the
-     * vertical multi-page document is active) this is a single page; vertical-continuous mode overrides
-     * it to span all pages with a margin break between them (see [verticalDocumentHeightPx]).
-     */
-    private fun documentContentHeightPx(): Float =
-        if (_pageNavigationMode.value == PageNavigationMode.VERTICAL) verticalDocumentHeightPx()
-        else pageContentHeightPx()
-
-    /**
-     * Height of the continuous vertical document at 100% (page-space px): every page stacked with a
-     * [VERTICAL_PAGE_GAP_PX] margin break between them (FA-20). The page-turn swipe is disabled in this
-     * mode; you scroll through all pages instead.
-     */
-    private fun verticalDocumentHeightPx(): Float {
-        val count = _notebookPages.value.size.coerceAtLeast(1)
-        return count * pageContentHeightPx() + (count - 1) * VERTICAL_PAGE_GAP_PX
-    }
-
-    /** Page-space top of page [index] within the vertical document (0-based; FA-20). */
-    private fun verticalPageTop(index: Int): Float = index * (pageContentHeightPx() + VERTICAL_PAGE_GAP_PX)
-
-    /**
      * Screen Y of the page top at scroll 0 — i.e. the page starts BELOW the title/header band, which
      * scrolls away with the page (FA-20). Reported by the UI ([setPageTopInset]); 0 until then.
      */
@@ -871,84 +828,67 @@ class CanvasViewModel(
         } else {
             panXpx.coerceIn(canvasWidthPx - scaledPageW, 0f)
         }
-        // The transform stays anchored to the OPEN page so all single-page features (erase, lasso, AI
-        // notes, /Q) keep working unchanged; the document origin is offsetY − primaryDocTop·scale, and
-        // every other page is placed relative to the open page via its layer's docTopPx (FA-20).
-        val documentOriginY = pageTopInsetPx - scrollPx
-        _documentHeightPx.value = documentContentHeightPx()
+        // One editable page docked at [pageTopInsetPx], shifted up by the in-page scroll. Vertical mode
+        // adds an elastic page-turn [overscrollY] (drag past an edge); horizontal uses [swipeOffsetX].
+        val transform = PageTransform(
+            scale = zoomScale,
+            offsetX = offsetX,
+            offsetY = pageTopInsetPx - scrollPx + overscrollY,
+            panX = swipeOffsetX,
+        )
         _pageWidthSpacePx.value = pageWidthPx
-        _documentTransform.value = PageTransform(
-            scale = zoomScale,
-            offsetX = offsetX,
-            offsetY = documentOriginY,
-            panX = swipeOffsetX,
-        )
-        // pageTransform IS documentTransform shifted down by the open page's doc-top, so every existing
-        // single-page consumer (erase / lasso / AI notes / /Q) keeps working against the open page.
-        _pageTransform.value = PageTransform(
-            scale = zoomScale,
-            offsetX = offsetX,
-            offsetY = documentOriginY + primaryDocTopPx() * zoomScale,
-            panX = swipeOffsetX,
-        )
+        _documentHeightPx.value = pageContentHeightPx()
+        _documentTransform.value = transform
+        _pageTransform.value = transform
+        rebuildPageLayers()
     }
 
-    /** Page-space top of the OPEN page within the vertical document (0 in horizontal mode). */
-    private fun primaryDocTopPx(): Float =
-        if (_pageNavigationMode.value == PageNavigationMode.VERTICAL) {
-            verticalPageTop(_notebookPages.value.indexOfFirst { it.id == pageId }.coerceAtLeast(0))
-        } else {
-            0f
-        }
+    /** Renders the open page as the single document layer (continuous multi-page is a future feature). */
+    private fun rebuildPageLayers() {
+        _pageLayers.value = listOf(PageLayer(pageId ?: "", 0, 0f, _finishedStrokes.value))
+    }
 
-    /** Largest valid vertical scroll (px): scroll until the document bottom reaches the viewport bottom. */
+    /** Largest valid in-page vertical scroll (px): scroll until the page bottom reaches the viewport bottom. */
     private fun maxScrollPx(): Float =
-        (pageTopInsetPx + documentContentHeightPx() * zoomScale - canvasHeightPx).coerceAtLeast(0f)
+        (pageTopInsetPx + pageContentHeightPx() * zoomScale - canvasHeightPx).coerceAtLeast(0f)
 
     /**
-     * Scrolls vertically by a finger-drag delta (px), clamped to the document bounds (FA-20). In
-     * horizontal mode that's one page; in vertical-continuous mode it spans every page. Also called with
-     * 0 to re-clamp + refresh the transform after a size/zoom/page-set change.
+     * Scrolls the open page vertically (FA-20). In vertical mode a drag past an edge becomes a damped
+     * elastic overscroll that turns the page on release (the vertical analog of the horizontal swipe);
+     * horizontal mode just clamps within the page. Called with 0 to re-clamp after a size/zoom change.
      */
     fun scrollBy(dragDeltaY: Float) {
         if (pageWidthPx <= 0f) {
             refreshPageTransform()
             return
         }
-        scrollPx = (scrollPx - dragDeltaY).coerceIn(0f, maxScrollPx())
+        val max = maxScrollPx()
+        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) {
+            scrollPx = (scrollPx - dragDeltaY).coerceIn(0f, max)
+            refreshPageTransform()
+            return
+        }
+        // Reconstruct the unclamped position from the current scroll + overscroll, apply the drag, then
+        // re-split into in-bounds scroll and (damped) overscroll — self-contained, no extra drag state.
+        val virtual = scrollPx - overscrollY / OVERSCROLL_DAMP
+        val newVirtual = virtual - dragDeltaY
+        scrollPx = newVirtual.coerceIn(0f, max)
+        overscrollY = -(newVirtual - scrollPx) * OVERSCROLL_DAMP
         refreshPageTransform()
-        // A real scroll (not a 0-delta re-clamp) schedules the open page to follow to the centred page.
-        if (dragDeltaY != 0f) scheduleVisiblePageSwitch()
     }
-
-    /** Drives the route-nav that makes the open page follow the scroll once it settles (FA-20). */
-    private var pageSettleJob: Job? = null
 
     /**
-     * After scrolling settles, makes the centred page the open (editable) page via route-nav, so every
-     * editing feature (draw / erase / lasso / AI / undo) acts on the page you're looking at (FA-20).
-     * Vertical mode only; no-op if the centred page is already open.
+     * Releases a vertical drag (vertical mode): a large-enough elastic overscroll turns the page — down
+     * past the bottom → next page (creating one past the last page with content), up past the top →
+     * previous page — otherwise it springs back. The vertical analog of [releaseSwipe].
      */
-    private fun scheduleVisiblePageSwitch() {
-        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) return
-        pageSettleJob?.cancel()
-        pageSettleJob = viewModelScope.launch {
-            delay(PAGE_SETTLE_MILLIS)
-            val target = centeredPageId() ?: return@launch
-            if (target != pageId) _pageTurnEvents.emit(target)
-        }
-    }
-
-    /** The page whose centre is nearest the viewport centre (vertical document), or null if none. */
-    private fun centeredPageId(): String? {
-        val layers = _pageLayers.value
-        if (layers.isEmpty()) return null
-        val t = _documentTransform.value
-        val pageH = pageContentHeightPx() * t.scale
-        val viewportCenter = pageTopInsetPx + (canvasHeightPx - pageTopInsetPx) / 2f
-        return layers.minByOrNull { layer ->
-            abs((t.offsetY + layer.docTopPx * t.scale + pageH / 2f) - viewportCenter)
-        }?.pageId
+    fun releaseScroll() {
+        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL || overscrollY == 0f) return
+        val forward = overscrollY < 0f // pulled up past the bottom → next page
+        val shouldTurn = abs(overscrollY) > PAGE_TURN_OVERSCROLL_PX
+        overscrollY = 0f
+        refreshPageTransform()
+        if (shouldTurn) viewModelScope.launch { pageTurnTarget(forward)?.let { _pageTurnEvents.emit(it) } }
     }
 
     // ── Pinch zoom (FA-20) ────────────────────────────────────────────────────────────────────
@@ -1017,137 +957,6 @@ class CanvasViewModel(
         _zoomSnapped.value = isOnSnapTarget()
         _zoomEvents.tryEmit(zoomScale)
     }
-
-    // ── Vertical continuous multi-page document (FA-20) ─────────────────────────────────────────
-    // In VERTICAL mode the editor renders every page of the notebook stacked with a margin break and
-    // lets the user write on whichever page the pen is over. The open page ([pageId]) keeps the full
-    // single-page feature set (undo/redo, /Q, lasso, thumbnails); the other pages support draw + erase
-    // + autosave (their undo/AI/lasso is a documented follow-up). HORIZONTAL mode is unchanged — one
-    // page, route-nav swipe to turn.
-
-    /** Loads the non-open pages' strokes (vertical mode) then rebuilds the document + centres the open page. */
-    private fun loadOtherPages(pages: List<NotePage>) {
-        val repo = repository ?: return
-        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) {
-            rebuildPageLayers()
-            return
-        }
-        viewModelScope.launch {
-            pages.forEach { p ->
-                if (p.id != pageId && !otherPageStrokes.containsKey(p.id)) {
-                    otherPageStrokes[p.id] = runCatching { repo.loadStrokes(p.id) }.getOrDefault(emptyList())
-                }
-            }
-            // Drop strokes for pages no longer in the notebook (deleted/pruned).
-            val ids = pages.mapTo(HashSet()) { it.id }
-            otherPageStrokes.keys.retainAll { it in ids }
-            rebuildPageLayers()
-            applyInitialPageScroll()
-            // Entering a notebook whose last page already has ink → ensure a trailing blank page is
-            // present so the next page is scrollable straight away, not only after the first stroke.
-            ensureTrailingBlankPage()
-        }
-    }
-
-    /** Rebuilds [_pageLayers] from the current pages + each page's strokes (open page = [_finishedStrokes]). */
-    private fun rebuildPageLayers() {
-        val pages = _notebookPages.value
-        // Keep the document height current with the page count so the dry-ink view is always laid out
-        // tall enough — otherwise a freshly added/loaded page's ink falls outside the (stale) view
-        // bounds and is clipped away (FA-20: page-2+ strokes vanishing).
-        _documentHeightPx.value = documentContentHeightPx()
-        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) {
-            // Horizontal mode renders only the open page at the document origin.
-            val idx = pages.indexOfFirst { it.id == pageId }.coerceAtLeast(0)
-            _pageLayers.value = listOf(PageLayer(pageId ?: "", idx, 0f, _finishedStrokes.value))
-            return
-        }
-        // docTopPx is the page's absolute top within the document (≥ 0); the renderer/hit-test place
-        // each page at documentTransform.offsetY + docTopPx·scale.
-        _pageLayers.value = pages.mapIndexed { index, p ->
-            val strokes = if (p.id == pageId) _finishedStrokes.value else otherPageStrokes[p.id].orEmpty()
-            PageLayer(p.id, index, verticalPageTop(index), strokes)
-        }
-    }
-
-    /** On first load in vertical mode, scrolls so the opened page is centred in the viewport (FA-20 links). */
-    private fun applyInitialPageScroll() {
-        if (didInitialPageScroll || _pageNavigationMode.value != PageNavigationMode.VERTICAL) return
-        if (pageWidthPx <= 0f || canvasHeightPx <= 0f) return // wait until the canvas size is known
-        val pages = _notebookPages.value
-        val idx = pages.indexOfFirst { it.id == pageId }
-        if (idx < 0) return
-        didInitialPageScroll = true
-        if (idx == 0) return // page 1 already opens at the top
-        scrollToPageCentered(idx)
-    }
-
-    /** Scrolls so page [index] sits centred in the visible canvas (vertical mode). */
-    private fun scrollToPageCentered(index: Int) {
-        val pageTop = verticalPageTop(index) * zoomScale
-        val pageH = pageContentHeightPx() * zoomScale
-        val viewportH = (canvasHeightPx - pageTopInsetPx).coerceAtLeast(0f)
-        val target = pageTop - (viewportH - pageH) / 2f
-        scrollPx = target.coerceIn(0f, maxScrollPx())
-        refreshPageTransform()
-    }
-
-    /**
-     * The page under a screen point and its on-screen placement, for routing a pen/eraser touch (FA-20).
-     * Horizontal mode always returns the open page; vertical mode finds the page whose band contains
-     * [screenY] (null in a gap so a stray mark in the margin is ignored).
-     */
-    fun pageHitAt(screenY: Float): PageHit? {
-        val t = _documentTransform.value
-        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) {
-            return pageId?.let { PageHit(it, t.offsetX, t.offsetY, t.scale) }
-        }
-        val layers = _pageLayers.value
-        if (layers.isEmpty()) return pageId?.let { PageHit(it, t.offsetX, t.offsetY, t.scale) }
-        val pageH = pageContentHeightPx() * t.scale
-        // The page whose band contains the point, else the NEAREST page (a touch in a margin gap snaps
-        // to the closest sheet) so a stroke is never silently dropped (FA-20).
-        var best = layers.first()
-        var bestDist = Float.MAX_VALUE
-        layers.forEach { layer ->
-            val top = t.offsetY + layer.docTopPx * t.scale
-            if (screenY in top..(top + pageH)) return PageHit(layer.pageId, t.offsetX, top, t.scale)
-            val dist = if (screenY < top) top - screenY else screenY - (top + pageH)
-            if (dist < bestDist) { bestDist = dist; best = layer }
-        }
-        val bestTop = t.offsetY + best.docTopPx * t.scale
-        return PageHit(best.pageId, t.offsetX, bestTop, t.scale)
-    }
-
-    /**
-     * Switches the open (editable) page to the page under [screenY] if it isn't already open — the
-     * route-nav that makes the open page follow the scroll (FA-20). Returns true if a switch was
-     * requested, so the ink view can skip starting a stroke on the page being navigated away from.
-     */
-    fun switchToPageAt(screenY: Float): Boolean {
-        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) return false
-        val hit = pageHitAt(screenY) ?: return false
-        if (hit.pageId == pageId) return false
-        viewModelScope.launch { _pageTurnEvents.emit(hit.pageId) }
-        return true
-    }
-
-    /**
-     * Vertical mode: once the last page has any ink, make sure a trailing blank page exists so the user
-     * can always keep scrolling/writing into a fresh sheet. Guarded so it adds at most one at a time.
-     */
-    private fun ensureTrailingBlankPage() {
-        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL || addingTrailingPage) return
-        val repo = repository ?: return
-        val nb = notebookId ?: return
-        val last = _notebookPages.value.lastOrNull() ?: return
-        if (!pageHasStrokes(last.id)) return
-        addingTrailingPage = true
-        viewModelScope.launch { runCatching { repo.addPage(nb) } }
-    }
-
-    private fun pageHasStrokes(id: String): Boolean =
-        if (id == pageId) _finishedStrokes.value.isNotEmpty() else otherPageStrokes[id]?.isNotEmpty() == true
 
     /** Opens a specific page of this notebook (FA-20 page index). */
     fun goToPage(targetPageId: String) {
@@ -1388,30 +1197,10 @@ class CanvasViewModel(
             if (aiNotes != lastPersistedAiNotes) {
                 flushScope.launch { runCatching { repository.replaceAiNotes(pageId, aiNotes) } }
             }
-            pruneTrailingBlankPages(repository)
         }
         // Release the native handwriting recognizer held for this screen.
         runCatching { recognizer?.close() }
         super.onCleared()
-    }
-
-    /**
-     * On close, deletes the trailing blank pages the auto-next-page logic created but never used, so the
-     * page index / badge never fill with empties (FA-20). Keeps at least one page; stops at the first
-     * non-empty page from the end. The open page is kept if it has any AI notes even with no strokes.
-     */
-    private fun pruneTrailingBlankPages(repository: NoteRepository) {
-        val pages = _notebookPages.value
-        if (pages.size <= 1) return
-        val openHasAiNotes = _aiNotes.value.any { !it.isError }
-        val toDelete = mutableListOf<String>()
-        for (p in pages.reversed()) {
-            if (pages.size - toDelete.size <= 1) break // always keep at least one page
-            val empty = !pageHasStrokes(p.id) && !(p.id == pageId && openHasAiNotes)
-            if (empty) toDelete.add(p.id) else break
-        }
-        if (toDelete.isEmpty()) return
-        flushScope.launch { toDelete.forEach { runCatching { repository.deletePage(it) } } }
     }
 
     /** Pressure-sensitive pen brush for user ink. Lazy so JVM unit tests never touch ink natives. */
@@ -1541,8 +1330,6 @@ class CanvasViewModel(
         thumbnailDirty = true // ink changed — the note-card thumbnail is now stale
         val newStrokes = strokes.map { CanvasStroke(newStrokeId(), it) }
         _finishedStrokes.update { current -> current + newStrokes }
-        // Vertical mode: if the open page is the last page, ensure a fresh blank page follows it.
-        ensureTrailingBlankPage()
 
         // Prefix `/Q`: while listening, every new stroke is part of the question — track its id and
         // restart the inactivity timer (don't run the trigger detector; the timer drives the send).
@@ -2492,6 +2279,11 @@ class CanvasViewModel(
         private const val SWIPE_SNAP_BACK_MS: Long = 240L
         private const val SWIPE_FRAME_MS: Long = 16L
 
+        // Vertical elastic page-turn (FA-20): how strongly an over-the-edge drag pulls the page, and how
+        // far it must be pulled on release to turn the page (the vertical analog of PAGE_SWIPE_COMMIT_PX).
+        private const val OVERSCROLL_DAMP: Float = 0.4f
+        private const val PAGE_TURN_OVERSCROLL_PX: Float = 90f
+
         // ── Pinch zoom (FA-20) ──────────────────────────────────────────────────────────────
         /** Pinch-zoom range: 50%–400% of the fit-to-shorter-edge baseline. */
         const val MIN_ZOOM: Float = 0.5f
@@ -2501,11 +2293,6 @@ class CanvasViewModel(
         /** Tolerance for the "currently on a snap" accent indicator. */
         private const val ZOOM_SNAP_EPSILON: Float = 0.01f
 
-        /** The desk-coloured margin break between pages in the continuous vertical document (px). */
-        const val VERTICAL_PAGE_GAP_PX: Float = 28f
-
-        /** Idle time after a scroll before the open page route-navs to the centred page (FA-20). */
-        private const val PAGE_SETTLE_MILLIS: Long = 150L
 
         /** Shown briefly when a re-triggered selection only holds already-captured items. */
         const val ALREADY_EXISTS_MESSAGE: String = "Already on your to-do list"

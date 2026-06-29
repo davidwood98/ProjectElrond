@@ -283,7 +283,6 @@ fun NoteCanvasScreen(
         // Paper background (Ruled / Plain / Dots) behind the transparent ink layers. The page is a
         // fixed portrait sheet centred on screen (margins in landscape) and scrolled — all from the
         // transform — so the paper sits exactly under the page-mapped ink.
-        val verticalMode = pageNavigationMode == PageNavigationMode.VERTICAL
         PaperBackground(
             paper = paperStyle,
             transform = documentTransform,
@@ -291,8 +290,6 @@ fun NoteCanvasScreen(
             paperColor = paperColor,
             landscape = viewOrientation == PageViewOrientation.LANDSCAPE,
             pageWidthSpacePx = pageWidthSpacePx,
-            pageCount = if (verticalMode) notebookPages.size.coerceAtLeast(1) else 1,
-            pageGapSpacePx = if (verticalMode) CanvasViewModel.VERTICAL_PAGE_GAP_PX else 0f,
             modifier = Modifier.fillMaxSize(),
         )
 

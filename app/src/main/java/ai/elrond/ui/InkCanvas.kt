@@ -413,13 +413,6 @@ private fun createTouchListener(
                     }
                     // Single active stroke: ignore additional pointers while one is down.
                     if (currentPointerId != null) return@OnTouchListener true
-                    // Vertical continuous mode: if the pen lands on a page that isn't the open one,
-                    // route-nav so it becomes the open/editable page (FA-20 open-page-follows-scroll)
-                    // and skip this stroke — the user draws once it's open (which is the centred page,
-                    // so this is rare). Keeps all editing on the single open-page pipeline.
-                    if (viewModel.switchToPageAt(event.getY(event.actionIndex))) {
-                        return@OnTouchListener true
-                    }
                     view.requestUnbufferedDispatch(event)
                     val pointerIndex = event.actionIndex
                     val pointerId = event.getPointerId(pointerIndex)
@@ -543,9 +536,10 @@ private fun createTouchListener(
                     // Only finish when the tracked pointer lifts; a finger lifting is ignored.
                     val pointerId = event.getPointerId(event.actionIndex)
                     if (pointerId == scrollPointerId) {
-                        // Resolve a horizontal swipe: turn the page or spring back (FA-20). A pan does
-                        // not turn pages, so it just ends.
+                        // Resolve a horizontal swipe (turn or spring back) or a vertical drag (elastic
+                        // page-turn or spring back in vertical mode). A pan just ends. (FA-20)
                         if (scrollAxis == 2 && !horizontalIsPan) viewModel.releaseSwipe()
+                        if (scrollAxis == 1) viewModel.releaseScroll()
                         scrollPointerId = null
                         scrollAxis = 0
                     }
@@ -570,6 +564,7 @@ private fun createTouchListener(
                     erasing = false
                     if (pinching) { pinching = false; viewModel.endPinch() }
                     if (scrollAxis == 2 && !horizontalIsPan) viewModel.releaseSwipe() // spring an in-progress swipe back
+                    if (scrollAxis == 1) viewModel.releaseScroll() // spring an in-progress vertical overscroll back
                     scrollPointerId = null
                     scrollAxis = 0
                     true

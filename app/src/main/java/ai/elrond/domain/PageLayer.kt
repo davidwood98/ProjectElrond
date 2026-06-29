@@ -15,15 +15,3 @@ data class PageLayer(
     val docTopPx: Float,
     val strokes: List<CanvasStroke>,
 )
-
-/**
- * The page under a screen point and its on-screen placement (FA-20). Returned by the ViewModel so the
- * ink view can map a pen/eraser touch into the right page's space and route the finished stroke there.
- * `screen = page · `[scale]` + (`[originX]`, `[originY]`)`.
- */
-data class PageHit(
-    val pageId: String,
-    val originX: Float,
-    val originY: Float,
-    val scale: Float,
-)

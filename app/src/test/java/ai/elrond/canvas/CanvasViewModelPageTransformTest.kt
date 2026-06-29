@@ -48,18 +48,22 @@ class CanvasViewModelPageTransformTest {
 
     @Test
     fun `scroll offsets Y negatively and clamps to the page bottom`() = runTest(dispatcher) {
-        val vm = CanvasViewModel()
+        val vm = CanvasViewModel() // default mode is VERTICAL (elastic page-turn overscroll)
         // Portrait page height = 1000 * sqrt(2) ≈ 1414; viewport 1000 tall → maxScroll ≈ 414.
         vm.setCanvasSize(1000f, 1000f)
         val maxScroll = 1000f * PageTransform.ASPECT_RATIO - 1000f
 
-        vm.scrollBy(-100f) // dragging up scrolls the page content up
+        vm.scrollBy(-100f) // dragging up scrolls the page content up (within bounds)
         assertEquals(-100f, vm.pageTransform.value.offsetY, 0.01f)
 
-        vm.scrollBy(-100000f) // way past the bottom → clamp
+        // Over-drag past the bottom pulls elastically; release (no next page here) clamps to maxScroll.
+        vm.scrollBy(-100000f)
+        vm.releaseScroll()
         assertEquals(-maxScroll, vm.pageTransform.value.offsetY, 0.01f)
 
-        vm.scrollBy(100000f) // back past the top → clamp at 0
+        // Over-drag past the top; release clamps back at 0.
+        vm.scrollBy(100000f)
+        vm.releaseScroll()
         assertEquals(0f, vm.pageTransform.value.offsetY, 0.01f)
     }
 }
