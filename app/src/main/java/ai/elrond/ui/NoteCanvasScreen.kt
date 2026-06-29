@@ -87,6 +87,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.IntOffset
@@ -190,6 +191,8 @@ fun NoteCanvasScreen(
     }
     var showPages by remember { mutableStateOf(false) }
     var showLibrary by remember { mutableStateOf(false) }
+    // Clears the inline title editor's focus (commits it) when the canvas is touched (FA-20).
+    val focusManager = LocalFocusManager.current
 
     // S Pen side-button gestures (FA-19). One shared tracker, fed by both the InkCanvas (while
     // drawing) and an always-present top-level observer below — so the button keeps working in
@@ -297,6 +300,8 @@ fun NoteCanvasScreen(
             viewModel = viewModel,
             modifier = Modifier.fillMaxSize(),
             stylusButtonTracker = stylusButtonTracker,
+            // Tapping/drawing on the canvas commits + closes the inline title editor (FA-20).
+            onInteract = { focusManager.clearFocus() },
         )
 
         // Tap anywhere off a selected AI box to deselect it (place it into the note flow).

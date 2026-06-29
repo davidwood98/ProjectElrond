@@ -26,7 +26,4 @@ data class PageHit(
     val originX: Float,
     val originY: Float,
     val scale: Float,
-) {
-    /** The screen ⇄ page mapping for this hit page, so callers reuse [PageTransform.screenToPageX] etc. */
-    fun transform(): PageTransform = PageTransform(scale = scale, offsetX = originX, offsetY = originY)
-}
+)

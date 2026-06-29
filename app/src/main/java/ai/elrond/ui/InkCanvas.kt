@@ -68,11 +68,13 @@ internal fun InkCanvas(
     viewModel: CanvasViewModel,
     modifier: Modifier = Modifier,
     stylusButtonTracker: StylusButtonTracker = remember(viewModel) { StylusButtonTracker(viewModel) },
+    /** Called on any touch that reaches the canvas — used to commit/close the inline title editor. */
+    onInteract: () -> Unit = {},
 ) {
     Box(modifier = modifier) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
-            factory = { context -> createInkView(context, viewModel, stylusButtonTracker) },
+            factory = { context -> createInkView(context, viewModel, stylusButtonTracker, onInteract) },
         )
     }
 }
@@ -167,6 +169,7 @@ private fun createInkView(
     context: Context,
     viewModel: CanvasViewModel,
     stylusButtonTracker: StylusButtonTracker,
+    onInteract: () -> Unit,
 ): View {
     val rootView = FrameLayout(context)
     val matchParent = FrameLayout.LayoutParams(
@@ -190,6 +193,7 @@ private fun createInkView(
     rootView.setOnTouchListener(
         createTouchListener(
             inProgressStrokesView, viewModel, predictor, fingerGestureTracker, stylusButtonTracker,
+            onInteract,
         ),
     )
     // The S Pen side button fires while the pen hovers (not touching), which arrives as a generic
@@ -307,6 +311,7 @@ private fun createTouchListener(
     predictor: MotionEventPredictor,
     fingerGestureTracker: FingerGestureTracker,
     stylusButtonTracker: StylusButtonTracker,
+    onInteract: () -> Unit,
 ): View.OnTouchListener {
     var currentPointerId: Int? = null
     var currentStrokeId: InProgressStrokeId? = null
@@ -330,6 +335,9 @@ private fun createTouchListener(
     var pinchPrevCy = 0f
 
     return View.OnTouchListener { view, event ->
+        // Any touch that reaches the canvas commits + closes the inline title editor (FA-20). Tapping
+        // the title field itself doesn't reach here (the header consumes it), so cursor placement works.
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) onInteract()
         // Track finger + S Pen-button gestures BEFORE the lasso bail-out, so they keep working in
         // every tool mode (FA-19). They run independently of palm rejection and of drawing.
         fingerGestureTracker.onTouchEvent(event)
@@ -405,6 +413,13 @@ private fun createTouchListener(
                     }
                     // Single active stroke: ignore additional pointers while one is down.
                     if (currentPointerId != null) return@OnTouchListener true
+                    // Vertical continuous mode: if the pen lands on a page that isn't the open one,
+                    // route-nav so it becomes the open/editable page (FA-20 open-page-follows-scroll)
+                    // and skip this stroke — the user draws once it's open (which is the centred page,
+                    // so this is rare). Keeps all editing on the single open-page pipeline.
+                    if (viewModel.switchToPageAt(event.getY(event.actionIndex))) {
+                        return@OnTouchListener true
+                    }
                     view.requestUnbufferedDispatch(event)
                     val pointerIndex = event.actionIndex
                     val pointerId = event.getPointerId(pointerIndex)
@@ -413,29 +428,22 @@ private fun createTouchListener(
                     if (erase) {
                         erasing = true
                         viewModel.beginEraseGesture() // one undo step per gesture
-                        viewModel.eraseAtScreen(event.getX(pointerIndex), event.getY(pointerIndex))
+                        viewModel.eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
                     } else {
                         // Pen down: hold off any prefix-/Q inactivity send until this stroke finishes,
                         // so the AI never answers mid-writing (and always gets the full question).
                         viewModel.onWritingStarted()
-                        // Capture in the target page's coords: find the page under the pen (FA-20
-                        // continuous document) and map screen → that page's space — undo its origin and
-                        // the zoom scale, so the finished stroke is stored in page space regardless of
-                        // scroll/zoom/which page. The wet stroke still renders at the pen tip
-                        // (motionEventToViewTransform = identity). A touch in a page gap is ignored.
-                        val hit = viewModel.pageHitAt(event.getY(pointerIndex))
-                        if (hit == null) {
-                            currentPointerId = null
-                            return@OnTouchListener true
-                        }
-                        viewModel.beginStrokeOnPage(hit.pageId)
-                        val invScale = if (hit.scale != 0f) 1f / hit.scale else 1f
+                        // Capture in the OPEN page's coords via its transform — undo the centring offset,
+                        // the scroll, and the zoom scale so the finished stroke is stored in page space.
+                        // The wet stroke still renders at the pen tip (motionEventToViewTransform = identity).
+                        val t = viewModel.pageTransform.value
+                        val invScale = if (t.scale != 0f) 1f / t.scale else 1f
                         currentStrokeId = inProgressStrokesView.startStroke(
                             event,
                             pointerId,
                             viewModel.penBrush,
                             Matrix().apply {
-                                setTranslate(-hit.originX, -hit.originY)
+                                setTranslate(-t.offsetX, -t.offsetY)
                                 postScale(invScale, invScale)
                             },
                             Matrix(),
@@ -505,7 +513,7 @@ private fun createTouchListener(
                     val pointerIndex = event.findPointerIndex(pointerId)
                     if (pointerIndex < 0) return@OnTouchListener true
                     if (erasing) {
-                        viewModel.eraseAtScreen(event.getX(pointerIndex), event.getY(pointerIndex))
+                        viewModel.eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
                     } else {
                         val strokeId = currentStrokeId ?: return@OnTouchListener true
                         inProgressStrokesView.addToStroke(event, pointerId, strokeId, predictedEvent)

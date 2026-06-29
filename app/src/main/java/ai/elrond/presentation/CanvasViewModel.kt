@@ -331,11 +331,8 @@ class CanvasViewModel(
     private val _pageLayers = MutableStateFlow<List<PageLayer>>(emptyList())
     val pageLayers: StateFlow<List<PageLayer>> = _pageLayers.asStateFlow()
 
-    /** Loaded dry strokes for the NON-open pages (vertical mode), keyed by page id. */
+    /** Loaded dry strokes for the NON-open pages, for read-only continuous rendering (vertical mode). */
     private val otherPageStrokes = mutableMapOf<String, List<CanvasStroke>>()
-
-    /** The page a wet stroke is being drawn on (set on pen-down via [beginStrokeOnPage]). */
-    private var pendingStrokePageId: String? = null
 
     /** Guards against spawning multiple trailing blank pages before [_notebookPages] catches up. */
     @Volatile
@@ -920,6 +917,38 @@ class CanvasViewModel(
         }
         scrollPx = (scrollPx - dragDeltaY).coerceIn(0f, maxScrollPx())
         refreshPageTransform()
+        // A real scroll (not a 0-delta re-clamp) schedules the open page to follow to the centred page.
+        if (dragDeltaY != 0f) scheduleVisiblePageSwitch()
+    }
+
+    /** Drives the route-nav that makes the open page follow the scroll once it settles (FA-20). */
+    private var pageSettleJob: Job? = null
+
+    /**
+     * After scrolling settles, makes the centred page the open (editable) page via route-nav, so every
+     * editing feature (draw / erase / lasso / AI / undo) acts on the page you're looking at (FA-20).
+     * Vertical mode only; no-op if the centred page is already open.
+     */
+    private fun scheduleVisiblePageSwitch() {
+        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) return
+        pageSettleJob?.cancel()
+        pageSettleJob = viewModelScope.launch {
+            delay(PAGE_SETTLE_MILLIS)
+            val target = centeredPageId() ?: return@launch
+            if (target != pageId) _pageTurnEvents.emit(target)
+        }
+    }
+
+    /** The page whose centre is nearest the viewport centre (vertical document), or null if none. */
+    private fun centeredPageId(): String? {
+        val layers = _pageLayers.value
+        if (layers.isEmpty()) return null
+        val t = _documentTransform.value
+        val pageH = pageContentHeightPx() * t.scale
+        val viewportCenter = pageTopInsetPx + (canvasHeightPx - pageTopInsetPx) / 2f
+        return layers.minByOrNull { layer ->
+            abs((t.offsetY + layer.docTopPx * t.scale + pageH / 2f) - viewportCenter)
+        }?.pageId
     }
 
     // ── Pinch zoom (FA-20) ────────────────────────────────────────────────────────────────────
@@ -1090,25 +1119,17 @@ class CanvasViewModel(
         return PageHit(best.pageId, t.offsetX, bestTop, t.scale)
     }
 
-    /** Records which page the next finished wet stroke belongs to (set by the ink view on pen-down). */
-    fun beginStrokeOnPage(targetPageId: String?) {
-        pendingStrokePageId = targetPageId
-    }
-
-    /** Appends finished strokes to a NON-open page (vertical mode) and autosaves it. */
-    private fun onStrokesFinishedOnPage(targetPageId: String, strokes: Collection<Stroke>) {
-        if (strokes.isEmpty()) return
-        val current = otherPageStrokes[targetPageId].orEmpty()
-        val updated = current + strokes.map { CanvasStroke(newStrokeId(), it) }
-        otherPageStrokes[targetPageId] = updated
-        rebuildPageLayers()
-        saveExtraPage(targetPageId, updated)
-        ensureTrailingBlankPage()
-    }
-
-    private fun saveExtraPage(targetPageId: String, strokes: List<CanvasStroke>) {
-        val repo = repository ?: return
-        viewModelScope.launch { runCatching { repo.replaceStrokes(targetPageId, strokes) } }
+    /**
+     * Switches the open (editable) page to the page under [screenY] if it isn't already open — the
+     * route-nav that makes the open page follow the scroll (FA-20). Returns true if a switch was
+     * requested, so the ink view can skip starting a stroke on the page being navigated away from.
+     */
+    fun switchToPageAt(screenY: Float): Boolean {
+        if (_pageNavigationMode.value != PageNavigationMode.VERTICAL) return false
+        val hit = pageHitAt(screenY) ?: return false
+        if (hit.pageId == pageId) return false
+        viewModelScope.launch { _pageTurnEvents.emit(hit.pageId) }
+        return true
     }
 
     /**
@@ -1506,17 +1527,14 @@ class CanvasViewModel(
         persistStylusOnly?.let { writer -> viewModelScope.launch { writer(enabled) } }
     }
 
-    /** Called by the canvas when wet strokes complete and become dry strokes. */
+    /**
+     * Called by the canvas when wet strokes complete and become dry strokes. Always edits the OPEN
+     * page: in vertical-continuous mode the open page tracks the scroll (route-nav follows-scroll), so
+     * the page you're drawing on is the open one — keeping the full single-page pipeline (undo/redo,
+     * /Q, lasso, thumbnails) correct on every page (FA-20).
+     */
     fun onStrokesFinished(strokes: Collection<Stroke>) {
         if (strokes.isEmpty()) return
-        // Vertical mode: a stroke drawn on another page of the continuous document routes to that page
-        // (draw + autosave + auto-next-page), not the open page's full single-page pipeline.
-        val target = pendingStrokePageId
-        pendingStrokePageId = null
-        if (target != null && target != pageId) {
-            onStrokesFinishedOnPage(target, strokes)
-            return
-        }
         pushUndoSnapshot(_finishedStrokes.value)
         clearSelection() // a fresh pen stroke isn't part of any lasso selection
         contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
@@ -1555,34 +1573,6 @@ class CanvasViewModel(
     /** Marks the start of an eraser gesture so all its removals undo as one step. */
     fun beginEraseGesture() {
         eraseGestureSnapshot = _finishedStrokes.value
-    }
-
-    /**
-     * Erases at a screen point, routing to whichever page is under it (FA-20 vertical document). The
-     * open page uses the full [eraseAt] (with undo); other pages erase + autosave directly. In
-     * horizontal mode this is always the open page.
-     */
-    fun eraseAtScreen(x: Float, y: Float, radius: Float = ERASER_RADIUS) {
-        val hit = pageHitAt(y)
-        if (hit == null || hit.pageId == pageId) {
-            eraseAt(x, y, radius)
-            return
-        }
-        val before = otherPageStrokes[hit.pageId].orEmpty()
-        if (before.isEmpty()) return
-        // Reuse the same screen→page mapping as the open-page eraser, via this hit page's transform.
-        val t = hit.transform()
-        val pageRadius = t.screenToPageLength(radius)
-        val box = ImmutableBox.fromCenterAndDimensions(
-            ImmutableVec(t.screenToPageX(x), t.screenToPageY(y)),
-            pageRadius * 2,
-            pageRadius * 2,
-        )
-        val after = before.filterNot { it.stroke.shape.computeCoverageIsGreaterThan(box, 0f) }
-        if (after.size == before.size) return
-        otherPageStrokes[hit.pageId] = after
-        rebuildPageLayers()
-        saveExtraPage(hit.pageId, after)
     }
 
     /** Erase any stroke whose geometry intersects the eraser position. */
@@ -2513,6 +2503,9 @@ class CanvasViewModel(
 
         /** The desk-coloured margin break between pages in the continuous vertical document (px). */
         const val VERTICAL_PAGE_GAP_PX: Float = 28f
+
+        /** Idle time after a scroll before the open page route-navs to the centred page (FA-20). */
+        private const val PAGE_SETTLE_MILLIS: Long = 350L
 
         /** Shown briefly when a re-triggered selection only holds already-captured items. */
         const val ALREADY_EXISTS_MESSAGE: String = "Already on your to-do list"
