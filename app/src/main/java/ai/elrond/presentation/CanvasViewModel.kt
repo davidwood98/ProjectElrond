@@ -2505,7 +2505,7 @@ class CanvasViewModel(
         const val VERTICAL_PAGE_GAP_PX: Float = 28f
 
         /** Idle time after a scroll before the open page route-navs to the centred page (FA-20). */
-        private const val PAGE_SETTLE_MILLIS: Long = 350L
+        private const val PAGE_SETTLE_MILLIS: Long = 150L
 
         /** Shown briefly when a re-triggered selection only holds already-captured items. */
         const val ALREADY_EXISTS_MESSAGE: String = "Already on your to-do list"
