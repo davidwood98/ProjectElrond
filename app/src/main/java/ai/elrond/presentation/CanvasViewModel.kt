@@ -261,7 +261,16 @@ class CanvasViewModel(
 
     /** Strokes held for paste (deep copies captured at copy/cut, with their group structure). */
     private var clipboardStrokes: List<CanvasStroke> = emptyList()
+    /** AI response boxes held for paste alongside [clipboardStrokes] (FA-21). */
+    private var clipboardAiNotes: List<AiInkNote> = emptyList()
     private var clipboardBounds: SelectionBounds? = null
+
+    /**
+     * Last measured on-screen size of each AI note, in page-space px (width, height), reported by the
+     * view (FA-21). The wrap-to-content height isn't known to the VM otherwise, so this drives the
+     * selection bounds (the box that hugs an AI note) and lasso/hold hit-testing.
+     */
+    private val aiNoteMeasured = mutableMapOf<String, Pair<Float, Float>>()
 
     private val _tool = MutableStateFlow(CanvasTool.PEN)
     val tool: StateFlow<CanvasTool> = _tool.asStateFlow()
@@ -360,8 +369,8 @@ class CanvasViewModel(
 
     // --- Undo / redo (stroke history) ---
 
-    private val undoStack = ArrayDeque<List<CanvasStroke>>()
-    private val redoStack = ArrayDeque<List<CanvasStroke>>()
+    private val undoStack = ArrayDeque<HistorySnapshot>()
+    private val redoStack = ArrayDeque<HistorySnapshot>()
 
     private val _canUndo = MutableStateFlow(false)
     val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
@@ -1391,16 +1400,16 @@ class CanvasViewModel(
 
     fun undo() {
         val snapshot = undoStack.removeLastOrNull() ?: return
-        redoStack.addLast(_finishedStrokes.value)
-        _finishedStrokes.value = snapshot
-        clearSelection() // selection may reference strokes the undo changed
+        redoStack.addLast(currentSnapshot())
+        restoreSnapshot(snapshot)
+        clearSelection() // selection may reference strokes/notes the undo changed
         updateHistoryFlags()
     }
 
     fun redo() {
         val snapshot = redoStack.removeLastOrNull() ?: return
-        undoStack.addLast(_finishedStrokes.value)
-        _finishedStrokes.value = snapshot
+        undoStack.addLast(currentSnapshot())
+        restoreSnapshot(snapshot)
         clearSelection()
         updateHistoryFlags()
     }
@@ -1408,8 +1417,9 @@ class CanvasViewModel(
     fun clearPage() {
         triggerDetectionJob?.cancel()
         cancelPrefixListening()
-        if (_finishedStrokes.value.isNotEmpty()) {
-            pushUndoSnapshot(_finishedStrokes.value)
+        // Undoable when there's anything to clear — strokes OR AI boxes (FA-21).
+        if (_finishedStrokes.value.isNotEmpty() || _aiNotes.value.any { !it.isError }) {
+            pushUndoSnapshot()
         }
         _finishedStrokes.value = emptyList()
         _aiNotes.value = emptyList()
@@ -1435,38 +1445,19 @@ class CanvasViewModel(
 
     // --- AI note manipulation ---
 
-    fun moveAiNote(id: String, dx: Float, dy: Float) {
+    /**
+     * Reflow resize (FA-21, single-AI-box left/right edge drag): sets the box's left edge to [x] and
+     * its width cap to [widthPx] (both page-space), at a constant font size — so the text re-wraps and
+     * the height follows (heightPx cleared to wrap-to-content). Width is clamped so the box stays on
+     * the page; the selection bounds re-hug it once the view reports its new measured size.
+     */
+    fun reflowAiNoteWidth(id: String, x: Float, widthPx: Float) {
         _aiNotes.update { notes ->
             notes.map { note ->
                 if (note.id == id) {
-                    // Keep the box on the page: never let it slide off the left/right edge or
-                    // above the top. (Clamps only once the page width is known — see maxWidthAt.)
-                    val maxX = if (pageWidthPx > 0f) {
-                        (pageWidthPx - note.widthPx).coerceAtLeast(0f)
-                    } else {
-                        Float.MAX_VALUE
-                    }
-                    val newX = (note.x + dx).coerceIn(0f, maxX)
-                    val newY = (note.y + dy).coerceAtLeast(0f)
-                    note.copy(x = newX, y = newY)
-                } else {
-                    note
-                }
-            }
-        }
-    }
-
-    /** Free resize: width and height change independently (aspect ratio unlocked). */
-    fun resizeAiNote(id: String, dWidth: Float, dHeight: Float) {
-        _aiNotes.update { notes ->
-            notes.map { note ->
-                if (note.id == id) {
-                    // Cap the width so the box can't grow past the right page edge.
-                    val newWidth = (note.widthPx + dWidth)
-                        .coerceIn(AiInkNote.MIN_WIDTH_PX, maxWidthAt(note.x))
-                    val currentHeight = note.heightPx ?: AiInkNote.MIN_HEIGHT_PX
-                    val newHeight = (currentHeight + dHeight).coerceAtLeast(AiInkNote.MIN_HEIGHT_PX)
-                    note.copy(widthPx = newWidth, heightPx = newHeight)
+                    val newX = x.coerceAtLeast(0f)
+                    val newWidth = widthPx.coerceIn(AiInkNote.MIN_WIDTH_PX, maxWidthAt(newX))
+                    note.copy(x = newX, widthPx = newWidth, heightPx = null)
                 } else {
                     note
                 }
@@ -1475,7 +1466,57 @@ class CanvasViewModel(
     }
 
     fun removeAiNote(id: String) {
+        aiNoteMeasured.remove(id)
         _aiNotes.update { notes -> notes.filterNot { it.id == id } }
+        // Drop it from any selection so stale chrome doesn't linger.
+        _selection.update { sel ->
+            if (sel != null && id in sel.aiNoteIds) {
+                if (sel.ids.isEmpty() && sel.aiNoteIds.size == 1) null
+                else sel.copy(aiNoteIds = sel.aiNoteIds - id)
+            } else {
+                sel
+            }
+        }
+    }
+
+    /**
+     * The view reports an AI note's on-screen size (FA-21), converted to page-space px by the caller.
+     * Stored for bounds + hit-testing; while a lone AI box is selected and idle, its selection box is
+     * re-hugged so the dashed border tracks a reflow.
+     */
+    fun reportAiNoteMeasuredSize(id: String, widthPx: Float, heightPx: Float) {
+        if (widthPx <= 0f || heightPx <= 0f) return
+        // Skip the rehug work (list scan + emit) on a no-op relayout (e.g. a pure recomposition).
+        val prev = aiNoteMeasured[id]
+        if (prev != null && prev.first == widthPx && prev.second == heightPx) return
+        aiNoteMeasured[id] = widthPx to heightPx
+        val sel = _selection.value ?: return
+        if (sel.isSingleAiNote && id in sel.aiNoteIds && sel.transform.isIdentity) {
+            val note = _aiNotes.value.firstOrNull { it.id == id } ?: return
+            _selection.value = sel.copy(bounds = aiNoteRect(note))
+        }
+    }
+
+    /** Selects a single AI box (FA-21) — the 1.5s press-and-hold path from the canvas. */
+    fun selectAiNote(id: String) {
+        if (_aiNotes.value.none { it.id == id && !it.isError }) return
+        setSelection(emptySet(), setOf(id))
+    }
+
+    /** The topmost (last-drawn) non-error AI box containing the page-space point, or null. */
+    fun aiNoteAt(pageX: Float, pageY: Float): String? =
+        _aiNotes.value.lastOrNull { note ->
+            !note.isError && aiNoteRect(note).let {
+                pageX in it.left..it.right && pageY in it.top..it.bottom
+            }
+        }?.id
+
+    /** Page-space bounds of an AI note, using its last measured size when known (FA-21). */
+    private fun aiNoteRect(note: AiInkNote): SelectionBounds {
+        val measured = aiNoteMeasured[note.id]
+        val w = measured?.first ?: note.widthPx
+        val h = measured?.second ?: note.heightPx ?: AiInkNote.MIN_HEIGHT_PX
+        return SelectionBounds(note.x, note.y, note.x + w, note.y + h)
     }
 
     // --- Lasso selection tool (FA-9) ---
@@ -1486,19 +1527,33 @@ class CanvasViewModel(
      * a gesture captured in the UI — it is never committed as ink.
      */
     fun selectByLasso(polygon: List<GestureTriggerDetector.Point>) {
+        if (polygon.size < 3) {
+            clearSelection()
+            return
+        }
         val strokes = _finishedStrokes.value
-        if (strokes.isEmpty() || polygon.size < 3) {
+        val enclosedStrokes = if (strokes.isEmpty()) {
+            emptySet()
+        } else {
+            val ids = strokes.map { it.id }
+            val centroids = strokes.map { centroidOf(it.stroke) }
+            StrokeSelection.expandToGroups(StrokeSelection.enclosedIds(polygon, ids, centroids), strokes)
+        }
+        // AI boxes are selectable too (FA-21): a lasso can grab them alone or alongside strokes, by
+        // their centre point.
+        val notes = _aiNotes.value.filterNot { it.isError }
+        val enclosedNotes = if (notes.isEmpty()) {
+            emptySet()
+        } else {
+            val noteIds = notes.map { it.id }
+            val centres = notes.map { aiNoteRect(it).let { r -> GestureTriggerDetector.Point(r.centerX, r.centerY) } }
+            StrokeSelection.enclosedIds(polygon, noteIds, centres)
+        }
+        if (enclosedStrokes.isEmpty() && enclosedNotes.isEmpty()) {
             clearSelection()
             return
         }
-        val ids = strokes.map { it.id }
-        val centroids = strokes.map { centroidOf(it.stroke) }
-        val enclosed = StrokeSelection.enclosedIds(polygon, ids, centroids)
-        if (enclosed.isEmpty()) {
-            clearSelection()
-            return
-        }
-        setSelection(StrokeSelection.expandToGroups(enclosed, strokes))
+        setSelection(enclosedStrokes, enclosedNotes)
     }
 
     fun clearSelection() {
@@ -1515,66 +1570,117 @@ class CanvasViewModel(
         _selection.update { it?.copy(transform = LiveTransform.IDENTITY) }
     }
 
-    /** Bakes the previewed move/scale into the selected strokes once (one mesh rebuild each). */
+    /** Bakes the previewed move/scale into the selected strokes + AI boxes once (FA-9 / FA-21). */
     fun commitTransform() {
         val sel = _selection.value ?: return
         val t = sel.transform
         if (t.isIdentity) return
-        // Snap-back (FA-10): a small move released near its origin reverts with nothing applied —
-        // no bake, no undo step. Gated on a known canvas size, so unit tests with no reported size
-        // (and resize gestures) always commit. Scales never snap.
-        if (lassoSnapBackEnabled &&
-            StrokeSelection.shouldSnapBack(t, canvasWidthPx, canvasHeightPx, lassoSnapBackThreshold)
+        // Snap-back (FA-10): a small stroke move released near its origin reverts with nothing
+        // applied. The move transform is now in PAGE space (the drag was divided by zoom — FA-21), so
+        // normalise by the page-space canvas size (screen ÷ scale); a screen-px canvas would
+        // mis-judge the travel at zoom != 1. AI boxes never snap — a small deliberate reposition of
+        // an answer must stick. Unknown canvas size (unit tests) and scales always commit.
+        val zoom = pageTransform.value.scale.takeIf { it > 0f } ?: 1f
+        if (lassoSnapBackEnabled && sel.aiNoteIds.isEmpty() &&
+            StrokeSelection.shouldSnapBack(t, canvasWidthPx / zoom, canvasHeightPx / zoom, lassoSnapBackThreshold)
         ) {
             _selection.update { it?.copy(transform = LiveTransform.IDENTITY) }
             return
         }
-        val before = _finishedStrokes.value
-        pushUndoSnapshot(before)
-        val after = before.map { cs ->
-            if (cs.id in sel.ids) cs.copy(stroke = strokeTransformer(cs.stroke, t)) else cs
+        // One undoable step covering BOTH strokes and AI boxes (captured pre-change).
+        pushUndoSnapshot()
+        if (sel.ids.isNotEmpty()) {
+            _finishedStrokes.update { current ->
+                current.map { cs ->
+                    if (cs.id in sel.ids) cs.copy(stroke = strokeTransformer(cs.stroke, t)) else cs
+                }
+            }
         }
-        _finishedStrokes.value = after
+        if (sel.aiNoteIds.isNotEmpty()) {
+            // Scaling an AI box scales its font with it (FA-21), so a group/corner scale grows or
+            // shrinks the text to keep the box's proportions.
+            _aiNotes.update { notes ->
+                notes.map { if (it.id in sel.aiNoteIds) transformAiNote(it, t) else it }
+            }
+        }
         _selection.value = sel.copy(
             transform = LiveTransform.IDENTITY,
-            bounds = boundsOfIds(sel.ids, after) ?: sel.displayBounds,
+            bounds = recomputeSelectionBounds(sel.ids, sel.aiNoteIds) ?: sel.displayBounds,
         )
+    }
+
+    /** Applies a baked move/scale to an AI box: position via [t], with width/height/font scaled. */
+    private fun transformAiNote(note: AiInkNote, t: LiveTransform): AiInkNote {
+        val newX = t.applyX(note.x).coerceAtLeast(0f)
+        val newY = t.applyY(note.y).coerceAtLeast(0f)
+        // Keep width / height / font in proportion (FA-21): if the scale would push the box past the
+        // page edge, damp the WHOLE transform (font included) by the same fit factor — clamping width
+        // alone would leave the font oversized for a now-too-narrow box.
+        val desiredWidth = note.widthPx * t.scaleX
+        val maxW = maxWidthAt(newX)
+        val fit = if (desiredWidth > maxW && desiredWidth > 0f) maxW / desiredWidth else 1f
+        val newWidth = (desiredWidth * fit).coerceAtLeast(AiInkNote.MIN_WIDTH_PX)
+        val newHeight = note.heightPx?.let { (it * t.scaleY * fit).coerceAtLeast(AiInkNote.MIN_HEIGHT_PX) }
+        val newFont = (note.fontScale * t.brushScale * fit)
+            .coerceIn(AiInkNote.MIN_FONT_SCALE, AiInkNote.MAX_FONT_SCALE)
+        return note.copy(x = newX, y = newY, widthPx = newWidth, heightPx = newHeight, fontScale = newFont)
     }
 
     /** Duplicate: clones the selection in place (offset), preserving grouping; selects the copy. */
     fun duplicateSelection() {
         val sel = _selection.value ?: return
-        val copies = cloneStrokes(
+        val strokeCopies = cloneStrokes(
             _finishedStrokes.value.filter { it.id in sel.ids },
             DUPLICATE_OFFSET_PX,
             DUPLICATE_OFFSET_PX,
         )
-        if (copies.isEmpty()) return
-        pushUndoSnapshot(_finishedStrokes.value)
-        _finishedStrokes.update { it + copies }
-        setSelection(copies.map { it.id }.toSet())
+        val noteCopies = cloneAiNotes(
+            _aiNotes.value.filter { it.id in sel.aiNoteIds },
+            DUPLICATE_OFFSET_PX,
+            DUPLICATE_OFFSET_PX,
+        )
+        if (strokeCopies.isEmpty() && noteCopies.isEmpty()) return
+        pushUndoSnapshot()
+        if (strokeCopies.isNotEmpty()) _finishedStrokes.update { it + strokeCopies }
+        if (noteCopies.isNotEmpty()) _aiNotes.update { it + noteCopies }
+        setSelection(strokeCopies.map { it.id }.toSet(), noteCopies.map { it.id }.toSet())
     }
 
-    /** Bin: removes the selected strokes. */
+    /** Bin: removes the selected strokes and AI boxes. */
     fun deleteSelection() {
         val sel = _selection.value ?: return
-        pushUndoSnapshot(_finishedStrokes.value)
-        _finishedStrokes.update { current -> current.filterNot { it.id in sel.ids } }
+        removeSelected(sel)
         clearSelection()
+    }
+
+    /** Removes the selection's strokes and AI boxes from the page in one undoable step (FA-21). */
+    private fun removeSelected(sel: SelectionState) {
+        pushUndoSnapshot() // covers strokes AND AI boxes, so a mixed delete fully undoes
+        if (sel.ids.isNotEmpty()) {
+            _finishedStrokes.update { current -> current.filterNot { it.id in sel.ids } }
+        }
+        if (sel.aiNoteIds.isNotEmpty()) {
+            sel.aiNoteIds.forEach { aiNoteMeasured.remove(it) }
+            _aiNotes.update { current -> current.filterNot { it.id in sel.aiNoteIds } }
+        }
+    }
+
+    /** Pushes one undo step before a live edge-reflow drag begins, so the reflow is undoable (FA-21). */
+    fun beginAiNoteReflow() {
+        pushUndoSnapshot()
     }
 
     /** Copy: holds deep copies of the selection on the clipboard; the selection stays put. */
     fun copySelection() {
         val sel = _selection.value ?: return
-        captureClipboard(sel.ids)
+        captureClipboard(sel.ids, sel.aiNoteIds)
     }
 
     /** Cut: copies the selection to the clipboard, then removes it from the page. */
     fun cutSelection() {
         val sel = _selection.value ?: return
-        captureClipboard(sel.ids)
-        pushUndoSnapshot(_finishedStrokes.value)
-        _finishedStrokes.update { current -> current.filterNot { it.id in sel.ids } }
+        captureClipboard(sel.ids, sel.aiNoteIds)
+        removeSelected(sel)
         clearSelection()
     }
 
@@ -1585,18 +1691,23 @@ class CanvasViewModel(
      * edits — it never triggers a fresh background extraction.
      */
     fun pasteAt(x: Float, y: Float) {
-        val source = clipboardStrokes
         val bounds = clipboardBounds ?: return
-        if (source.isEmpty()) return
-        val pasted = cloneStrokes(source, dx = x - bounds.left, dy = y - bounds.top)
-        pushUndoSnapshot(_finishedStrokes.value)
-        _finishedStrokes.update { it + pasted }
-        setSelection(pasted.map { it.id }.toSet())
+        if (clipboardStrokes.isEmpty() && clipboardAiNotes.isEmpty()) return
+        val dx = x - bounds.left
+        val dy = y - bounds.top
+        val pastedStrokes = cloneStrokes(clipboardStrokes, dx, dy)
+        val pastedNotes = cloneAiNotes(clipboardAiNotes, dx, dy)
+        if (pastedStrokes.isEmpty() && pastedNotes.isEmpty()) return
+        pushUndoSnapshot()
+        if (pastedStrokes.isNotEmpty()) _finishedStrokes.update { it + pastedStrokes }
+        if (pastedNotes.isNotEmpty()) _aiNotes.update { it + pastedNotes }
+        setSelection(pastedStrokes.map { it.id }.toSet(), pastedNotes.map { it.id }.toSet())
     }
 
     /** Clears the clipboard, deselects, and resets the lasso tool to its idle select state. */
     fun clearClipboard() {
         clipboardStrokes = emptyList()
+        clipboardAiNotes = emptyList()
         clipboardBounds = null
         if (_clipboard.value.active) _clipboard.value = ClipboardState.EMPTY
         clearSelection()
@@ -1644,31 +1755,51 @@ class CanvasViewModel(
 
     // --- Selection internals ---
 
-    /** Builds [SelectionState] for [ids]: bounds + whether they're all one existing group. */
-    private fun setSelection(ids: Set<String>) {
+    /** Builds [SelectionState] for [ids] + [aiNoteIds]: union bounds + whether it's one stroke group. */
+    private fun setSelection(ids: Set<String>, aiNoteIds: Set<String> = emptySet()) {
         val strokes = _finishedStrokes.value.filter { it.id in ids }
-        val bounds = StrokeSelection.union(strokes.map { strokeBoundsOf(it.stroke) })
-        if (strokes.isEmpty() || bounds == null) {
+        val notes = _aiNotes.value.filter { it.id in aiNoteIds && !it.isError }
+        val bounds = recomputeSelectionBounds(ids, notes.map { it.id }.toSet())
+        if (bounds == null) {
             clearSelection()
             return
         }
         val groupIds = strokes.map { it.groupId }.toSet()
-        val grouped = groupIds.size == 1 && groupIds.single() != null
+        // Grouping is a stroke-only concept; a selection containing an AI box is never "grouped".
+        val grouped = notes.isEmpty() && groupIds.size == 1 && groupIds.single() != null
         _selection.value = SelectionState(
-            ids = ids,
+            ids = strokes.map { it.id }.toSet(),
+            aiNoteIds = notes.map { it.id }.toSet(),
             bounds = bounds,
-            lockRatio = _selection.value?.lockRatio ?: false, // keep the user's lock preference
+            lockRatio = _selection.value?.lockRatio ?: true, // keep the user's lock preference (FA-21: default on)
             grouped = grouped,
         )
     }
 
-    private fun captureClipboard(ids: Set<String>) {
+    private fun captureClipboard(ids: Set<String>, aiNoteIds: Set<String>) {
         val strokes = _finishedStrokes.value.filter { it.id in ids }
-        if (strokes.isEmpty()) return
+        val notes = _aiNotes.value.filter { it.id in aiNoteIds && !it.isError }
+        if (strokes.isEmpty() && notes.isEmpty()) return
         clipboardStrokes = strokes
-        clipboardBounds = StrokeSelection.union(strokes.map { strokeBoundsOf(it.stroke) })
-        _clipboard.value = ClipboardState(count = strokes.size)
+        clipboardAiNotes = notes
+        clipboardBounds = recomputeSelectionBounds(ids, notes.map { it.id }.toSet())
+        _clipboard.value = ClipboardState(count = strokes.size + notes.size)
     }
+
+    /** Union of the selected strokes' + AI notes' current page-space bounds; null when both empty. */
+    private fun recomputeSelectionBounds(ids: Set<String>, aiNoteIds: Set<String>): SelectionBounds? {
+        val strokeBoxes = if (ids.isEmpty()) emptyList() else {
+            _finishedStrokes.value.filter { it.id in ids }.map { strokeBoundsOf(it.stroke) }
+        }
+        val noteBoxes = if (aiNoteIds.isEmpty()) emptyList() else {
+            _aiNotes.value.filter { it.id in aiNoteIds }.map { aiNoteRect(it) }
+        }
+        return StrokeSelection.union(strokeBoxes + noteBoxes)
+    }
+
+    /** Deep-copies [source] AI notes shifted by ([dx], [dy]), each with a fresh id (FA-21). */
+    private fun cloneAiNotes(source: List<AiInkNote>, dx: Float, dy: Float): List<AiInkNote> =
+        source.map { it.copy(id = newStrokeId(), x = it.x + dx, y = it.y + dy) }
 
     /**
      * Deep-copies [source] shifted by ([dx], [dy]), giving each copy a fresh id and remapping group
@@ -1687,16 +1818,34 @@ class CanvasViewModel(
         }
     }
 
-    private fun boundsOfIds(ids: Set<String>, strokes: List<CanvasStroke>): SelectionBounds? =
-        StrokeSelection.union(strokes.filter { it.id in ids }.map { strokeBoundsOf(it.stroke) })
-
     private fun newStrokeId(): String = UUID.randomUUID().toString()
     private fun newGroupId(): String = UUID.randomUUID().toString()
 
     // --- History internals ---
 
-    private fun pushUndoSnapshot(snapshot: List<CanvasStroke>) {
-        undoStack.addLast(snapshot)
+    /** One undo step: the strokes and (persistable) AI boxes at the time of the snapshot (FA-21). */
+    private data class HistorySnapshot(
+        val strokes: List<CanvasStroke>,
+        val aiNotes: List<AiInkNote>,
+    )
+
+    private fun currentSnapshot(): HistorySnapshot =
+        HistorySnapshot(_finishedStrokes.value, _aiNotes.value.filterNot { it.isError })
+
+    /** Restores a snapshot, keeping any live (transient) error note that isn't part of history. */
+    private fun restoreSnapshot(snapshot: HistorySnapshot) {
+        _finishedStrokes.value = snapshot.strokes
+        _aiNotes.update { current -> snapshot.aiNotes + current.filter { it.isError } }
+    }
+
+    /**
+     * Pushes one undo step capturing BOTH strokes and AI boxes (FA-21), so a lasso edit that moves /
+     * scales / deletes / pastes AI boxes — alone or mixed with strokes — is fully undoable. [strokes]
+     * defaults to the current strokes; pass an explicit value when the caller holds a pre-gesture
+     * snapshot (e.g. the per-eraser-gesture step).
+     */
+    private fun pushUndoSnapshot(strokes: List<CanvasStroke> = _finishedStrokes.value) {
+        undoStack.addLast(HistorySnapshot(strokes, _aiNotes.value.filterNot { it.isError }))
         if (undoStack.size > MAX_HISTORY) undoStack.removeFirst()
         redoStack.clear()
         updateHistoryFlags()

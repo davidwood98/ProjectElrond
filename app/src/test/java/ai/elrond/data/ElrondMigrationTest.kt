@@ -41,6 +41,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_11_12,
         ElrondDatabase.MIGRATION_12_13,
         ElrondDatabase.MIGRATION_13_14,
+        ElrondDatabase.MIGRATION_14_15,
     )
 
     /**
@@ -64,11 +65,37 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v14_and_validates_final_schema() {
+    fun migrates_v1_to_v15_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v14 schema (FA-20: notebook/page
-        // columns, note_subjects re-key, and the per-notebook gridSpacing/paperColor columns).
-        helper.runMigrationsAndValidate(TEST_DB, 14, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v15 schema (FA-21 adds
+        // ai_notes.fontScale on top of the FA-20 notebook/page columns).
+        helper.runMigrationsAndValidate(TEST_DB, 15, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_14_to_15_adds_ai_note_font_scale_defaulting_to_one() {
+        helper.createDatabase(TEST_DB, 14).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt, modifiedAt) VALUES ('nb1', 'N', 1, 1)")
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, " +
+                    "lastOpenedAt, tags, contextSummary, pageNumber, isBookmarked) " +
+                    "VALUES ('p1', 'nb1', NULL, 1, 1, 1, '', NULL, 1, 0)",
+            )
+            execSQL(
+                "INSERT INTO ai_notes (id, pageId, text, x, y, widthPx, heightPx, createdAt) " +
+                    "VALUES ('a1', 'p1', 'hi', 0, 0, 300, NULL, 1)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, *allMigrations)
+        val cols = columnNames(db, "ai_notes")
+        var fontScale = -1.0
+        db.query("SELECT fontScale FROM ai_notes WHERE id = 'a1'").use { c ->
+            if (c.moveToNext()) fontScale = c.getDouble(0)
+        }
+        db.close()
+        assertTrue("ai_notes.fontScale should exist", "fontScale" in cols)
+        assertEquals("pre-existing rows default to 1.0", 1.0, fontScale, 0.001)
     }
 
     @Test

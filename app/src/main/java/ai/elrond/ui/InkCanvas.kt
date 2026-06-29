@@ -305,6 +305,14 @@ private fun fingerSpan(event: MotionEvent, excludeIndex: Int = -1): FingerSpan {
     return FingerSpan(n, cx, cy, spread / n)
 }
 
+/** Press-and-hold duration to select an AI box (FA-21), and the movement that aborts it (a stroke). */
+private const val AI_NOTE_HOLD_MS = 1500L
+private const val HOLD_MOVE_SLOP_PX = 24f
+
+/** Screen-px slop around a selection box so a DOWN on its edge-straddling resize handles isn't
+ *  treated as a draw/deselect (FA-21). */
+private const val SELECTION_TOUCH_MARGIN_PX = 44f
+
 private fun createTouchListener(
     inProgressStrokesView: InProgressStrokesView,
     viewModel: CanvasViewModel,
@@ -333,6 +341,18 @@ private fun createTouchListener(
     var pinchPrevSpread = 0f
     var pinchPrevCx = 0f
     var pinchPrevCy = 0f
+    // FA-21: a 1.5s stationary press-and-hold over an AI box selects it (so it can be moved/scaled
+    // via the shared lasso chrome). The pen still draws on the box otherwise — moving cancels the
+    // hold, which is why a deselected AI box is passive (no pointer input) and the pen writes over it.
+    val holdHandler = Handler(Looper.getMainLooper())
+    var pendingHold: Runnable? = null
+    var holdDownX = 0f
+    var holdDownY = 0f
+    var holdConsumed = false // a hold fired: cancel (don't finish) this stroke so it leaves no mark
+    fun cancelPendingHold() {
+        pendingHold?.let { holdHandler.removeCallbacks(it) }
+        pendingHold = null
+    }
 
     return View.OnTouchListener { view, event ->
         // Any touch that reaches the canvas commits + closes the inline title editor (FA-20). Tapping
@@ -413,15 +433,36 @@ private fun createTouchListener(
                     }
                     // Single active stroke: ignore additional pointers while one is down.
                     if (currentPointerId != null) return@OnTouchListener true
-                    view.requestUnbufferedDispatch(event)
                     val pointerIndex = event.actionIndex
+                    val downX = event.getX(pointerIndex)
+                    val downY = event.getY(pointerIndex)
+                    val t = viewModel.pageTransform.value
+                    val pageX = t.screenToPageX(downX)
+                    val pageY = t.screenToPageY(downY)
+                    // FA-21: a non-erase DOWN on the current selection — its box OR the resize handles
+                    // that straddle the edges (hence the screen-space margin) — belongs to the
+                    // selection chrome above, so decline and let its drag run (no stray stroke). A DOWN
+                    // elsewhere deselects (writing away). The ERASER never declines, so it can still
+                    // erase ink that lies under the selection box.
+                    viewModel.selection.value?.let { sel ->
+                        val b = sel.displayBounds
+                        val m = SELECTION_TOUCH_MARGIN_PX
+                        val onChrome = downX >= t.pageToScreenX(b.left) - m &&
+                            downX <= t.pageToScreenX(b.right) + m &&
+                            downY >= t.pageToScreenY(b.top) - m &&
+                            downY <= t.pageToScreenY(b.bottom) + m
+                        if (!erase && onChrome) return@OnTouchListener false
+                        viewModel.clearSelection()
+                    }
+                    view.requestUnbufferedDispatch(event)
                     val pointerId = event.getPointerId(pointerIndex)
                     currentPointerId = pointerId
                     currentIsFinger = isFinger
+                    holdConsumed = false
                     if (erase) {
                         erasing = true
                         viewModel.beginEraseGesture() // one undo step per gesture
-                        viewModel.eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
+                        viewModel.eraseAt(downX, downY)
                     } else {
                         // Pen down: hold off any prefix-/Q inactivity send until this stroke finishes,
                         // so the AI never answers mid-writing (and always gets the full question).
@@ -429,7 +470,6 @@ private fun createTouchListener(
                         // Capture in the OPEN page's coords via its transform — undo the centring offset,
                         // the scroll, and the zoom scale so the finished stroke is stored in page space.
                         // The wet stroke still renders at the pen tip (motionEventToViewTransform = identity).
-                        val t = viewModel.pageTransform.value
                         val invScale = if (t.scale != 0f) 1f / t.scale else 1f
                         currentStrokeId = inProgressStrokesView.startStroke(
                             event,
@@ -441,6 +481,20 @@ private fun createTouchListener(
                             },
                             Matrix(),
                         )
+                        // Over an AI box? Arm the 1.5s hold-to-select. Movement (a real stroke) cancels
+                        // it below, so writing over the box still works (FA-21).
+                        val noteId = viewModel.aiNoteAt(pageX, pageY)
+                        if (noteId != null) {
+                            holdDownX = downX
+                            holdDownY = downY
+                            val runnable = Runnable {
+                                pendingHold = null
+                                holdConsumed = true
+                                viewModel.selectAiNote(noteId)
+                            }
+                            pendingHold = runnable
+                            holdHandler.postDelayed(runnable, AI_NOTE_HOLD_MS)
+                        }
                     }
                     true
                 }
@@ -505,6 +559,15 @@ private fun createTouchListener(
                     val pointerId = currentPointerId ?: return@OnTouchListener true
                     val pointerIndex = event.findPointerIndex(pointerId)
                     if (pointerIndex < 0) return@OnTouchListener true
+                    // FA-21: movement cancels a pending hold (it's a stroke → write-over the box);
+                    // once a hold HAS fired, stop advancing the stroke — it's cancelled on up.
+                    if (pendingHold != null &&
+                        hypot(event.getX(pointerIndex) - holdDownX, event.getY(pointerIndex) - holdDownY) >
+                        HOLD_MOVE_SLOP_PX
+                    ) {
+                        cancelPendingHold()
+                    }
+                    if (holdConsumed) return@OnTouchListener true
                     if (erasing) {
                         viewModel.eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
                     } else {
@@ -544,9 +607,16 @@ private fun createTouchListener(
                         scrollAxis = 0
                     }
                     if (pointerId == currentPointerId) {
+                        cancelPendingHold()
                         currentStrokeId?.let { strokeId ->
-                            inProgressStrokesView.finishStroke(event, pointerId, strokeId)
+                            // A fired hold-to-select cancels the stroke so it leaves no dot (FA-21).
+                            if (holdConsumed) {
+                                inProgressStrokesView.cancelStroke(strokeId, event)
+                            } else {
+                                inProgressStrokesView.finishStroke(event, pointerId, strokeId)
+                            }
                         }
+                        holdConsumed = false
                         currentPointerId = null
                         currentStrokeId = null
                         currentIsFinger = false
@@ -557,6 +627,8 @@ private fun createTouchListener(
                 }
 
                 MotionEvent.ACTION_CANCEL -> {
+                    cancelPendingHold()
+                    holdConsumed = false
                     currentStrokeId?.let { inProgressStrokesView.cancelStroke(it, event) }
                     currentPointerId = null
                     currentStrokeId = null

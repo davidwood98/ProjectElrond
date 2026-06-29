@@ -3,6 +3,7 @@ package ai.elrond.ui
 import android.content.res.Configuration
 import ai.elrond.presentation.AiUiState
 import ai.elrond.domain.CanvasTool
+import ai.elrond.domain.LiveTransform
 import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PageViewOrientation
 import ai.elrond.ui.theme.LeapTheme
@@ -142,6 +143,9 @@ fun NoteCanvasScreen(
     val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
     val aiState by viewModel.aiState.collectAsStateWithLifecycle()
     val aiNotes by viewModel.aiNotes.collectAsStateWithLifecycle()
+    // Unified selection (FA-21): strokes + AI boxes. Drives both the lasso chrome and which AI box
+    // shows as selected (a box can be selected by a 1.5s press-and-hold or a lasso).
+    val selection by viewModel.selection.collectAsStateWithLifecycle()
     val canUndo by viewModel.canUndo.collectAsStateWithLifecycle()
     val canRedo by viewModel.canRedo.collectAsStateWithLifecycle()
     // Page → screen transform (FA-20): horizontal centring offset (margins in landscape) + vertical
@@ -200,16 +204,13 @@ fun NoteCanvasScreen(
     val stylusButtonTracker = remember(viewModel) { StylusButtonTracker(viewModel) }
     DisposableEffect(stylusButtonTracker) { onDispose { stylusButtonTracker.dispose() } }
 
-    // AI-box selection lives in the UI (not persisted). When the "edit mode on creation"
-    // setting is on (default) a freshly created note starts selected; loaded notes always
-    // start deselected (part of the note flow). Deselect by tapping anywhere off the box.
+    // When the "edit mode on creation" setting is on (default) a freshly created /Q answer starts
+    // selected; loaded notes never do. Selection itself now lives in the ViewModel (FA-21), so the
+    // box uses the shared lasso chrome and can be selected alongside strokes.
     val selectOnCreate by settingsViewModel.aiNoteSelectedOnCreate.collectAsStateWithLifecycle()
-    var selectedNoteId by remember { mutableStateOf<String?>(null) }
-    // Auto-select only notes the user just created via /Q (a ViewModel event), never notes
-    // loaded from storage — so a saved page opens with its AI notes deselected.
     LaunchedEffect(viewModel) {
         viewModel.createdNoteEvents.collect { id ->
-            if (selectOnCreate) selectedNoteId = id
+            if (selectOnCreate) viewModel.selectAiNote(id)
         }
     }
     // FA-20: a horizontal page-turn swipe emits the target page id — navigate to it (the editor
@@ -301,31 +302,19 @@ fun NoteCanvasScreen(
             onInteract = { focusManager.clearFocus() },
         )
 
-        // Tap anywhere off a selected AI box to deselect it (place it into the note flow).
-        // Present only while something is selected, so it never intercepts drawing otherwise.
-        if (selectedNoteId != null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures { selectedNoteId = null }
-                    },
-            )
-        }
-
-        // AI answers as handwriting-style ink, inline at their trigger position. Error/clarify
-        // notes are NOT placed here — they render as a centred pop-up below (always on-screen).
+        // AI answers as handwriting-style ink, inline at their trigger position. They're passive (no
+        // pointer input), so the pen writes straight over them; selection + the box/handles/toolbar
+        // are handled by the ViewModel + SelectionDecorations below (FA-21). Error/clarify notes are
+        // NOT placed here — they render as a centred pop-up below (always on-screen).
         aiNotes.forEach { note ->
             if (!note.isError) {
                 key(note.id) {
+                    val live = selection?.takeIf { note.id in it.aiNoteIds }?.transform
                     AiInkNoteView(
                         note = note,
-                        selected = selectedNoteId == note.id,
-                        onSelect = { selectedNoteId = note.id },
-                        onMove = { dx, dy -> viewModel.moveAiNote(note.id, dx, dy) },
-                        onResize = { dW, dH -> viewModel.resizeAiNote(note.id, dW, dH) },
-                        onRemove = { viewModel.removeAiNote(note.id) },
                         transform = pageTransform,
+                        liveTransform = live ?: LiveTransform.IDENTITY,
+                        onMeasured = { w, h -> viewModel.reportAiNoteMeasuredSize(note.id, w, h) },
                     )
                 }
             }
@@ -351,6 +340,10 @@ fun NoteCanvasScreen(
         if (tool == CanvasTool.LASSO) {
             SelectionLayer(viewModel = viewModel, modifier = Modifier.fillMaxSize())
         }
+        // Selection chrome (box + handles + toolbar) for ANY selection, in any tool — an AI box can
+        // be selected by a 1.5s press-and-hold while in pen mode (FA-21). Sits above the lasso
+        // catcher so its handles stay tappable, and owns no full-screen input so the pen still writes.
+        SelectionDecorations(viewModel = viewModel, modifier = Modifier.fillMaxSize())
 
         // Always-present S Pen button observer (FA-19). A transparent top View that watches the
         // side button via generic-motion events (which carry the real BUTTON_STYLUS_PRIMARY bits and

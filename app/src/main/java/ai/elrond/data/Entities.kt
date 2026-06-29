@@ -112,6 +112,8 @@ data class AiNoteEntity(
     val widthPx: Float,
     /** Null = wrap content height; set once the user resizes vertically. */
     val heightPx: Float? = null,
+    /** Font-size multiplier baked in by a ratio-locked resize (FA-21); 1 = base size. */
+    val fontScale: Float = 1f,
     val createdAt: Long,
 )
 

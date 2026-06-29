@@ -1490,6 +1490,71 @@ top-level button observer routing) and the 150ms hold threshold (clicks register
   `SettingsRepositoryTest` (+all nine new pref round-trips). The trackers' raw-`MotionEvent` detection and
   the Lasso-mode observer routing are device-verified.
 
+## FA-21 — lasso & AI-box tweaks (2026-06-29)
+
+Lasso/selection + AI-response-box improvements, on branch **`fa-21-lasso-ai-box-tweaks`**. **DB is
+now v15** (`MIGRATION_14_15`). All JVM/Robolectric unit tests pass and `:app:testDebugUnitTest`,
+`:aibackend:test`, `:app:compileDebugKotlin` + `:app:compileDebugAndroidTestKotlin` build on the WSL
+Linux SDK. The Compose/canvas visuals + gesture flows (handles, hold-to-select, write-over, zoom
+scaling) are **device/manual-verify pending** like the other ink flows. Scope was confirmed with the
+user up front (4 questions): **fully-mixed** selection, AI-box menu layout, resize semantics, tight
+width. Ran `/simplify` (4 cleanup agents) and a high-effort `/code-review` workflow over the diff;
+confirmed findings were applied (below).
+
+- **AI boxes are first-class selectable objects, unified into the stroke `SelectionState`.**
+  `SelectionState` gains `aiNoteIds` (+ `hasAiNote` / `isSingleAiNote` / `count`), and **`lockRatio`
+  now defaults ON** (app-wide, incl. pure-stroke lasso). A lasso (`selectByLasso` now hit-tests AI
+  box centres too) **or a 1.5s press-and-hold** selects strokes and AI boxes together; one
+  `commitTransform` moves/scales both through the same path (`transformAiNote` scales an AI box's
+  width/height **and font** — `fontScale` — to keep proportions, damped by a `fit` factor at the
+  page edge so the font never outgrows the clamped width). Duplicate/Delete/Copy/Cut/Paste all
+  operate on both collections; the clipboard holds AI boxes too. The old UI-only `selectedNoteId`
+  state + off-box tap-catcher in `NoteCanvasScreen` were removed.
+- **Undo now covers AI boxes (FA-21 unification fix).** The history stack is a `HistorySnapshot`
+  (strokes **+** persistable AI notes); every lasso edit (move/scale/delete/cut/paste/reflow, alone
+  or mixed) pushes one snapshot and `undo`/`redo` restore both (live error notes preserved). Before
+  this, a mixed delete left the AI box irrecoverable.
+- **AI box is a tight, content-hugging box that scales with zoom (`AiInkNoteView`).** It is now
+  **passive** (no pointer input) so the pen draws straight over it; selection chrome is drawn
+  separately. Width hugs the text up to the full-line cap (`widthIn(min, max)`); width/height/font
+  all multiply by `pageTransform.scale` so the text zooms with the grid (`PageTransform.safeScale`
+  guards the divide). The view reports its measured page-space size back
+  (`reportAiNoteMeasuredSize`) so the selection box hugs it. The legacy ✕ remove control is gone —
+  Delete in the new menu replaces it.
+- **Resize semantics.** Corner handles (now centred ON the corner) scale ratio-locked and grow/shrink
+  the **font**; a lone AI box also gets **left/right edge handles** that reflow the width at a
+  constant font size (narrower = more lines = taller, `reflowAiNoteWidth`, undoable via
+  `beginAiNoteReflow`). The dashed box maps **both** corners page→screen so it's correctly sized at
+  any zoom.
+- **Selection chrome split out (`SelectionDecorations`).** `SelectionLayer` is now only the LASSO
+  **input** layer (catcher + clipboard bar); the box/handles/toolbar render in `SelectionDecorations`
+  for **any** selection in **any** tool (so a held-selected AI box shows chrome in pen mode). It owns
+  no full-screen input — empty areas fall through to the canvas. **Toolbar variants:** a stroke
+  selection shows Duplicate / Delete / **AI (logo 2× bigger, 40dp)** + a ⋮ kebab (Copy / Cut /
+  **Unlock↔Lock aspect** toggle / Group); a selection **including an AI box** drops the AI button and
+  **promotes Copy** to the top row (`[Copy][Delete]` + kebab Duplicate / Cut / lock). The ⋮ glyph is
+  enlarged (`KEBAB_GLYPH_SP`).
+- **Write-over + hold-to-select live in `InkCanvas`.** A deselected AI note has zero pointer input,
+  so the pen writes over it. `InkCanvas`'s touch listener arms a 1.5s `Handler` hold over an AI box
+  (`aiNoteAt`); movement past slop cancels it (a real stroke → write-over), a fired hold cancels the
+  nascent stroke and `selectAiNote`s. A DOWN on the current selection's box/handles (screen-space
+  margin `SELECTION_TOUCH_MARGIN_PX` covers the edge-straddling handles) is declined so the chrome's
+  drag works; a DOWN elsewhere deselects — except the **eraser never declines** (it erases ink under
+  the box).
+- **Persistence.** `MIGRATION_14_15` adds `ai_notes.fontScale REAL NOT NULL DEFAULT 1.0`
+  (entity/mapper round-trip it; in-memory `isError`/`sourceQuestion`/`suggestedQuestion` unchanged).
+- New/updated tests: `StrokeSelectionTest` (+`SelectionState` helpers / lock default),
+  `CanvasViewModelAiTest` (select→commit-move→delete, ratio-scale grows font+width, reflow+remove,
+  measured-size hugs bounds, **delete-undo restores the AI box**), `CanvasViewModelSelectionTest`
+  (lock default ON), `CanvasViewModelPersistenceTest` (commit-move + reflow autosave),
+  `ElrondMigrationTest` (chain → **v15** + the fontScale-default backfill test).
+- **Known / device-verify follow-ups (from the review, not fixed this pass):** a fresh auto-selected
+  /Q answer flashes a fallback-sized box for one frame before the first measure; the selection box is
+  one frame stale right after a bake until the view re-measures; a hold shows a stationary wet dot for
+  the 1.5s before it's cancelled and the box isn't draggable until the finger lifts; edge-reflow
+  rebuilds the AI-notes list per drag frame; and a tap on the floating toolbar *may* (Compose-interop
+  dependent) deselect before firing — all low-severity, flagged for the device pass.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
@@ -1573,7 +1638,7 @@ discipline.)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v10** — most recently the `subjects` + `note_subjects` tables were added in `MIGRATION_9_10` for the FA-16 Subjects (folder) hierarchy (and `note_pages.lastOpenedAt` in `MIGRATION_8_9` for the FA-15 "Recent"/note-tabs window; `todo_items.status` in `MIGRATION_7_8` for the FA-14 Kanban status; `strokes.groupId` in `MIGRATION_6_7` for FA-9 lasso-selection groups).
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v15** — most recently `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
 - **Outlook Azure app registration — required final step before release.** FA-11's Outlook integration is fully coded but ships **inert** until an Azure app is registered and `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` are set (see *Outlook / Microsoft Graph OAuth setup*). This is intentionally deferred to a final pre-release task; until done, Outlook stays NotConfigured and the calendar falls back to the device provider (not a bug). Pairs with the Anthropic-key release blocker above.

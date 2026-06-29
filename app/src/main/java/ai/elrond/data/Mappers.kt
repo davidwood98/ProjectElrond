@@ -88,6 +88,7 @@ fun AiNoteEntity.toDomain(): AiInkNote = AiInkNote(
     y = y,
     widthPx = widthPx,
     heightPx = heightPx,
+    fontScale = fontScale,
 )
 
 fun AiInkNote.toEntity(pageId: String, createdAt: Long): AiNoteEntity = AiNoteEntity(
@@ -98,6 +99,7 @@ fun AiInkNote.toEntity(pageId: String, createdAt: Long): AiNoteEntity = AiNoteEn
     y = y,
     widthPx = widthPx,
     heightPx = heightPx,
+    fontScale = fontScale,
     createdAt = createdAt,
 )
 

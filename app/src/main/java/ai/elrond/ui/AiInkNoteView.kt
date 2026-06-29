@@ -2,14 +2,11 @@ package ai.elrond.ui
 
 import ai.elrond.R
 import ai.elrond.domain.AiInkNote
+import ai.elrond.domain.LiveTransform
 import ai.elrond.domain.MathDetector
 import ai.elrond.domain.PageTransform
+import ai.elrond.domain.safeScale
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,9 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -38,18 +33,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import ai.elrond.ui.theme.LeapPink
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,122 +59,77 @@ val AiInkColor = LeapPink
 val ErrorInkColor = Color(0xFFC62828)
 
 /**
- * An AI response rendered as handwriting-style ink on the canvas.
+ * An AI response rendered as handwriting-style ink on the canvas (FA-21).
  *
- * When [selected] it shows a border, a remove ✕ and a resize handle, and can be
- * dragged/resized. When deselected it's just ink in the flow of the notes — a
- * long-press re-selects it, and tapping anywhere off the box deselects it. The AI
- * colour alone distinguishes it from user ink. Mathematical answers render via [MathText].
+ * The box is **passive** — it never captures pointer input, so the pen draws straight through onto
+ * the canvas (you can write over an AI answer). Selecting it (a 1.5s press-and-hold on the canvas,
+ * or a lasso) is handled by [CanvasViewModel]; the selection overlay draws the box + handles +
+ * toolbar — this view only renders the text.
+ *
+ * It is **content-hugging**: the box sizes to its text up to the note's full-line width cap, so a
+ * short answer is tight and a long one wraps. Width, height and font all scale with the page zoom
+ * ([transform]) like the grid, and with the note's own [AiInkNote.fontScale] (baked in by a
+ * ratio-locked resize). While the note moves/scales as part of a selection, [liveTransform] previews
+ * that move/scale — applied as a layer modifier, never recomputed in a draw lambda (the FA-10 rule).
+ * [onMeasured] reports the box's page-space size so the ViewModel can hug the selection box around
+ * it. Mathematical answers render via [MathText].
  */
 @Composable
 fun AiInkNoteView(
     note: AiInkNote,
-    selected: Boolean,
-    onSelect: () -> Unit,
-    onMove: (dx: Float, dy: Float) -> Unit,
-    onResize: (dWidth: Float, dHeight: Float) -> Unit,
-    onRemove: () -> Unit,
+    transform: PageTransform,
     modifier: Modifier = Modifier,
-    transform: PageTransform = PageTransform(scale = 1f, offsetX = 0f, offsetY = 0f),
+    liveTransform: LiveTransform = LiveTransform.IDENTITY,
+    onMeasured: (widthPx: Float, heightPx: Float) -> Unit = { _, _ -> },
 ) {
     val density = LocalDensity.current
-    val widthDp = with(density) { note.widthPx.toDp() }
+    val scale = transform.safeScale
+    val maxWidthDp = with(density) { (note.widthPx * scale).toDp() }
+    val minWidthDp = with(density) { (AiInkNote.MIN_WIDTH_PX * scale).toDp() }
     val heightModifier = note.heightPx
-        ?.let { h -> Modifier.height(with(density) { h.toDp() }) }
+        ?.let { h -> Modifier.height(with(density) { (h * scale).toDp() }) }
         ?: Modifier
-
+    val fontSize = (BASE_FONT_SP * note.fontScale * scale).sp
     val isMath = MathDetector.isMath(note.text)
 
     Box(
         modifier = modifier
-            // The note is anchored in page space; map page → screen (centring offset + scroll).
+            // Anchor in page space (with the live move/scale preview applied first), then page → screen.
             .offset {
                 IntOffset(
-                    transform.pageToScreenX(note.x).roundToInt(),
-                    transform.pageToScreenY(note.y).roundToInt(),
+                    transform.pageToScreenX(liveTransform.applyX(note.x)).roundToInt(),
+                    transform.pageToScreenY(liveTransform.applyY(note.y)).roundToInt(),
                 )
             }
-            .width(widthDp)
+            // Live scale (preview only) about the top-left — matches the bake in transformAiNote.
+            .graphicsLayer {
+                scaleX = liveTransform.scaleX
+                scaleY = liveTransform.scaleY
+                transformOrigin = TransformOrigin(0f, 0f)
+            }
+            // Content-hugging up to the full-line cap; both bounds scale with the page zoom.
+            .widthIn(min = minWidthDp, max = maxWidthDp)
             .then(heightModifier)
-            .then(
-                if (selected) {
-                    Modifier
-                        .shadow(6.dp, RoundedCornerShape(8.dp))
-                        .background(Color.White.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                        .border(1.dp, AiInkColor.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                } else {
-                    Modifier
-                },
-            )
-            .pointerInput(note.id, selected) {
-                // Long-press re-selects a placed note; deselecting happens by tapping
-                // off the box (handled by the canvas), not by tapping inside it.
-                detectTapGestures(
-                    onLongPress = { if (!selected) onSelect() },
-                )
-            }
-            .then(
-                if (selected) {
-                    Modifier.pointerInput(note.id) {
-                        detectDragGestures { change, drag ->
-                            change.consume()
-                            onMove(drag.x, drag.y)
-                        }
-                    }
-                } else {
-                    Modifier
-                },
-            ),
+            // Report the box's page-space size so the selection box hugs it (divide out the zoom).
+            .onSizeChanged { onMeasured(it.width / scale, it.height / scale) },
     ) {
-        val contentPadding = Modifier.padding(
-            start = if (selected) 22.dp else 4.dp,
-            top = if (selected) 6.dp else 2.dp,
-            end = if (selected) 28.dp else 4.dp,
-            bottom = if (selected) 18.dp else 2.dp,
-        )
+        val content = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
         if (isMath) {
             MathText(
                 text = note.text,
                 color = AiInkColor,
                 fontFamily = HandwritingFontFamily,
-                fontSize = BASE_FONT_SP.sp,
-                modifier = contentPadding,
+                fontSize = fontSize,
+                modifier = content,
             )
         } else {
             Text(
                 text = note.text,
                 fontFamily = HandwritingFontFamily,
-                fontSize = BASE_FONT_SP.sp,
-                lineHeight = (BASE_FONT_SP * 1.25f).sp,
+                fontSize = fontSize,
+                lineHeight = fontSize * 1.25f,
                 color = AiInkColor,
-                maxLines = Int.MAX_VALUE,
-                overflow = TextOverflow.Ellipsis,
-                modifier = contentPadding,
-            )
-        }
-
-        if (selected) {
-            Text(
-                text = "✕",
-                fontSize = 14.sp,
-                color = AiInkColor.copy(alpha = 0.6f),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .clip(CircleShape)
-                    .clickable(onClick = onRemove)
-                    .padding(4.dp),
-            )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .size(18.dp)
-                    .background(AiInkColor.copy(alpha = 0.3f), CircleShape)
-                    .pointerInput(note.id) {
-                        detectDragGestures { change, drag ->
-                            change.consume()
-                            onResize(drag.x, drag.y) // dx → width, dy → height
-                        }
-                    },
+                modifier = content,
             )
         }
     }

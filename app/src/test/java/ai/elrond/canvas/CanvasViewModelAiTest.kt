@@ -192,28 +192,99 @@ class CanvasViewModelAiTest {
     }
 
     @Test
-    fun `notes can be moved resized and removed`() = runTest(dispatcher) {
+    fun `notes can be reflowed and removed`() = runTest(dispatcher) {
         val viewModel = viewModel(FakeRecognizer("hello /Q"), FakeProvider("hi"))
         viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
         advanceUntilIdle()
         val id = viewModel.aiNotes.value.single().id
 
-        viewModel.moveAiNote(id, dx = 5f, dy = -3f)
-        assertEquals(15f, viewModel.aiNotes.value.single().x)
-        assertEquals(17f, viewModel.aiNotes.value.single().y)
-
-        // Free resize: width and height move independently (aspect unlocked).
+        // Reflow resize (FA-21): width changes, font stays, height clears to wrap.
         val widthBefore = viewModel.aiNotes.value.single().widthPx
-        viewModel.resizeAiNote(id, dWidth = 40f, dHeight = 25f)
+        viewModel.reflowAiNoteWidth(id, x = 15f, widthPx = widthBefore + 40f)
         assertEquals(widthBefore + 40f, viewModel.aiNotes.value.single().widthPx)
-        assertEquals(ai.elrond.domain.AiInkNote.MIN_HEIGHT_PX + 25f, viewModel.aiNotes.value.single().heightPx)
+        assertEquals(15f, viewModel.aiNotes.value.single().x)
+        assertNull(viewModel.aiNotes.value.single().heightPx)
 
         // Width can't shrink below the minimum.
-        viewModel.resizeAiNote(id, dWidth = -100000f, dHeight = 0f)
+        viewModel.reflowAiNoteWidth(id, x = 15f, widthPx = 10f)
         assertEquals(ai.elrond.domain.AiInkNote.MIN_WIDTH_PX, viewModel.aiNotes.value.single().widthPx)
 
         viewModel.removeAiNote(id)
         assertTrue(viewModel.aiNotes.value.isEmpty())
+    }
+
+    @Test
+    fun `an AI box can be selected, moved by a committed transform, and deleted`() = runTest(dispatcher) {
+        val viewModel = viewModel(FakeRecognizer("hi /Q"), FakeProvider("ok"))
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+        val note = viewModel.aiNotes.value.single()
+
+        viewModel.selectAiNote(note.id)
+        val sel = viewModel.selection.value
+        assertTrue(sel != null && note.id in sel.aiNoteIds && sel.isSingleAiNote)
+
+        // A committed move repositions the box (no canvas size reported → snap-back inert).
+        viewModel.previewTransform(ai.elrond.domain.LiveTransform(dx = 20f, dy = 10f))
+        viewModel.commitTransform()
+        assertEquals(note.x + 20f, viewModel.aiNotes.value.single().x)
+        assertEquals(note.y + 10f, viewModel.aiNotes.value.single().y)
+
+        viewModel.deleteSelection()
+        assertTrue(viewModel.aiNotes.value.isEmpty())
+        assertNull(viewModel.selection.value)
+    }
+
+    @Test
+    fun `a ratio-locked scale grows the AI box font and width together`() = runTest(dispatcher) {
+        val viewModel = viewModel(FakeRecognizer("hi /Q"), FakeProvider("ok"))
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+        val note = viewModel.aiNotes.value.single()
+
+        viewModel.selectAiNote(note.id)
+        viewModel.previewTransform(
+            ai.elrond.domain.LiveTransform(scaleX = 2f, scaleY = 2f, pivotX = note.x, pivotY = note.y),
+        )
+        viewModel.commitTransform()
+
+        val scaled = viewModel.aiNotes.value.single()
+        assertEquals(2f, scaled.fontScale)
+        assertEquals(note.widthPx * 2f, scaled.widthPx)
+    }
+
+    @Test
+    fun `deleting a selected AI box is undoable`() = runTest(dispatcher) {
+        val viewModel = viewModel(FakeRecognizer("hi /Q"), FakeProvider("ok"))
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+        val note = viewModel.aiNotes.value.single()
+
+        viewModel.selectAiNote(note.id)
+        viewModel.deleteSelection()
+        assertTrue(viewModel.aiNotes.value.isEmpty())
+
+        // FA-21: the unified undo snapshot covers AI boxes, so the delete is recoverable.
+        assertTrue(viewModel.canUndo.value)
+        viewModel.undo()
+        assertEquals(listOf(note), viewModel.aiNotes.value)
+    }
+
+    @Test
+    fun `reporting an AI box measured size hugs the selection bounds`() = runTest(dispatcher) {
+        val viewModel = viewModel(FakeRecognizer("hi /Q"), FakeProvider("ok"))
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+        val note = viewModel.aiNotes.value.single()
+
+        viewModel.selectAiNote(note.id)
+        viewModel.reportAiNoteMeasuredSize(note.id, widthPx = 120f, heightPx = 40f)
+
+        val b = viewModel.selection.value!!.bounds
+        assertEquals(note.x, b.left)
+        assertEquals(note.y, b.top)
+        assertEquals(note.x + 120f, b.right)
+        assertEquals(note.y + 40f, b.bottom)
     }
 
     @Test

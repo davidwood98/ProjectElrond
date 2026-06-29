@@ -216,9 +216,13 @@ class CanvasViewModelSelectionTest {
     }
 
     @Test
-    fun `lock ratio toggles on the selection`() {
+    fun `lock ratio is on by default and toggles on the selection`() {
         val vm = viewModel()
         selectFirstTwo(vm)
+        // FA-21: aspect lock defaults ON.
+        assertTrue(vm.selection.value?.lockRatio == true)
+
+        vm.setLockRatio(false)
         assertFalse(vm.selection.value?.lockRatio == true)
 
         vm.setLockRatio(true)

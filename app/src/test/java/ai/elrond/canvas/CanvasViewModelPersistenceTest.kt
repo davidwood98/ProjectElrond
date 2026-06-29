@@ -94,34 +94,38 @@ class CanvasViewModelPersistenceTest {
     }
 
     @Test
-    fun `moving an AI note auto-saves the updated notes`() = runTest(dispatcher) {
+    fun `moving a selected AI note via a committed transform auto-saves it`() = runTest(dispatcher) {
         val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
         coEvery { repository.loadStrokes("page-1") } returns emptyList()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
         val viewModel = viewModel()
         advanceUntilIdle()
 
-        viewModel.moveAiNote("n1", dx = 5f, dy = 7f)
+        // FA-21: AI-box moves flow through the shared selection transform (no canvas size → no snap-back).
+        viewModel.selectAiNote("n1")
+        viewModel.previewTransform(ai.elrond.domain.LiveTransform(dx = 5f, dy = 7f))
+        viewModel.commitTransform()
         advanceUntilIdle()
 
         coVerify { repository.replaceAiNotes("page-1", listOf(note.copy(x = 5f, y = 7f))) }
     }
 
     @Test
-    fun `resizing an AI note auto-saves the new width and height`() = runTest(dispatcher) {
+    fun `reflowing an AI note auto-saves the new width`() = runTest(dispatcher) {
         val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
         coEvery { repository.loadStrokes("page-1") } returns emptyList()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
         val viewModel = viewModel()
         advanceUntilIdle()
 
-        viewModel.resizeAiNote("n1", dWidth = 50f, dHeight = 40f)
+        viewModel.reflowAiNoteWidth("n1", x = 0f, widthPx = 350f)
         advanceUntilIdle()
 
         val slot = slot<List<ai.elrond.domain.AiInkNote>>()
         coVerify { repository.replaceAiNotes(eq("page-1"), capture(slot)) }
         assertEquals(350f, slot.captured.single().widthPx)
-        assertEquals(ai.elrond.domain.AiInkNote.MIN_HEIGHT_PX + 40f, slot.captured.single().heightPx)
+        // Reflow clears the explicit height so the text wraps to content (FA-21).
+        assertEquals(null, slot.captured.single().heightPx)
     }
 
     @Test

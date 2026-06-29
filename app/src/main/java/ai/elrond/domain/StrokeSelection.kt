@@ -163,18 +163,34 @@ object StrokeSelection {
 enum class Corner { TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT }
 
 /**
- * The current lasso selection surfaced to the UI: which strokes are selected ([ids]), the baseline
- * bounding box ([bounds], pre-live-transform), any in-progress move/scale ([transform]), whether
- * the aspect ratio is locked, and whether the whole selection is one existing group.
+ * The current lasso selection surfaced to the UI: which strokes ([ids]) and which AI response boxes
+ * ([aiNoteIds]) are selected, the baseline bounding box ([bounds], pre-live-transform), any
+ * in-progress move/scale ([transform]), whether the aspect ratio is locked (default **on** —
+ * FA-21), and whether the whole stroke selection is one existing group.
+ *
+ * A lasso (or a 1.5s press-and-hold) can select strokes and AI boxes together; a group move/scale
+ * applies to both. Aspect-lock defaults on so scaling a mixed selection (or an AI box) keeps its
+ * proportions — and scales the AI box's text with it.
  */
 data class SelectionState(
     val ids: Set<String>,
     val bounds: SelectionBounds,
     val transform: LiveTransform = LiveTransform.IDENTITY,
-    val lockRatio: Boolean = false,
+    val lockRatio: Boolean = true,
     val grouped: Boolean = false,
+    val aiNoteIds: Set<String> = emptySet(),
 ) {
-    val count: Int get() = ids.size
+    val count: Int get() = ids.size + aiNoteIds.size
+
+    /** Whether any AI response box is part of the selection (drives the AI-box menu variant). */
+    val hasAiNote: Boolean get() = aiNoteIds.isNotEmpty()
+
+    /**
+     * A lone AI box — exactly one AI note and no strokes. Only this case gets the text-aware resize
+     * (corner handles scale the font ratio-locked; left/right edge handles reflow the width at a
+     * constant font size). Mixed / multi selections fall back to plain group scaling.
+     */
+    val isSingleAiNote: Boolean get() = ids.isEmpty() && aiNoteIds.size == 1
 
     /** The box as currently shown — baseline [bounds] with the live [transform] applied. */
     val displayBounds: SelectionBounds
@@ -185,8 +201,8 @@ data class SelectionState(
             bottom = transform.applyY(bounds.bottom),
         )
 
-    /** Grouping is offered only for ≥2 strokes that aren't already a single group. */
-    val canGroup: Boolean get() = ids.size >= 2 && !grouped
+    /** Grouping is offered only for ≥2 strokes (no AI box) that aren't already a single group. */
+    val canGroup: Boolean get() = ids.size >= 2 && aiNoteIds.isEmpty() && !grouped
 }
 
 /** Clipboard banner state for the UI: how many strokes are held, and whether paste is armed. */

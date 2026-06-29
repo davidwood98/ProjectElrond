@@ -73,3 +73,6 @@ data class PageTransform(
             (screenWidth / LOGICAL_WIDTH) * LOGICAL_HEIGHT
     }
 }
+
+/** Zoom factor guarded against a zero/uninitialised scale — safe to divide a screen delta by (FA-21). */
+val PageTransform.safeScale: Float get() = if (scale > 0f) scale else 1f

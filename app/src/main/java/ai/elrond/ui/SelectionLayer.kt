@@ -8,6 +8,7 @@ import ai.elrond.domain.PageTransform
 import ai.elrond.domain.SelectionState
 import ai.elrond.domain.StrokeSelection
 import ai.elrond.domain.StrokeTransforms
+import ai.elrond.domain.safeScale
 import ai.elrond.ui.theme.LeapTheme
 import android.graphics.Matrix
 import androidx.compose.foundation.Canvas
@@ -58,47 +59,39 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
 
 /**
- * The lasso selection overlay (FA-9), shown above the ink canvas while the lasso tool is active. It
- * owns all pointer input in that mode so the canvas never draws ink:
+ * The lasso **input** overlay (FA-9), shown above the ink canvas only while the lasso tool is active.
+ * It owns full-screen input in that mode so the canvas never draws ink:
  *
- *  - empty canvas: drag = draw a lasso (select the enclosed strokes); tap = paste (when the
- *    clipboard is armed) or deselect;
- *  - a selection: a dashed bounding box that drags to **move** and has corner handles to **scale**,
- *    a floating toolbar (Duplicate / Delete / AI), and a ⋮ kebab (Copy / Cut / Lock ratio /
- *    Group | Ungroup);
+ *  - empty canvas: drag = draw a lasso (select the enclosed strokes + AI boxes); tap = paste (when
+ *    the clipboard is armed) or deselect;
  *  - the clipboard banner pinned to the bottom while the clipboard holds anything.
  *
- * The actual ink moves/scales live in [ai.elrond.ui.InkCanvas]'s selection layer (a render
- * matrix); this overlay only draws the box/handles/toolbar and routes gestures to the ViewModel.
+ * The selection **chrome** (the dashed box, resize handles, and floating toolbar) is drawn
+ * separately by [SelectionDecorations], which renders for any selection in any tool (FA-21: an AI
+ * box can be selected by a 1.5s press-and-hold while drawing). The moving ink renders in this
+ * Compose layer with the ink renderer (FA-10); selected AI boxes scale live via their own
+ * graphicsLayer in [AiInkNoteView].
  */
 @Composable
 fun SelectionLayer(
     viewModel: CanvasViewModel,
     modifier: Modifier = Modifier,
 ) {
-    val selection by viewModel.selection.collectAsStateWithLifecycle()
     val clipboard by viewModel.clipboard.collectAsStateWithLifecycle()
-    val finishedStrokes by viewModel.finishedStrokes.collectAsStateWithLifecycle()
     // Page → screen transform (FA-20): strokes are stored in page coords, and the page may be
-    // centred (landscape margins) and/or scrolled (you can't scroll in lasso mode, but you may have
-    // scrolled in pen mode first). The overlay renders the box/ink page → screen and captures the
-    // lasso screen → page through this transform.
+    // centred (landscape margins) and/or scrolled. The overlay captures the lasso screen → page
+    // through this transform.
     val transform by viewModel.pageTransform.collectAsStateWithLifecycle()
     // Palm rejection applies to the lasso too (FA-20): when stylus-only is on, a finger must NOT
     // start a selection — the lasso follows the same rule as the pen for all tools.
     val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
-    // Container size in px — clamps the floating menu on-screen.
-    var layerSize by remember { mutableStateOf(IntSize.Zero) }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .onSizeChanged { layerSize = it },
-    ) {
+    Box(modifier = modifier.fillMaxSize()) {
         // Background: drag → new lasso; tap → paste (armed) or deselect.
         LassoCatcher(
             clipboardActive = clipboard.active,
@@ -116,10 +109,43 @@ fun SelectionLayer(
             onSwipeRelease = viewModel::releaseSwipe,
         )
 
+        if (clipboard.active) {
+            ClipboardBar(
+                count = clipboard.count,
+                onClear = viewModel::clearClipboard,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
+    }
+}
+
+/**
+ * The selection chrome (FA-21): the live-moving ink + faded ghost, the dashed box with resize
+ * handles, and the floating toolbar. Drawn whenever something is selected — in **any** tool, not
+ * just Lasso — because an AI box can be selected by a 1.5s press-and-hold while drawing. It owns no
+ * full-screen input (empty areas fall through to the canvas, so the pen still writes); only the box,
+ * its handles, and the toolbar capture gestures. In Lasso mode this sits above [SelectionLayer]'s
+ * catcher so the handles stay tappable.
+ */
+@Composable
+fun SelectionDecorations(
+    viewModel: CanvasViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val selection by viewModel.selection.collectAsStateWithLifecycle()
+    val finishedStrokes by viewModel.finishedStrokes.collectAsStateWithLifecycle()
+    val transform by viewModel.pageTransform.collectAsStateWithLifecycle()
+    var layerSize by remember { mutableStateOf(IntSize.Zero) }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { layerSize = it },
+    ) {
         selection?.let { sel ->
             // The selected ink lives here (not in InkCanvas): the live move/scale + faded origin
             // ghost, drawn with the ink renderer in this Compose layer so it repaints every frame
-            // (FA-10). Selected/ghost copies are built once per selection set; the box draws on top.
+            // (FA-10). Selected AI boxes scale live via their own graphicsLayer in AiInkNoteView.
             val selectedStrokes = remember(sel.ids, finishedStrokes) {
                 finishedStrokes.filter { it.id in sel.ids }.map { it.stroke }
             }
@@ -130,14 +156,6 @@ fun SelectionLayer(
             }
             SelectionStrokes(selectedStrokes, ghostStrokes, sel.transform, transform)
             SelectionBox(sel, viewModel, layerSize, transform)
-        }
-
-        if (clipboard.active) {
-            ClipboardBar(
-                count = clipboard.count,
-                onClear = viewModel::clearClipboard,
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
         }
     }
 }
@@ -260,7 +278,7 @@ private fun LassoCatcher(
     }
 }
 
-/** Dashed bounding box: drag to move, corner handles to scale, with the floating toolbar above. */
+/** Dashed bounding box: drag to move, handles to resize, with the floating toolbar above. */
 @Composable
 private fun SelectionBox(
     sel: SelectionState,
@@ -271,22 +289,22 @@ private fun SelectionBox(
     val density = LocalDensity.current
     val accent = LeapTheme.tokens.accent
     val box = sel.displayBounds
+    // Map BOTH corners page → screen so the box is correctly sized at any zoom (FA-21).
+    val leftPx = transform.pageToScreenX(box.left)
+    val topPx = transform.pageToScreenY(box.top)
+    val widthPx = (transform.pageToScreenX(box.right) - leftPx).coerceAtLeast(1f)
+    val heightPx = (transform.pageToScreenY(box.bottom) - topPx).coerceAtLeast(1f)
+    val half = HANDLE_SIZE / 2f
+    val aiId = sel.aiNoteIds.firstOrNull()
 
     with(density) {
         Box(
             Modifier
-                .absoluteOffset(
-                    x = transform.pageToScreenX(box.left).toDp(),
-                    y = transform.pageToScreenY(box.top).toDp(),
-                )
-                .size(width = box.width.coerceAtLeast(1f).toDp(), height = box.height.coerceAtLeast(1f).toDp())
-                .border(
-                    width = 1.5.dp,
-                    color = accent,
-                    shape = RoundedCornerShape(4.dp),
-                )
-                // Drag the box body to move the selection.
-                .pointerInput(sel.ids) {
+                .absoluteOffset(x = leftPx.toDp(), y = topPx.toDp())
+                .size(width = widthPx.toDp(), height = heightPx.toDp())
+                .border(width = 1.5.dp, color = accent, shape = RoundedCornerShape(4.dp))
+                // Drag the box body to move the selection (strokes + AI boxes together).
+                .pointerInput(sel.ids, sel.aiNoteIds) {
                     var dx = 0f
                     var dy = 0f
                     detectDragGestures(
@@ -295,16 +313,33 @@ private fun SelectionBox(
                         onDragCancel = { viewModel.cancelTransform() },
                     ) { change, drag ->
                         change.consume()
-                        dx += drag.x
-                        dy += drag.y
+                        // Drag is screen-space; the transform lives in page space, so divide out zoom.
+                        val s = transform.safeScale
+                        dx += drag.x / s
+                        dy += drag.y / s
                         viewModel.previewTransform(LiveTransform(dx = dx, dy = dy))
                     }
                 },
         ) {
-            ScaleHandle(Corner.TOP_LEFT, sel, viewModel, Modifier.align(Alignment.TopStart))
-            ScaleHandle(Corner.TOP_RIGHT, sel, viewModel, Modifier.align(Alignment.TopEnd))
-            ScaleHandle(Corner.BOTTOM_LEFT, sel, viewModel, Modifier.align(Alignment.BottomStart))
-            ScaleHandle(Corner.BOTTOM_RIGHT, sel, viewModel, Modifier.align(Alignment.BottomEnd))
+            // Corner handles, centred ON each corner, scale the selection (ratio-locked by default,
+            // which on an AI box grows/shrinks the font to keep the text fitting).
+            ScaleHandle(Corner.TOP_LEFT, sel, viewModel, transform,
+                Modifier.align(Alignment.TopStart).offset((-half).dp, (-half).dp))
+            ScaleHandle(Corner.TOP_RIGHT, sel, viewModel, transform,
+                Modifier.align(Alignment.TopEnd).offset(half.dp, (-half).dp))
+            ScaleHandle(Corner.BOTTOM_LEFT, sel, viewModel, transform,
+                Modifier.align(Alignment.BottomStart).offset((-half).dp, half.dp))
+            ScaleHandle(Corner.BOTTOM_RIGHT, sel, viewModel, transform,
+                Modifier.align(Alignment.BottomEnd).offset(half.dp, half.dp))
+
+            // A lone AI box also gets left/right edge handles that reflow the width at a constant
+            // font size (narrower box = the text wraps to more lines = taller). FA-21.
+            if (sel.isSingleAiNote && aiId != null) {
+                EdgeHandle(true, aiId, viewModel, transform,
+                    Modifier.align(Alignment.CenterStart).offset(x = (-EDGE_THICKNESS / 2f).dp))
+                EdgeHandle(false, aiId, viewModel, transform,
+                    Modifier.align(Alignment.CenterEnd).offset(x = (EDGE_THICKNESS / 2f).dp))
+            }
         }
     }
 
@@ -317,6 +352,7 @@ private fun ScaleHandle(
     corner: Corner,
     sel: SelectionState,
     viewModel: CanvasViewModel,
+    transform: PageTransform,
     modifier: Modifier,
 ) {
     val accent = LeapTheme.tokens.accent
@@ -324,7 +360,7 @@ private fun ScaleHandle(
         modifier
             .size(HANDLE_SIZE.dp)
             .background(accent, CircleShape)
-            .pointerInput(sel.ids, corner, sel.lockRatio) {
+            .pointerInput(sel.ids, sel.aiNoteIds, corner, sel.lockRatio) {
                 var dx = 0f
                 var dy = 0f
                 detectDragGestures(
@@ -333,8 +369,9 @@ private fun ScaleHandle(
                     onDragCancel = { viewModel.cancelTransform() },
                 ) { change, drag ->
                     change.consume()
-                    dx += drag.x
-                    dy += drag.y
+                    val s = transform.safeScale
+                    dx += drag.x / s
+                    dy += drag.y / s
                     viewModel.previewTransform(
                         StrokeSelection.scaleTransform(corner, sel.bounds, dx, dy, sel.lockRatio),
                     )
@@ -343,12 +380,56 @@ private fun ScaleHandle(
     )
 }
 
+/** A left/right edge handle that reflows a lone AI box's width at a constant font size (FA-21). */
+@Composable
+private fun EdgeHandle(
+    left: Boolean,
+    noteId: String,
+    viewModel: CanvasViewModel,
+    transform: PageTransform,
+    modifier: Modifier,
+) {
+    val accent = LeapTheme.tokens.accent
+    Box(
+        modifier
+            .size(width = EDGE_THICKNESS.dp, height = EDGE_LENGTH.dp)
+            .background(accent, RoundedCornerShape(EDGE_THICKNESS.dp))
+            .pointerInput(noteId, left) {
+                var startX = 0f
+                var startWidth = 0f
+                var dx = 0f
+                detectDragGestures(
+                    onDragStart = {
+                        viewModel.beginAiNoteReflow() // one undo step for the whole reflow drag
+                        val n = viewModel.aiNotes.value.firstOrNull { it.id == noteId }
+                        startX = n?.x ?: 0f
+                        startWidth = n?.widthPx ?: 0f
+                        dx = 0f
+                    },
+                ) { change, drag ->
+                    change.consume()
+                    val s = transform.safeScale
+                    dx += drag.x / s
+                    if (left) {
+                        // Left edge: the right edge stays put, so x and width move together.
+                        viewModel.reflowAiNoteWidth(noteId, x = startX + dx, widthPx = startWidth - dx)
+                    } else {
+                        viewModel.reflowAiNoteWidth(noteId, x = startX, widthPx = startWidth + dx)
+                    }
+                }
+            },
+    )
+}
+
 /**
- * Floating action bar for the selection: Duplicate / Delete / AI + a ⋮ kebab. Positioned
- * dynamically so it is always fully on-screen (project rule): centred over the selection and
- * clamped to the container's edges — it shifts left/right when the selection is near a side edge,
- * and flips above↔below (then clamps) when near the top/bottom. Uses the measured toolbar +
- * container sizes ([layerSize]), so the clamp is exact rather than guessed.
+ * Floating action bar for the selection, positioned dynamically so it is always fully on-screen
+ * (project rule): centred over the selection and clamped to the container's edges — it shifts
+ * left/right near a side edge and flips above↔below near the top/bottom, using the measured toolbar
+ * + container sizes ([layerSize]) for an exact clamp.
+ *
+ * Two variants (FA-21): a **stroke** selection shows Duplicate / Delete / AI + a ⋮ kebab (Copy / Cut
+ * / lock / Group); a selection that **includes an AI box** drops the AI button and promotes Copy to
+ * the top row (Copy / Delete + a kebab of Duplicate / Cut / lock).
  */
 @Composable
 private fun SelectionToolbar(
@@ -360,6 +441,7 @@ private fun SelectionToolbar(
     val box = sel.displayBounds
     var menuOpen by remember { mutableStateOf(false) }
     var toolbarSize by remember { mutableStateOf(IntSize.Zero) }
+    val hasAi = sel.hasAiNote
 
     Surface(
         modifier = Modifier
@@ -388,37 +470,48 @@ private fun SelectionToolbar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(0.dp),
         ) {
-            TextButton(onClick = viewModel::duplicateSelection) { Text("Duplicate") }
+            // Copy & Duplicate swap between the top row and the kebab by variant (FA-21) — compute
+            // each once so neither button is written twice.
+            val topLabel = if (hasAi) "Copy" else "Duplicate"
+            val topAction = if (hasAi) viewModel::copySelection else viewModel::duplicateSelection
+            val kebabLabel = if (hasAi) "Duplicate" else "Copy"
+            val kebabAction = if (hasAi) viewModel::duplicateSelection else viewModel::copySelection
+
+            TextButton(onClick = topAction) { Text(topLabel) }
             TextButton(onClick = viewModel::deleteSelection) { Text("Delete") }
-            TextButton(onClick = viewModel::aiPromptSelection) {
-                AiLogo(modifier = Modifier.size(20.dp), contentDescription = "Ask AI")
+            if (!hasAi) {
+                TextButton(onClick = viewModel::aiPromptSelection) {
+                    AiLogo(modifier = Modifier.size(40.dp), contentDescription = "Ask AI")
+                }
             }
             Box {
-                TextButton(onClick = { menuOpen = true }) { Text("⋮") }
+                TextButton(onClick = { menuOpen = true }) { Text("⋮", fontSize = KEBAB_GLYPH_SP.sp) }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
-                        text = { Text("Copy") },
-                        onClick = { menuOpen = false; viewModel.copySelection() },
+                        text = { Text(kebabLabel) },
+                        onClick = { menuOpen = false; kebabAction() },
                     )
                     DropdownMenuItem(
                         text = { Text("Cut") },
                         onClick = { menuOpen = false; viewModel.cutSelection() },
                     )
                     DropdownMenuItem(
-                        text = { Text("Lock ratio") },
-                        trailingIcon = { if (sel.lockRatio) Text("✓") },
+                        // Toggle shows the ACTION it performs (FA-21): default is locked.
+                        text = { Text(if (sel.lockRatio) "Unlock aspect" else "Lock aspect") },
                         onClick = { viewModel.setLockRatio(!sel.lockRatio); menuOpen = false },
                     )
-                    if (sel.grouped) {
-                        DropdownMenuItem(
-                            text = { Text("Ungroup") },
-                            onClick = { menuOpen = false; viewModel.ungroupSelection() },
-                        )
-                    } else if (sel.canGroup) {
-                        DropdownMenuItem(
-                            text = { Text("Group") },
-                            onClick = { menuOpen = false; viewModel.groupSelection() },
-                        )
+                    if (!hasAi) {
+                        if (sel.grouped) {
+                            DropdownMenuItem(
+                                text = { Text("Ungroup") },
+                                onClick = { menuOpen = false; viewModel.ungroupSelection() },
+                            )
+                        } else if (sel.canGroup) {
+                            DropdownMenuItem(
+                                text = { Text("Group") },
+                                onClick = { menuOpen = false; viewModel.groupSelection() },
+                            )
+                        }
                     }
                 }
             }
@@ -443,7 +536,7 @@ private fun ClipboardBar(count: Int, onClear: () -> Unit, modifier: Modifier = M
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = if (count == 1) "1 stroke copied — tap to place" else "$count strokes copied — tap to place",
+                text = if (count == 1) "1 item copied — tap to place" else "$count items copied — tap to place",
                 color = MaterialTheme.colorScheme.inverseOnSurface,
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -453,6 +546,13 @@ private fun ClipboardBar(count: Int, onClear: () -> Unit, modifier: Modifier = M
 }
 
 private const val HANDLE_SIZE = 18
+
+/** Left/right edge reflow handle dimensions (FA-21), dp. */
+private const val EDGE_THICKNESS = 14
+private const val EDGE_LENGTH = 44
+
+/** The ⋮ kebab glyph size (FA-21) — ~2× the default so it reads at the toolbar text scale. */
+private const val KEBAB_GLYPH_SP = 26
 
 /** Origin-ghost opacity during a lasso move (FA-10): the original colour at 30%. */
 private const val GHOST_ALPHA = 0.30f

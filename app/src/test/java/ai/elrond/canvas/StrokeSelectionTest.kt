@@ -182,4 +182,41 @@ class StrokeSelectionTest {
         )
         assertTrue(StrokeSelection.shouldShowGhost(sel))
     }
+
+    // --- FA-21 mixed selection (strokes + AI boxes) ---
+
+    private val box = SelectionBounds(0f, 0f, 10f, 10f)
+
+    @Test
+    fun `aspect lock is on by default`() {
+        assertTrue(SelectionState(ids = setOf("a"), bounds = box).lockRatio)
+    }
+
+    @Test
+    fun `hasAiNote, isSingleAiNote and count cover strokes and AI boxes`() {
+        val mixed = SelectionState(ids = setOf("a"), bounds = box, aiNoteIds = setOf("n1"))
+        assertTrue(mixed.hasAiNote)
+        assertFalse(mixed.isSingleAiNote) // has a stroke too
+        assertEquals(2, mixed.count)
+
+        val lone = SelectionState(ids = emptySet(), bounds = box, aiNoteIds = setOf("n1"))
+        assertTrue(lone.isSingleAiNote)
+        assertEquals(1, lone.count)
+
+        val twoNotes = SelectionState(ids = emptySet(), bounds = box, aiNoteIds = setOf("n1", "n2"))
+        assertFalse(twoNotes.isSingleAiNote) // two boxes
+
+        val strokesOnly = SelectionState(ids = setOf("a", "b"), bounds = box)
+        assertFalse(strokesOnly.hasAiNote)
+        assertEquals(2, strokesOnly.count)
+    }
+
+    @Test
+    fun `canGroup needs two strokes and no AI box`() {
+        assertTrue(SelectionState(ids = setOf("a", "b"), bounds = box).canGroup)
+        assertFalse(SelectionState(ids = setOf("a"), bounds = box).canGroup) // one stroke
+        assertFalse(
+            SelectionState(ids = setOf("a", "b"), bounds = box, aiNoteIds = setOf("n")).canGroup,
+        ) // an AI box is present
+    }
 }
