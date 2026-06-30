@@ -67,12 +67,16 @@ val ErrorInkColor = Color(0xFFC62828)
  * toolbar — this view only renders the text.
  *
  * It is **content-hugging**: the box sizes to its text up to the note's full-line width cap, so a
- * short answer is tight and a long one wraps. Width, height and font all scale with the page zoom
- * ([transform]) like the grid, and with the note's own [AiInkNote.fontScale] (baked in by a
- * ratio-locked resize). While the note moves/scales as part of a selection, [liveTransform] previews
- * that move/scale — applied as a layer modifier, never recomputed in a draw lambda (the FA-10 rule).
- * [onMeasured] reports the box's page-space size so the ViewModel can hug the selection box around
- * it. Mathematical answers render via [MathText].
+ * short answer is tight and a long one wraps. The text is laid out **once at its base (page-space)
+ * size** — base font (and the note's own [AiInkNote.fontScale], baked in by a ratio-locked resize),
+ * base width/height — and the page zoom ([transform]) is applied as a `graphicsLayer` scale on the
+ * whole box, so the layout (wrapping, line count, line spacing) is frozen and scales 1:1 with the
+ * grid. (Recomputing font/width/lineHeight per zoom step let the vertical metrics drift from the
+ * page — line spacing stretched when zoomed out and cramped when zoomed in.) The same layer also
+ * carries [liveTransform]'s move/scale preview while the note is dragged as part of a selection —
+ * a layer modifier, never recomputed in a draw lambda (the FA-10 rule). [onMeasured] reports the
+ * box's page-space size so the ViewModel can hug the selection box around it. Mathematical answers
+ * render via [MathText].
  */
 @Composable
 fun AiInkNoteView(
@@ -84,12 +88,15 @@ fun AiInkNoteView(
 ) {
     val density = LocalDensity.current
     val scale = transform.safeScale
-    val maxWidthDp = with(density) { (note.widthPx * scale).toDp() }
-    val minWidthDp = with(density) { (AiInkNote.MIN_WIDTH_PX * scale).toDp() }
+    // Base (page-space) size: the page zoom is applied by the graphicsLayer below, NOT folded into
+    // the font/width/height here — so the text lays out a single time and the page zoom scales the
+    // whole rasterised layer uniformly (line spacing can't drift from the grid).
+    val maxWidthDp = with(density) { note.widthPx.toDp() }
+    val minWidthDp = with(density) { AiInkNote.MIN_WIDTH_PX.toDp() }
     val heightModifier = note.heightPx
-        ?.let { h -> Modifier.height(with(density) { (h * scale).toDp() }) }
+        ?.let { h -> Modifier.height(with(density) { h.toDp() }) }
         ?: Modifier
-    val fontSize = (BASE_FONT_SP * note.fontScale * scale).sp
+    val fontSize = (BASE_FONT_SP * note.fontScale).sp
     val isMath = MathDetector.isMath(note.text)
 
     Box(
@@ -101,17 +108,18 @@ fun AiInkNoteView(
                     transform.pageToScreenY(liveTransform.applyY(note.y)).roundToInt(),
                 )
             }
-            // Live scale (preview only) about the top-left — matches the bake in transformAiNote.
+            // Page zoom × the live move/scale preview, applied as one layer scale about the
+            // top-left (matches the page→screen anchor and the bake in transformAiNote).
             .graphicsLayer {
-                scaleX = liveTransform.scaleX
-                scaleY = liveTransform.scaleY
+                scaleX = scale * liveTransform.scaleX
+                scaleY = scale * liveTransform.scaleY
                 transformOrigin = TransformOrigin(0f, 0f)
             }
-            // Content-hugging up to the full-line cap; both bounds scale with the page zoom.
+            // Content-hugging up to the full-line cap, at base size (the layer applies the zoom).
             .widthIn(min = minWidthDp, max = maxWidthDp)
             .then(heightModifier)
-            // Report the box's page-space size so the selection box hugs it (divide out the zoom).
-            .onSizeChanged { onMeasured(it.width / scale, it.height / scale) },
+            // The box now measures in page space (base size); report it directly.
+            .onSizeChanged { onMeasured(it.width.toFloat(), it.height.toFloat()) },
     ) {
         val content = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
         if (isMath) {
