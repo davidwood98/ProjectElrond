@@ -306,7 +306,7 @@ private fun fingerSpan(event: MotionEvent, excludeIndex: Int = -1): FingerSpan {
 }
 
 /** Press-and-hold duration to select an AI box (FA-21), and the movement that aborts it (a stroke). */
-private const val AI_NOTE_HOLD_MS = 1500L
+private const val AI_NOTE_HOLD_MS = 800L
 private const val HOLD_MOVE_SLOP_PX = 24f
 
 /** Screen-px slop around a selection box so a DOWN on its edge-straddling resize handles isn't
@@ -336,14 +336,20 @@ private fun createTouchListener(
     // When the horizontal axis locks while zoomed in (page wider than the viewport) the drag PANS the
     // page instead of turning it; captured once at lock so release knows not to spring a page turn.
     var horizontalIsPan = false
+    // Scroll mode (palm rejection on): a lone finger doesn't draw, so a clean TAP can select the AI
+    // box under it (or deselect on empty page) — resolved on UP when no axis locked. Holds the box
+    // hit-tested under the scroll-finger DOWN, or null if it landed on empty page.
+    var scrollDownNoteId: String? = null
     // Two-finger pinch zoom (FA-20): tracks the previous finger spread + centroid between frames.
     var pinching = false
     var pinchPrevSpread = 0f
     var pinchPrevCx = 0f
     var pinchPrevCy = 0f
-    // FA-21: a 1.5s stationary press-and-hold over an AI box selects it (so it can be moved/scaled
-    // via the shared lasso chrome). The pen still draws on the box otherwise — moving cancels the
-    // hold, which is why a deselected AI box is passive (no pointer input) and the pen writes over it.
+    // FA-21: a stationary press-and-hold ([AI_NOTE_HOLD_MS]) over an AI box selects it (so it can be
+    // moved/scaled via the shared lasso chrome). Used by the pen/stylus and by a finger in finger-draw
+    // mode — moving cancels the hold, which is why a deselected AI box is passive (no pointer input)
+    // and the pen writes over it. (In scroll mode a finger doesn't draw, so a plain tap selects — see
+    // [scrollDownNoteId] — and a hold isn't needed.)
     val holdHandler = Handler(Looper.getMainLooper())
     var pendingHold: Runnable? = null
     var holdDownX = 0f
@@ -428,6 +434,14 @@ private fun createTouchListener(
                             lastScrollY = scrollStartY
                             lastScrollX = scrollStartX
                             scrollAxis = 0
+                            // A finger doesn't draw in scroll mode, so a clean tap can select the AI
+                            // box under it (resolved on UP). A drag past the slop locks an axis and
+                            // scrolls instead, leaving any selection alone.
+                            val t = viewModel.pageTransform.value
+                            scrollDownNoteId = viewModel.aiNoteAt(
+                                t.screenToPageX(scrollStartX),
+                                t.screenToPageY(scrollStartY),
+                            )
                         }
                         return@OnTouchListener true
                     }
@@ -603,8 +617,15 @@ private fun createTouchListener(
                         // page-turn or spring back in vertical mode). A pan just ends. (FA-20)
                         if (scrollAxis == 2 && !horizontalIsPan) viewModel.releaseSwipe()
                         if (scrollAxis == 1) viewModel.releaseScroll()
+                        // A clean tap (no axis ever locked): select the tapped AI box, else deselect.
+                        if (scrollAxis == 0) {
+                            val tapped = scrollDownNoteId
+                            if (tapped != null) viewModel.selectAiNote(tapped)
+                            else viewModel.clearSelection()
+                        }
                         scrollPointerId = null
                         scrollAxis = 0
+                        scrollDownNoteId = null
                     }
                     if (pointerId == currentPointerId) {
                         cancelPendingHold()
@@ -639,6 +660,7 @@ private fun createTouchListener(
                     if (scrollAxis == 1) viewModel.releaseScroll() // spring an in-progress vertical overscroll back
                     scrollPointerId = null
                     scrollAxis = 0
+                    scrollDownNoteId = null
                     true
                 }
 
