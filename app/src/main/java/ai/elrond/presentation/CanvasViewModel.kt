@@ -135,6 +135,10 @@ class CanvasViewModel(
     private val strokeTransformer: (Stroke, LiveTransform) -> Stroke = StrokeTransforms::transformStroke,
     /** Axis-aligned bounds of a stroke (lasso tool). Injected so JVM tests use a fake. */
     private val strokeBoundsOf: (Stroke) -> SelectionBounds = StrokeTransforms::strokeBounds,
+    /** Decimates a new stroke's points to a min spacing (debug perf knob). Injected for JVM tests. */
+    private val strokeSimplifier: (Stroke, Float) -> Stroke = StrokeTransforms::simplify,
+    /** Min point spacing (page units) applied to new strokes; null/0 = off (full fidelity). */
+    strokeSimplificationSpacingFlow: Flow<Float>? = null,
     triggerModeFlow: Flow<TriggerMode>? = null,
     /** Prefix-mode inactivity delay (ms) before the question fires; null keeps the default. */
     prefixTriggerDelayMsFlow: Flow<Long>? = null,
@@ -217,6 +221,7 @@ class CanvasViewModel(
         triggerCommandFlow = settings.triggerCommand,
         triggerModeFlow = settings.triggerMode,
         prefixTriggerDelayMsFlow = settings.prefixTriggerDelayMs,
+        strokeSimplificationSpacingFlow = settings.strokeSimplificationSpacing,
         prefixNoPromptTimeoutMsFlow = settings.prefixNoPromptTimeoutMs,
         stylusOnlyFlow = settings.stylusOnly,
         globalPaperStyleFlow = settings.paperStyle,
@@ -539,6 +544,10 @@ class CanvasViewModel(
     @Volatile
     private var prefixNoPromptTimeoutMs: Long = SettingsRepository.DEFAULT_PREFIX_NO_PROMPT_TIMEOUT_MS
 
+    /** Min point spacing applied to new strokes (debug perf knob), kept in sync with settings. */
+    @Volatile
+    private var strokeSimplificationSpacing: Float = SettingsRepository.DEFAULT_STROKE_SIMPLIFICATION_SPACING
+
     /** Unit system the AI must use for measurements, kept in sync with settings. */
     @Volatile
     private var unitSystem: UnitSystem = UnitSystem.DEFAULT
@@ -561,6 +570,9 @@ class CanvasViewModel(
         }
         prefixNoPromptTimeoutMsFlow?.let { flow ->
             viewModelScope.launch { flow.collect { prefixNoPromptTimeoutMs = it } }
+        }
+        strokeSimplificationSpacingFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { strokeSimplificationSpacing = it } }
         }
         stylusOnlyFlow?.let { flow ->
             viewModelScope.launch { flow.collect { _stylusOnly.value = it } }
@@ -1355,7 +1367,13 @@ class CanvasViewModel(
         clearSelection() // a fresh pen stroke isn't part of any lasso selection
         contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
         thumbnailDirty = true // ink changed — the note-card thumbnail is now stale
-        val newStrokes = strokes.map { CanvasStroke(newStrokeId(), it) }
+        // Debug perf knob: thin the new stroke's points (cheaper mesh build + redraw). Capture-time
+        // only — existing/loaded strokes are untouched. 0 spacing = off (returns the stroke as-is).
+        val spacing = strokeSimplificationSpacing
+        val newStrokes = strokes.map { stroke ->
+            val processed = if (spacing > 0f) strokeSimplifier(stroke, spacing) else stroke
+            CanvasStroke(newStrokeId(), processed)
+        }
         _finishedStrokes.update { current -> current + newStrokes }
 
         // Prefix `/Q`: while listening, every new stroke is part of the question — track its id and

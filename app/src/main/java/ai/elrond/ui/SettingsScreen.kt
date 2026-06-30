@@ -116,8 +116,10 @@ fun SettingsScreen(
     val aiLoaderStyle by viewModel.aiLoaderStyle.collectAsStateWithLifecycle()
     val aiColorMode by viewModel.aiColorMode.collectAsStateWithLifecycle()
     val unitSystem by viewModel.unitSystem.collectAsStateWithLifecycle()
+    val strokeSimplify by viewModel.strokeSimplificationSpacing.collectAsStateWithLifecycle()
 
     var draft by remember(trigger) { mutableStateOf(trigger) }
+    var strokeSimplifyPos by remember(strokeSimplify) { mutableStateOf(strokeSimplify) }
     // Local slider position, re-seeded whenever the persisted threshold changes (e.g. when toggling
     // snap-back on restores the default); persisted on release via onValueChangeFinished.
     var snapBackPos by remember(snapBackThreshold) { mutableStateOf(snapBackThreshold) }
@@ -569,6 +571,33 @@ fun SettingsScreen(
                 enabled = snapBackEnabled,
             )
             SnapBackPreview(threshold = snapBackPos, enabled = snapBackEnabled)
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text("Debug · stroke rendering", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Thins how many points each NEW stroke keeps — fewer points render faster but look " +
+                    "less smooth. Use it to find the lowest fidelity that still looks clean on a dense " +
+                    "page. Applies only to strokes drawn from now on; it never changes notes you've " +
+                    "already saved. 0 = off (full fidelity).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                if (strokeSimplifyPos <= 0f) {
+                    "Point spacing: off"
+                } else {
+                    "Point spacing: ${"%.1f".format(strokeSimplifyPos)}"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Slider(
+                value = strokeSimplifyPos,
+                onValueChange = { strokeSimplifyPos = it },
+                onValueChangeFinished = { viewModel.setStrokeSimplificationSpacing(strokeSimplifyPos) },
+                valueRange = 0f..SettingsRepository.MAX_STROKE_SIMPLIFICATION_SPACING,
+                steps = STROKE_SIMPLIFY_SLIDER_STEPS,
+            )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -1111,3 +1140,6 @@ private const val PREFIX_DELAY_SLIDER_STEPS = 27
 
 /** Prefix no-prompt timeout: 1–10s in 0.5s steps (19 values → 17 between the endpoints). */
 private const val PREFIX_TIMEOUT_SLIDER_STEPS = 17
+
+/** Stroke simplification: 0–12 page-units in 0.5 steps (25 values → 23 between the endpoints). */
+private const val STROKE_SIMPLIFY_SLIDER_STEPS = 23
