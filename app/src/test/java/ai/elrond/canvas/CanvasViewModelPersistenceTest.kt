@@ -62,9 +62,12 @@ class CanvasViewModelPersistenceTest {
         viewModel.onStrokesFinished(listOf(stroke))
         advanceUntilIdle()
 
-        val slot = slot<List<CanvasStroke>>()
-        coVerify { repository.replaceStrokes(eq("page-1"), capture(slot)) }
-        assertEquals(listOf(stroke), slot.captured.map { it.stroke })
+        // Incremental save: a fresh pen stroke appends to the (empty) persisted prefix.
+        val previous = slot<List<CanvasStroke>>()
+        val current = slot<List<CanvasStroke>>()
+        coVerify { repository.updateStrokes(eq("page-1"), capture(previous), capture(current)) }
+        assertEquals(emptyList<CanvasStroke>(), previous.captured)
+        assertEquals(listOf(stroke), current.captured.map { it.stroke })
     }
 
     @Test
@@ -78,7 +81,8 @@ class CanvasViewModelPersistenceTest {
         viewModel.undo()
         advanceUntilIdle()
 
-        coVerify { repository.replaceStrokes("page-1", emptyList()) }
+        // Undo removed the stroke, so the page emptied — verified via the incremental save diff.
+        coVerify { repository.updateStrokes("page-1", any(), emptyList()) }
     }
 
     @Test
@@ -137,7 +141,7 @@ class CanvasViewModelPersistenceTest {
         viewModel()
         advanceUntilIdle()
 
-        coVerify(exactly = 0) { repository.replaceStrokes(any(), any()) }
+        coVerify(exactly = 0) { repository.updateStrokes(any(), any(), any()) }
         coVerify(exactly = 0) { repository.replaceAiNotes(any(), any()) }
     }
 }

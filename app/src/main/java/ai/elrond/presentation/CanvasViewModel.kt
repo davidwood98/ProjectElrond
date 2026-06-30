@@ -180,6 +180,7 @@ class CanvasViewModel(
     private val sessionNotesTracker: SessionNotesTracker? = null,
     private val triggerDebounceMillis: Long = TRIGGER_DEBOUNCE_MILLIS,
     private val autoSaveDebounceMillis: Long = AUTOSAVE_DEBOUNCE_MILLIS,
+    private val thumbnailIdleMillis: Long = THUMBNAIL_IDLE_MILLIS,
     private val requestTimeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
 ) : ViewModel() {
 
@@ -1147,13 +1148,19 @@ class CanvasViewModel(
     private fun startAutoSave(repository: NoteRepository, pageId: String) {
         viewModelScope.launch {
             _finishedStrokes.debounce(autoSaveDebounceMillis).collect { strokes ->
-                if (strokes != lastPersisted) {
-                    val saved = runCatching { repository.replaceStrokes(pageId, strokes) }.isSuccess
+                val previous = lastPersisted
+                if (strokes != previous) {
+                    // Incremental: appends only the new strokes on the pen-writing hot path; full
+                    // rewrite only when an existing stroke was removed or its geometry baked.
+                    val saved = runCatching {
+                        repository.updateStrokes(pageId, previous, strokes)
+                    }.isSuccess
                     if (saved) {
                         lastPersisted = strokes
-                        // The persisted ink changed — refresh the note-card thumbnail (reads the
-                        // freshly-saved strokes, so it runs after the write).
-                        generateThumbnail(pageId)
+                        // The persisted ink changed — the note-card thumbnail is now stale. The actual
+                        // regen runs on the separate, longer thumbnail-idle collector below (it reads
+                        // the freshly-saved strokes, so it must run after this write).
+                        thumbnailDirty = true
                         // Kick off background TODO/calendar extraction only when genuinely new
                         // pen ink was written — never for lasso edits (move/scale/duplicate/
                         // paste/…), so pasted/duplicated ink isn't re-run by the extractor.
@@ -1163,6 +1170,14 @@ class CanvasViewModel(
                         }
                     }
                 }
+            }
+        }
+        // Regenerate the note-card thumbnail on a long idle, decoupled from the stroke save so the
+        // heavy render + WebP compress never competes with the main-thread dry-layer rebuild while
+        // writing. Fires well after the autosave has persisted, so it reads current strokes.
+        viewModelScope.launch {
+            _finishedStrokes.debounce(thumbnailIdleMillis).collect {
+                if (thumbnailDirty) generateThumbnail(pageId)
             }
         }
         viewModelScope.launch {
@@ -1196,8 +1211,11 @@ class CanvasViewModel(
             if (strokes != lastPersisted || needsThumbnail) {
                 // Flush the strokes, THEN regenerate the thumbnail (it reads the just-saved strokes),
                 // so a back-press inside the autosave debounce still leaves a fresh thumbnail.
+                val previous = lastPersisted
                 flushScope.launch {
-                    if (strokes != lastPersisted) runCatching { repository.replaceStrokes(pageId, strokes) }
+                    if (strokes != previous) {
+                        runCatching { repository.updateStrokes(pageId, previous, strokes) }
+                    }
                     if (needsThumbnail && generateThumbnail != null) {
                         runCatching { generateThumbnail(pageId) }
                     }
@@ -2416,7 +2434,20 @@ class CanvasViewModel(
 
         /** Max strokes a line may have and still be scanned as a possible standalone prefix `/Q`. */
         const val MAX_PREFIX_TRIGGER_STROKES: Int = 6
-        const val AUTOSAVE_DEBOUNCE_MILLIS: Long = 800L
+        // Fires only after a gap longer than a typical sentence pause (~1–1.5s), so the save lands at
+        // paragraph breaks / genuine idle rather than between sentences. Each fire is cheap now that
+        // strokes save incrementally (see NoteRepository.updateStrokes), so the slightly larger
+        // unsaved-in-memory window is a low-risk trade.
+        const val AUTOSAVE_DEBOUNCE_MILLIS: Long = 1_500L
+
+        /**
+         * Thumbnail regen runs on its own, much longer idle than the stroke save: the note-card
+         * thumbnail is only seen back in the browser, so rendering + WebP-compressing it on every
+         * autosave is wasted mid-writing work. This fires well after writing has stopped (and after
+         * the autosave has persisted the strokes it reads). onCleared still flushes a fresh thumbnail
+         * on page close so leaving early never strands a stale card.
+         */
+        const val THUMBNAIL_IDLE_MILLIS: Long = 4_000L
         const val REQUEST_TIMEOUT_MILLIS: Long = 15_000L
         const val MAX_HISTORY: Int = 50
 

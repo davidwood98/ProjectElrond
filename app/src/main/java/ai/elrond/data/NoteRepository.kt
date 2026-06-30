@@ -205,12 +205,56 @@ class NoteRepository(
 
     // --- Strokes ---
 
+    /**
+     * Appends [strokes] without touching the page's existing rows — the cheap incremental save for
+     * the hot pen-writing path (only the 1–3 freshly-finished strokes are serialized + inserted,
+     * not the whole page; see [updateStrokes]).
+     */
     suspend fun saveStrokes(pageId: String, strokes: List<CanvasStroke>, isAiInk: Boolean = false) {
         if (strokes.isEmpty()) return
         val now = clock()
-        strokeDao.insertAll(strokes.map { it.toEntity(pageId, now, isAiInk) })
+        val entities = withContext(Dispatchers.Default) { strokes.map { it.toEntity(pageId, now, isAiInk) } }
+        strokeDao.insertAll(entities)
         pageDao.touch(pageId, now)
         recordEdit(pageId, now)
+    }
+
+    /**
+     * Persists the page's stroke change as cheaply as the diff allows (autosave hot path).
+     *
+     * The common case while writing is purely additive — new pen strokes appended to an unchanged
+     * prefix — so only the new strokes are inserted ([saveStrokes]), turning the per-save cost from
+     * O(all strokes × points) into O(new strokes × points). Anything that removes or mutates an
+     * existing stroke (erase, undo/redo, lasso move/scale/delete/paste/group) rewrites the whole
+     * page ([replaceStrokes]).
+     *
+     * Correctness is derived from the data, not a flag: an unchanged stroke keeps the same immutable
+     * [CanvasStroke.stroke] reference across emissions, so a changed reference (a baked transform) or
+     * a dropped id forces the full rewrite. No mutation site has to remember to mark itself dirty.
+     */
+    suspend fun updateStrokes(
+        pageId: String,
+        previous: List<CanvasStroke>,
+        current: List<CanvasStroke>,
+        isAiInk: Boolean = false,
+    ) {
+        val prevById = previous.associateBy { it.id }
+        val currentIds = current.mapTo(HashSet(current.size)) { it.id }
+        val removed = previous.any { it.id !in currentIds }
+        val added = ArrayList<CanvasStroke>()
+        var changed = false
+        for (cs in current) {
+            val prev = prevById[cs.id]
+            when {
+                prev == null -> added.add(cs)
+                prev.stroke !== cs.stroke || prev.groupId != cs.groupId -> changed = true
+            }
+        }
+        when {
+            removed || changed -> replaceStrokes(pageId, current, isAiInk)
+            added.isNotEmpty() -> saveStrokes(pageId, added, isAiInk)
+            // else: same ids, same stroke refs (e.g. a reorder) — nothing to persist.
+        }
     }
 
     suspend fun loadStrokes(pageId: String): List<CanvasStroke> =
