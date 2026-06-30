@@ -6,16 +6,12 @@ import ai.elrond.domain.PageTransform
 import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.CanvasStroke
 import ai.elrond.domain.FingerGesture
-import ai.elrond.domain.SelectionBounds
-import ai.elrond.domain.StrokeTransforms
-import ai.elrond.domain.safeScale
-import java.util.Collections
-import java.util.IdentityHashMap
 import ai.elrond.presentation.CanvasViewModel
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.RenderNode
 import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
@@ -100,36 +96,35 @@ internal fun InkCanvas(
  * screen. Stroke-list changes still go through [setStrokes] + `invalidate()` (off Compose, so the
  * first stroke of a freshly opened page paints without waiting on a recomposition — the FA-6 fix).
  */
+/** One stroke in the dry layer's flattened draw order, with the docTop of its page. */
+private class DryDrawEntry(val docTop: Float, val cs: CanvasStroke)
+
 @SuppressLint("ViewConstructor")
 private class DryStrokesView(context: Context) : View(context) {
     private val renderer = CanvasStrokeRenderer.create()
     // Each layer's strokes are stored in that page's own page-space; the view carries the document→
     // screen transform and draws each layer translated by its (open-page-relative) docTop, so a single
     // view + GPU transform renders the whole continuous vertical document (FA-20). The matrix is
-    // reused per layer to avoid per-frame allocation.
+    // reused per entry to avoid per-frame allocation.
     private val layerMatrix = Matrix()
     private var layers: List<PageLayer> = emptyList()
     private var excludedIds: Set<String> = emptySet()
     private var viewWidthPx = 0
     private var viewHeightPx = 0
 
-    // Viewport culling (page-fill perf): each immutable stroke's page-space bounds are computed once
-    // and cached by identity, so onDraw can skip strokes scrolled off-screen instead of re-recording
-    // every stroke of a full page on each new-stroke invalidate. Screen size is the on-screen canvas
-    // (parent) px; 0 until the collector reports it, in which case we draw everything (safe fallback).
-    private val boundsCache = IdentityHashMap<Stroke, SelectionBounds>()
-    private var screenWidthPx = 0f
-    private var screenHeightPx = 0f
-
-    // The page-space rect actually recorded by the last onDraw (visible viewport expanded by a screen
-    // margin). onDraw only records strokes inside it, so once a scroll moves the real viewport outside
-    // this rect we must re-record (invalidate) to bring the newly-exposed strokes into the display
-    // list — a GPU-composited scroll alone can't show strokes that were never drawn.
-    private var recordedValid = false
-    private var recLeft = 0f
-    private var recTop = 0f
-    private var recRight = 0f
-    private var recBottom = 0f
+    // RenderNode baking (page-fill perf). The cost that janks dense pages is the per-finished-stroke
+    // onDraw RE-RECORDING every stroke's drawMesh on the UI thread (O(strokes) — and onDraw runs on
+    // the UI thread, so it also starves pen input). Instead, the already-finished strokes are recorded
+    // ONCE into [bakedNode]; onDraw then just replays that node (a single O(1) draw op) plus the few
+    // strokes added since the last bake ("tail"). A new pen stroke costs O(tail), not O(all). The node
+    // is re-baked (one O(N) record) only when the tail grows past [REBAKE_TAIL_THRESHOLD] or the stroke
+    // set changes non-additively (erase / undo / lasso transform / selection change / resize). Replaying
+    // the node on the RenderThread/GPU is unchanged from before — the win is moving the record off the
+    // UI thread. Scroll/zoom never call onDraw (GPU view properties), so the node isn't re-recorded then.
+    private val bakedNode = RenderNode("dryBaked")
+    private var bakedValid = false
+    private var bakedEntries: List<DryDrawEntry> = emptyList()
+    private var bakedExcluded: Set<String> = emptySet()
 
     init {
         // A plain View can skip onDraw as an optimisation; ensure it always draws our ink.
@@ -143,20 +138,7 @@ private class DryStrokesView(context: Context) : View(context) {
     fun setLayers(value: List<PageLayer>, excluded: Set<String>) {
         layers = value
         excludedIds = excluded
-        // Drop cached bounds for strokes no longer present so the cache can't grow unbounded as
-        // transforms keep minting new Stroke objects (untouched strokes keep their cached entry).
-        if (boundsCache.isNotEmpty()) {
-            val live = Collections.newSetFromMap(IdentityHashMap<Stroke, Boolean>())
-            value.forEach { layer -> layer.strokes.forEach { live.add(it.stroke) } }
-            boundsCache.keys.retainAll(live)
-        }
         invalidate()
-    }
-
-    /** The on-screen canvas (parent) size in px — the viewport the cull rect is derived from. */
-    fun setScreenViewport(widthPx: Float, heightPx: Float) {
-        screenWidthPx = widthPx
-        screenHeightPx = heightPx
     }
 
     /** Applies the document → screen [transform] as GPU view properties (per-frame, no redraw). */
@@ -165,20 +147,6 @@ private class DryStrokesView(context: Context) : View(context) {
         translationY = transform.offsetY // open-page origin; layers offset by their docTop in onDraw
         scaleX = transform.scale
         scaleY = transform.scale
-        // A scroll/zoom moves the visible viewport without an onDraw (GPU composite). If it has moved
-        // outside the margin onDraw last recorded, re-record so newly-exposed strokes get drawn.
-        if (screenWidthPx > 0f && screenHeightPx > 0f) {
-            val s = transform.safeScale
-            val tx = transform.offsetX + transform.panX
-            val ty = transform.offsetY
-            val visLeft = -tx / s
-            val visTop = -ty / s
-            val visRight = (screenWidthPx - tx) / s
-            val visBottom = (screenHeightPx - ty) / s
-            val covered = recordedValid &&
-                visLeft >= recLeft && visTop >= recTop && visRight <= recRight && visBottom <= recBottom
-            if (!covered) invalidate()
-        }
     }
 
     /** Sets the view-local size (page-space px) spanning the whole document; relayouts on change. */
@@ -188,6 +156,7 @@ private class DryStrokesView(context: Context) : View(context) {
         if (w != viewWidthPx || h != viewHeightPx) {
             viewWidthPx = w
             viewHeightPx = h
+            bakedValid = false // the node is sized to the document; re-bake at the new size
             requestLayout()
         }
     }
@@ -200,47 +169,63 @@ private class DryStrokesView(context: Context) : View(context) {
         }
     }
 
+    /** Current draw order (page order × stroke order), excluding lasso-selected strokes. */
+    private fun buildDrawList(): List<DryDrawEntry> {
+        val out = ArrayList<DryDrawEntry>()
+        layers.forEach { layer ->
+            layer.strokes.forEach { cs -> if (cs.id !in excludedIds) out.add(DryDrawEntry(layer.docTopPx, cs)) }
+        }
+        return out
+    }
+
+    /** True when [current] extends [bakedEntries] with the same prefix (same stroke ref + docTop). */
+    private fun extendsBaked(current: List<DryDrawEntry>): Boolean {
+        if (!bakedValid || excludedIds != bakedExcluded || current.size < bakedEntries.size) return false
+        for (i in bakedEntries.indices) {
+            val b = bakedEntries[i]
+            val c = current[i]
+            if (b.cs.stroke !== c.cs.stroke || b.docTop != c.docTop) return false
+        }
+        return true
+    }
+
+    private fun drawEntry(canvas: Canvas, e: DryDrawEntry) {
+        layerMatrix.setTranslate(0f, e.docTop)
+        renderer.draw(canvas = canvas, stroke = e.cs.stroke, strokeToScreenTransform = layerMatrix)
+    }
+
+    /** Records [entries] into [bakedNode] in one pass; the node is sized to the whole document. */
+    private fun rebake(entries: List<DryDrawEntry>) {
+        bakedNode.setPosition(0, 0, viewWidthPx.coerceAtLeast(1), viewHeightPx.coerceAtLeast(1))
+        val rc = bakedNode.beginRecording()
+        try {
+            entries.forEach { drawEntry(rc, it) }
+        } finally {
+            bakedNode.endRecording()
+        }
+        bakedEntries = entries
+        bakedExcluded = excludedIds
+        bakedValid = true
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        // Page-space cull rect = the on-screen viewport mapped back through the GPU transform, then
-        // expanded by one screen on each side so small scrolls stay covered without re-recording.
-        // Without a known screen size, cull is disabled (draw everything) — a safe first-frame fallback.
-        val s = if (scaleX != 0f) scaleX else 1f
-        val cull = if (screenWidthPx > 0f && screenHeightPx > 0f) {
-            val visLeft = -translationX / s
-            val visTop = -translationY / s
-            val visRight = (screenWidthPx - translationX) / s
-            val visBottom = (screenHeightPx - translationY) / s
-            val marginX = visRight - visLeft
-            val marginY = visBottom - visTop
-            recLeft = visLeft - marginX
-            recTop = visTop - marginY
-            recRight = visRight + marginX
-            recBottom = visBottom + marginY
-            recordedValid = true
-            true
+        if (viewWidthPx <= 0 || viewHeightPx <= 0) return
+        val current = buildDrawList()
+        // Tail = strokes added since the bake; re-bake on a non-additive change or once the tail is big.
+        val tailStart = if (extendsBaked(current) && current.size - bakedEntries.size < REBAKE_TAIL_THRESHOLD) {
+            bakedEntries.size
         } else {
-            recordedValid = false
-            false
+            rebake(current)
+            current.size
         }
-        layers.forEach { layer ->
-            // The view is laid out over the whole document (local y=0 = document top). Each page draws
-            // at its absolute docTop; the view's GPU transform maps the document onto the screen.
-            val docTop = layer.docTopPx
-            layerMatrix.setTranslate(0f, docTop)
-            layer.strokes.forEach { cs ->
-                if (cs.id in excludedIds) return@forEach
-                if (cull) {
-                    val b = boundsCache.getOrPut(cs.stroke) { StrokeTransforms.strokeBounds(cs.stroke) }
-                    val top = b.top + docTop
-                    val bottom = b.bottom + docTop
-                    if (b.right < recLeft || b.left > recRight || bottom < recTop || top > recBottom) {
-                        return@forEach // off-screen (beyond the margin) — skip the drawMesh call
-                    }
-                }
-                renderer.draw(canvas = canvas, stroke = cs.stroke, strokeToScreenTransform = layerMatrix)
-            }
-        }
+        canvas.drawRenderNode(bakedNode) // replays all baked strokes in one op (no per-stroke re-record)
+        for (i in tailStart until current.size) drawEntry(canvas, current[i])
+    }
+
+    private companion object {
+        /** Fold the tail into the baked node once it reaches this many strokes (amortises the O(N) bake). */
+        const val REBAKE_TAIL_THRESHOLD = 32
     }
 }
 
@@ -326,9 +311,6 @@ private fun createInkView(
                             val pageSpaceW = pageScreenW / scale
                             val docHeightSpace = if (docHeight > 0f) docHeight else pageSpaceW * PageTransform.ASPECT_RATIO
                             dryStrokesView.setViewSize(pageSpaceW, docHeightSpace)
-                            // Report the on-screen canvas size so onDraw can cull strokes scrolled
-                            // off-screen, and setTransform can re-record when a scroll exits the margin.
-                            dryStrokesView.setScreenViewport(rootView.width.toFloat(), rootView.height.toFloat())
                             dryStrokesView.setTransform(transform)
                             // setLayers() invalidate()s, repainting every dry stroke; gate it on a real
                             // change so a transform-only emission doesn't redraw the whole document.
