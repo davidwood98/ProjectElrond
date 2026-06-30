@@ -257,8 +257,14 @@ class NoteRepository(
         }
     }
 
-    suspend fun loadStrokes(pageId: String): List<CanvasStroke> =
-        strokeDao.getForPage(pageId).map(StrokeSerialization::toCanvasStroke)
+    suspend fun loadStrokes(pageId: String): List<CanvasStroke> {
+        val rows = strokeDao.getForPage(pageId)
+        // Rebuilding each stroke's ink mesh (Stroke(brush, batch)) is heavy CPU work — a full page is
+        // hundreds of strokes / >100k points. The suspend DAO query resumes on the caller's Main
+        // dispatcher (viewModelScope), so without this hop the whole reconstruction blocks the UI
+        // thread on open (the 800–1000ms freeze on a dense page). Mirrors replaceStrokes/loadStrokePreview.
+        return withContext(Dispatchers.Default) { rows.map(StrokeSerialization::toCanvasStroke) }
+    }
 
     /** Atomically rewrites the page's strokes — canvas auto-save (handles erase/undo/lasso too). */
     suspend fun replaceStrokes(pageId: String, strokes: List<CanvasStroke>, isAiInk: Boolean = false) {
