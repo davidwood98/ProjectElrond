@@ -14,6 +14,8 @@ import android.graphics.Matrix
 import android.graphics.RenderNode
 import android.os.Handler
 import android.os.Looper
+import android.os.Trace
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
@@ -196,6 +198,8 @@ private class DryStrokesView(context: Context) : View(context) {
 
     /** Records [entries] into [bakedNode] in one pass; the node is sized to the whole document. */
     private fun rebake(entries: List<DryDrawEntry>) {
+        Trace.beginSection("DryStrokes.rebake")
+        val t0 = System.nanoTime()
         bakedNode.setPosition(0, 0, viewWidthPx.coerceAtLeast(1), viewHeightPx.coerceAtLeast(1))
         val rc = bakedNode.beginRecording()
         try {
@@ -206,26 +210,42 @@ private class DryStrokesView(context: Context) : View(context) {
         bakedEntries = entries
         bakedExcluded = excludedIds
         bakedValid = true
+        rebakeCount++
+        Log.d(
+            PERF_TAG,
+            "rebake #$rebakeCount strokes=${entries.size} ${"%.1f".format((System.nanoTime() - t0) / 1_000_000.0)}ms",
+        )
+        Trace.endSection()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (viewWidthPx <= 0 || viewHeightPx <= 0) return
-        val current = buildDrawList()
-        // Tail = strokes added since the bake; re-bake on a non-additive change or once the tail is big.
-        val tailStart = if (extendsBaked(current) && current.size - bakedEntries.size < REBAKE_TAIL_THRESHOLD) {
-            bakedEntries.size
-        } else {
-            rebake(current)
-            current.size
+        Trace.beginSection("DryStrokes.onDraw")
+        try {
+            val current = buildDrawList()
+            // Tail = strokes added since the bake; re-bake on a non-additive change or a big tail.
+            val tailStart = if (extendsBaked(current) && current.size - bakedEntries.size < REBAKE_TAIL_THRESHOLD) {
+                appendDrawCount++
+                bakedEntries.size
+            } else {
+                rebake(current)
+                current.size
+            }
+            canvas.drawRenderNode(bakedNode) // replays all baked strokes in one op (no per-stroke re-record)
+            for (i in tailStart until current.size) drawEntry(canvas, current[i])
+        } finally {
+            Trace.endSection()
         }
-        canvas.drawRenderNode(bakedNode) // replays all baked strokes in one op (no per-stroke re-record)
-        for (i in tailStart until current.size) drawEntry(canvas, current[i])
     }
+
+    private var rebakeCount = 0
+    private var appendDrawCount = 0
 
     private companion object {
         /** Fold the tail into the baked node once it reaches this many strokes (amortises the O(N) bake). */
         const val REBAKE_TAIL_THRESHOLD = 32
+        private const val PERF_TAG = "ElrondPerf"
     }
 }
 

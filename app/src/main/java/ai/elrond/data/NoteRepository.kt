@@ -2,6 +2,7 @@ package ai.elrond.data
 
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.CanvasStroke
+import android.util.Log
 import ai.elrond.domain.NoteEditDay
 import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotebookSummary
@@ -251,19 +252,36 @@ class NoteRepository(
             }
         }
         when {
-            removed || changed -> replaceStrokes(pageId, current, isAiInk)
-            added.isNotEmpty() -> saveStrokes(pageId, added, isAiInk)
+            removed || changed -> {
+                // Full re-serialize + DELETE-all + INSERT-all of every stroke (the expensive path).
+                Log.d(PERF_TAG, "updateStrokes FULL rewrite strokes=${current.size} removed=$removed changed=$changed")
+                replaceStrokes(pageId, current, isAiInk)
+            }
+            added.isNotEmpty() -> {
+                Log.d(PERF_TAG, "updateStrokes append=${added.size} (page total=${current.size})")
+                saveStrokes(pageId, added, isAiInk)
+            }
             // else: same ids, same stroke refs (e.g. a reorder) — nothing to persist.
         }
     }
 
     suspend fun loadStrokes(pageId: String): List<CanvasStroke> {
+        val queryStart = System.nanoTime()
         val rows = strokeDao.getForPage(pageId)
+        val queryMs = (System.nanoTime() - queryStart) / 1_000_000.0
         // Rebuilding each stroke's ink mesh (Stroke(brush, batch)) is heavy CPU work — a full page is
         // hundreds of strokes / >100k points. The suspend DAO query resumes on the caller's Main
         // dispatcher (viewModelScope), so without this hop the whole reconstruction blocks the UI
         // thread on open (the 800–1000ms freeze on a dense page). Mirrors replaceStrokes/loadStrokePreview.
-        return withContext(Dispatchers.Default) { rows.map(StrokeSerialization::toCanvasStroke) }
+        val buildStart = System.nanoTime()
+        val result = withContext(Dispatchers.Default) { rows.map(StrokeSerialization::toCanvasStroke) }
+        val buildMs = (System.nanoTime() - buildStart) / 1_000_000.0
+        Log.d(
+            PERF_TAG,
+            "loadStrokes page=$pageId strokes=${rows.size} query=${"%.1f".format(queryMs)}ms " +
+                "reconstruct=${"%.1f".format(buildMs)}ms",
+        )
+        return result
     }
 
     /** Atomically rewrites the page's strokes — canvas auto-save (handles erase/undo/lasso too). */
@@ -344,5 +362,8 @@ class NoteRepository(
     companion object {
         const val DEFAULT_NOTEBOOK_NAME = "My Notes"
         const val PREVIEW_MAX_STROKES = 60
+
+        /** logcat tag for the stroke-perf instrumentation (filter: `adb logcat -s ElrondPerf`). */
+        private const val PERF_TAG = "ElrondPerf"
     }
 }
