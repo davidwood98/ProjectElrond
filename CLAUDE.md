@@ -1573,6 +1573,38 @@ First on-device pass; fixes committed and merged to `main`:
   is always ratio-locked (corner scales the font; edge handles reflow the width). The toggle +
   grouping stay stroke-only.
 
+### FA-20/FA-21 AI-box follow-ups (2026-06-30)
+
+Two small post-merge fixes on `main`, both device-verified on a Galaxy Tab S; Compose/touch-only
+(no schema/test change). `:app:compileDebugKotlin` clean on the WSL Linux SDK.
+
+- **AI text box zoom scaling — render once at base size, scale via `graphicsLayer`** (`ui/AiInkNoteView.kt`).
+  FA-20 made the AI answer box keep its page position + width when pinch-zooming, but it recomputed
+  `fontSize`/`widthPx`/`heightPx`/`lineHeight` by `× transform.scale` on **every** zoom step, so the
+  text's vertical metrics drifted from the page grid: line spacing stretched zoomed out (text spread
+  to a full page) and cramped zoomed in (~13 lines). Width + font looked right; only line spacing
+  drifted. Fix: lay the text out **once at base (page-space) size** (base font `22 × fontScale`, base
+  width/height, base `lineHeight`) and apply the page zoom as a **`graphicsLayer` scale about the
+  top-left** — the same mechanism (and the same layer) as the lasso corner-drag `liveTransform`
+  preview, now `scaleX/scaleY = scale × liveTransform.scaleX/Y`. The layout (wrapping, line count,
+  line spacing) is frozen and the whole layer scales 1:1 with the grid across the full 0.5×–4× range.
+  `onMeasured` now reports the raw measured size directly (already page-space at base size) instead of
+  dividing out the zoom; the `reportAiNoteMeasuredSize` page-space contract is unchanged (no VM
+  change). The text rasterises at base size then scales (an accepted, device-confirmed-crisp tradeoff,
+  same as the corner-drag preview); ink strokes still re-rasterise crisply via the mesh renderer.
+  (Reinforces the FA-10 rule: scale via a layer modifier, never recompute inside the layout/draw.)
+- **Finger select/deselect of AI boxes + 800ms hold** (`ui/InkCanvas.kt`). A finger could move/scale a
+  *selected* box (via the Compose selection chrome) but could never **select** one — in scroll mode
+  (palm rejection on) a finger DOWN was swallowed straight into the scroll path. Now selection is
+  gated on the input mode, not the tool: **scroll mode** = a clean finger **tap on a box selects**, a
+  **tap on empty page deselects** (a new `scrollDownNoteId` hit-test on DOWN, resolved on UP only when
+  no scroll axis locked — a drag past the slop still scrolls and leaves the selection alone);
+  **finger-draw mode** = unchanged press-and-hold to select, tap-off deselects on the outside DOWN;
+  **stylus** always holds. The hold duration is cut **1500ms → 800ms** (`AI_NOTE_HOLD_MS`, shared by
+  the stylus + finger-draw hold). The **eraser stays purely destructive** (no hold-to-select — it
+  erases ink under the box). Raw-`MotionEvent` touch-listener change, so device/manual-verified like
+  the other ink flows (no JVM test path).
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
