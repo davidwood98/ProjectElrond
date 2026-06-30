@@ -1492,8 +1492,9 @@ top-level button observer routing) and the 150ms hold threshold (clicks register
 
 ## FA-21 — lasso & AI-box tweaks (2026-06-29)
 
-Lasso/selection + AI-response-box improvements, on branch **`fa-21-lasso-ai-box-tweaks`**. **DB is
-now v15** (`MIGRATION_14_15`). All JVM/Robolectric unit tests pass and `:app:testDebugUnitTest`,
+Lasso/selection + AI-response-box improvements, **merged into `main`** (branch
+`fa-21-lasso-ai-box-tweaks` deleted after merge). **DB is now v15** (`MIGRATION_14_15`). All
+JVM/Robolectric unit tests pass and `:app:testDebugUnitTest`,
 `:aibackend:test`, `:app:compileDebugKotlin` + `:app:compileDebugAndroidTestKotlin` build on the WSL
 Linux SDK. The Compose/canvas visuals + gesture flows (handles, hold-to-select, write-over, zoom
 scaling) are **device/manual-verify pending** like the other ink flows. Scope was confirmed with the
@@ -1505,18 +1506,20 @@ confirmed findings were applied (below).
   `SelectionState` gains `aiNoteIds` (+ `hasAiNote` / `isSingleAiNote` / `count`), and **`lockRatio`
   now defaults ON** (app-wide, incl. pure-stroke lasso). A lasso (`selectByLasso` now hit-tests AI
   box centres too) **or a 1.5s press-and-hold** selects strokes and AI boxes together; one
-  `commitTransform` moves/scales both through the same path (`transformAiNote` scales an AI box's
-  width/height **and font** — `fontScale` — to keep proportions, damped by a `fit` factor at the
-  page edge so the font never outgrows the clamped width). Duplicate/Delete/Copy/Cut/Paste all
+  `commitTransform` moves/scales both through the same path. In `transformAiNote` a **pure move**
+  never resizes the box, while a **scale** grows an AI box's width/height **and font** (`fontScale`)
+  together so it stays proportional (no page-edge clamp — see the device-feedback note below).
+  Duplicate/Delete/Copy/Cut/Paste all
   operate on both collections; the clipboard holds AI boxes too. The old UI-only `selectedNoteId`
   state + off-box tap-catcher in `NoteCanvasScreen` were removed.
 - **Undo now covers AI boxes (FA-21 unification fix).** The history stack is a `HistorySnapshot`
   (strokes **+** persistable AI notes); every lasso edit (move/scale/delete/cut/paste/reflow, alone
   or mixed) pushes one snapshot and `undo`/`redo` restore both (live error notes preserved). Before
   this, a mixed delete left the AI box irrecoverable.
-- **AI box is a tight, content-hugging box that scales with zoom (`AiInkNoteView`).** It is now
-  **passive** (no pointer input) so the pen draws straight over it; selection chrome is drawn
-  separately. Width hugs the text up to the full-line cap (`widthIn(min, max)`); width/height/font
+- **AI box is a tight, content-hugging box that scales with zoom (`AiInkNoteView`).** It renders
+  **below `InkCanvas`** so handwriting strokes always sit in FRONT of the AI text, and is **passive**
+  (no pointer input) so the pen draws straight over it; selection chrome is drawn separately on top.
+  Width hugs the text up to the full-line cap (`widthIn(min, max)`); width/height/font
   all multiply by `pageTransform.scale` so the text zooms with the grid (`PageTransform.safeScale`
   guards the divide). The view reports its measured page-space size back
   (`reportAiNoteMeasuredSize`) so the selection box hugs it. The legacy ✕ remove control is gone —
@@ -1555,6 +1558,20 @@ confirmed findings were applied (below).
   the 1.5s before it's cancelled and the box isn't draggable until the finger lifts; edge-reflow
   rebuilds the AI-notes list per drag frame; and a tap on the floating toolbar *may* (Compose-interop
   dependent) deselect before firing — all low-severity, flagged for the device pass.
+
+### FA-21 device-feedback round (2026-06-30)
+
+First on-device pass; fixes committed and merged to `main`:
+- **Strokes render in front of AI text.** AI answer notes are drawn **below `InkCanvas`** (they were
+  a Compose overlay above the ink), so handwriting always sits on top — and write-over is now
+  automatic (the pen hits the ink layer first).
+- **Move/scale regression fixed.** `transformAiNote` had applied a page-edge width clamp using the
+  wrap **cap** (`widthPx`, usually far wider than the hugged box), which (a) shrank the font on every
+  plain **move** and (b) cancelled a corner **scale** near the page edge ("scale resets"). A pure
+  move now never touches size/font; a scale grows width + font together with no cap-based clamp.
+- **AI-box menu: no aspect toggle.** Removed **Unlock aspect** from the AI-response kebab — an AI box
+  is always ratio-locked (corner scales the font; edge handles reflow the width). The toggle +
+  grouping stay stroke-only.
 
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
