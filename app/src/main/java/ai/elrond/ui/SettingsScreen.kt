@@ -576,10 +576,11 @@ fun SettingsScreen(
 
             Text("Debug · stroke rendering", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Thins how many points each NEW stroke keeps — fewer points render faster but look " +
-                    "less smooth. Use it to find the lowest fidelity that still looks clean on a dense " +
-                    "page. Applies only to strokes drawn from now on; it never changes notes you've " +
-                    "already saved. 0 = off (full fidelity).",
+                "Thins how many points each stroke keeps — fewer points render faster and use less " +
+                    "memory but look less smooth. Applies to new strokes AND to how saved notes are " +
+                    "re-drawn when reopened, so you can test it on an existing dense page. It's " +
+                    "in-memory only — saved notes are never rewritten, so lowering it restores full " +
+                    "detail. 0 = off (full fidelity).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -90,6 +90,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -618,7 +619,10 @@ class CanvasViewModel(
 
         if (repository != null && pageId != null) {
             viewModelScope.launch {
-                runCatching { repository.loadStrokes(pageId) }
+                // Debug perf knob: reconstruct saved strokes at reduced point density (in-memory only,
+                // never rewrites the DB). Read the current setting once for this open.
+                val loadSpacing = strokeSimplificationSpacingFlow?.first() ?: 0f
+                runCatching { repository.loadStrokes(pageId, loadSpacing) }
                     .onSuccess { loaded ->
                         if (loaded.isNotEmpty()) _finishedStrokes.value = loaded
                     }

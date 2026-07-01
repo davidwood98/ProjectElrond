@@ -265,7 +265,11 @@ class NoteRepository(
         }
     }
 
-    suspend fun loadStrokes(pageId: String): List<CanvasStroke> {
+    /**
+     * Loads and reconstructs a page's strokes. [simplifySpacing] > 0 decimates each stroke's points to
+     * that page-space spacing IN MEMORY (debug perf knob) — the stored rows are never rewritten.
+     */
+    suspend fun loadStrokes(pageId: String, simplifySpacing: Float = 0f): List<CanvasStroke> {
         val queryStart = System.nanoTime()
         val rows = strokeDao.getForPage(pageId)
         val queryMs = (System.nanoTime() - queryStart) / 1_000_000.0
@@ -274,12 +278,14 @@ class NoteRepository(
         // dispatcher (viewModelScope), so without this hop the whole reconstruction blocks the UI
         // thread on open (the 800–1000ms freeze on a dense page). Mirrors replaceStrokes/loadStrokePreview.
         val buildStart = System.nanoTime()
-        val result = withContext(Dispatchers.Default) { rows.map(StrokeSerialization::toCanvasStroke) }
+        val result = withContext(Dispatchers.Default) {
+            rows.map { StrokeSerialization.toCanvasStroke(it, simplifySpacing) }
+        }
         val buildMs = (System.nanoTime() - buildStart) / 1_000_000.0
         Log.d(
             PERF_TAG,
-            "loadStrokes page=$pageId strokes=${rows.size} query=${"%.1f".format(queryMs)}ms " +
-                "reconstruct=${"%.1f".format(buildMs)}ms",
+            "loadStrokes page=$pageId strokes=${rows.size} simplify=$simplifySpacing " +
+                "query=${"%.1f".format(queryMs)}ms reconstruct=${"%.1f".format(buildMs)}ms",
         )
         return result
     }
