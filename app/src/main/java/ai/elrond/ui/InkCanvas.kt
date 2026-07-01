@@ -114,19 +114,22 @@ private class DryStrokesView(context: Context) : View(context) {
     private var viewWidthPx = 0
     private var viewHeightPx = 0
 
-    // RenderNode baking (page-fill perf). The cost that janks dense pages is the per-finished-stroke
-    // onDraw RE-RECORDING every stroke's drawMesh on the UI thread (O(strokes) — and onDraw runs on
-    // the UI thread, so it also starves pen input). Instead, the already-finished strokes are recorded
-    // ONCE into [bakedNode]; onDraw then just replays that node (a single O(1) draw op) plus the few
-    // strokes added since the last bake ("tail"). A new pen stroke costs O(tail), not O(all). The node
-    // is re-baked (one O(N) record) only when the tail grows past [REBAKE_TAIL_THRESHOLD] or the stroke
-    // set changes non-additively (erase / undo / lasso transform / selection change / resize). Replaying
-    // the node on the RenderThread/GPU is unchanged from before — the win is moving the record off the
-    // UI thread. Scroll/zoom never call onDraw (GPU view properties), so the node isn't re-recorded then.
-    private val bakedNode = RenderNode("dryBaked")
+    // RenderNode baking (page-fill perf). Finished strokes are recorded into [bakedNode]; onDraw replays
+    // that node (one op) plus the few strokes added since the last fold ("tail" drawn live). A new pen
+    // stroke costs O(tail), not O(all-strokes).
+    //
+    // Folding the tail in is INCREMENTAL: a new node replays the previous node (one O(1) drawRenderNode
+    // op) then records only the tail — so a fold costs O(tail), NOT O(all). (Device measurement showed a
+    // full O(N) re-record every 32 strokes was a ~70–114ms UI-thread hitch on an ~800-stroke page — the
+    // remaining stutter.) This chains the nodes; once the chain reaches [MAX_CHAIN_DEPTH], or the stroke
+    // set changes non-additively (erase / undo / lasso transform / selection / resize), it FLATTENS
+    // (records every stroke into one fresh node — the only O(N) path, now rare). Scroll/zoom never call
+    // onDraw (GPU view properties), so nothing is re-recorded then.
+    private var bakedNode = RenderNode("dryBaked")
     private var bakedValid = false
-    private var bakedEntries: List<DryDrawEntry> = emptyList()
+    private var committedEntries: List<DryDrawEntry> = emptyList()
     private var bakedExcluded: Set<String> = emptySet()
+    private var chainDepth = 0
 
     init {
         // A plain View can skip onDraw as an optimisation; ensure it always draws our ink.
@@ -180,11 +183,11 @@ private class DryStrokesView(context: Context) : View(context) {
         return out
     }
 
-    /** True when [current] extends [bakedEntries] with the same prefix (same stroke ref + docTop). */
+    /** True when [current] extends [committedEntries] with the same prefix (same stroke ref + docTop). */
     private fun extendsBaked(current: List<DryDrawEntry>): Boolean {
-        if (!bakedValid || excludedIds != bakedExcluded || current.size < bakedEntries.size) return false
-        for (i in bakedEntries.indices) {
-            val b = bakedEntries[i]
+        if (!bakedValid || excludedIds != bakedExcluded || current.size < committedEntries.size) return false
+        for (i in committedEntries.indices) {
+            val b = committedEntries[i]
             val c = current[i]
             if (b.cs.stroke !== c.cs.stroke || b.docTop != c.docTop) return false
         }
@@ -196,25 +199,43 @@ private class DryStrokesView(context: Context) : View(context) {
         renderer.draw(canvas = canvas, stroke = e.cs.stroke, strokeToScreenTransform = layerMatrix)
     }
 
-    /** Records [entries] into [bakedNode] in one pass; the node is sized to the whole document. */
-    private fun rebake(entries: List<DryDrawEntry>) {
-        Trace.beginSection("DryStrokes.rebake")
+    /** Records EVERY stroke into a fresh node (O(N)) — the rare path (non-additive change / deep chain). */
+    private fun flatten(entries: List<DryDrawEntry>) {
+        Trace.beginSection("DryStrokes.flatten")
         val t0 = System.nanoTime()
-        bakedNode.setPosition(0, 0, viewWidthPx.coerceAtLeast(1), viewHeightPx.coerceAtLeast(1))
-        val rc = bakedNode.beginRecording()
+        val node = RenderNode("dryBaked")
+        node.setPosition(0, 0, viewWidthPx.coerceAtLeast(1), viewHeightPx.coerceAtLeast(1))
+        val rc = node.beginRecording()
         try {
             entries.forEach { drawEntry(rc, it) }
         } finally {
-            bakedNode.endRecording()
+            node.endRecording()
         }
-        bakedEntries = entries
+        bakedNode = node
+        committedEntries = entries
         bakedExcluded = excludedIds
         bakedValid = true
-        rebakeCount++
-        Log.d(
-            PERF_TAG,
-            "rebake #$rebakeCount strokes=${entries.size} ${"%.1f".format((System.nanoTime() - t0) / 1_000_000.0)}ms",
-        )
+        chainDepth = 0
+        Log.d(PERF_TAG, "flatten strokes=${entries.size} ${"%.1f".format((System.nanoTime() - t0) / 1_000_000.0)}ms")
+        Trace.endSection()
+    }
+
+    /** Folds the tail (strokes after [committedEntries]) into a new node that replays the old one (O(tail)). */
+    private fun foldTail(current: List<DryDrawEntry>) {
+        Trace.beginSection("DryStrokes.foldTail")
+        val start = committedEntries.size
+        val node = RenderNode("dryBaked")
+        node.setPosition(0, 0, viewWidthPx.coerceAtLeast(1), viewHeightPx.coerceAtLeast(1))
+        val rc = node.beginRecording()
+        try {
+            rc.drawRenderNode(bakedNode) // replay the prior chain in one op — no re-record of old strokes
+            for (i in start until current.size) drawEntry(rc, current[i])
+        } finally {
+            node.endRecording()
+        }
+        bakedNode = node
+        committedEntries = current
+        chainDepth++
         Trace.endSection()
     }
 
@@ -224,27 +245,26 @@ private class DryStrokesView(context: Context) : View(context) {
         Trace.beginSection("DryStrokes.onDraw")
         try {
             val current = buildDrawList()
-            // Tail = strokes added since the bake; re-bake on a non-additive change or a big tail.
-            val tailStart = if (extendsBaked(current) && current.size - bakedEntries.size < REBAKE_TAIL_THRESHOLD) {
-                appendDrawCount++
-                bakedEntries.size
-            } else {
-                rebake(current)
-                current.size
+            if (!extendsBaked(current)) {
+                flatten(current) // non-additive change (erase/undo/transform/selection/resize) or first draw
+            } else if (current.size - committedEntries.size >= FOLD_TAIL_THRESHOLD) {
+                // Enough new strokes accumulated to fold them into the node so onDraw stays O(1)+tail.
+                if (chainDepth >= MAX_CHAIN_DEPTH) flatten(current) else foldTail(current)
             }
-            canvas.drawRenderNode(bakedNode) // replays all baked strokes in one op (no per-stroke re-record)
-            for (i in tailStart until current.size) drawEntry(canvas, current[i])
+            canvas.drawRenderNode(bakedNode) // replays all committed strokes in one op
+            // Any not-yet-folded tail (< FOLD_TAIL_THRESHOLD) is drawn live on top.
+            for (i in committedEntries.size until current.size) drawEntry(canvas, current[i])
         } finally {
             Trace.endSection()
         }
     }
 
-    private var rebakeCount = 0
-    private var appendDrawCount = 0
-
     private companion object {
-        /** Fold the tail into the baked node once it reaches this many strokes (amortises the O(N) bake). */
-        const val REBAKE_TAIL_THRESHOLD = 32
+        /** Fold the tail into the node once it reaches this many strokes (each fold costs O(tail)). */
+        const val FOLD_TAIL_THRESHOLD = 32
+
+        /** Flatten (one O(N) record) once the incremental-fold chain gets this deep, to bound replay. */
+        const val MAX_CHAIN_DEPTH = 16
         private const val PERF_TAG = "ElrondPerf"
     }
 }
