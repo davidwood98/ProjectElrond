@@ -131,6 +131,12 @@ private class DryStrokesView(context: Context) : View(context) {
     private var bakedExcluded: Set<String> = emptySet()
     private var chainDepth = 0
 
+    // Current draw order, rebuilt in setLayers (the content-change signal) instead of every onDraw, and
+    // reused by onDraw. Also lets setLayers diff against the previous list to invalidate only the new
+    // strokes' rectangle — so the RenderThread re-rasterises just that region, not the whole ~800-mesh
+    // page (the per-stroke GPU cost that still janks a dense page, worst in landscape's larger fill).
+    private var drawList: List<DryDrawEntry> = emptyList()
+
     init {
         // A plain View can skip onDraw as an optimisation; ensure it always draws our ink.
         setWillNotDraw(false)
@@ -139,8 +145,14 @@ private class DryStrokesView(context: Context) : View(context) {
         pivotY = 0f
     }
 
-    /** Replace the rendered page layers (minus any lasso-selected ids) and repaint immediately. */
+    /**
+     * Replace the rendered page layers (minus any lasso-selected ids) and repaint. The draw list is
+     * built here (the content-change signal) and reused by onDraw. We rely on HWUI's own damage diff to
+     * re-rasterise only the changed ops: since [bakedNode] is an unchanged reference between folds, a
+     * new pen stroke damages only its own bounds; a fold (new node) or a non-append damages the page.
+     */
     fun setLayers(value: List<PageLayer>, excluded: Set<String>) {
+        drawList = buildDrawList(value, excluded)
         layers = value
         excludedIds = excluded
         invalidate()
@@ -174,11 +186,11 @@ private class DryStrokesView(context: Context) : View(context) {
         }
     }
 
-    /** Current draw order (page order × stroke order), excluding lasso-selected strokes. */
-    private fun buildDrawList(): List<DryDrawEntry> {
+    /** Draw order (page order × stroke order) for [value], excluding lasso-selected [excluded] ids. */
+    private fun buildDrawList(value: List<PageLayer>, excluded: Set<String>): List<DryDrawEntry> {
         val out = ArrayList<DryDrawEntry>()
-        layers.forEach { layer ->
-            layer.strokes.forEach { cs -> if (cs.id !in excludedIds) out.add(DryDrawEntry(layer.docTopPx, cs)) }
+        value.forEach { layer ->
+            layer.strokes.forEach { cs -> if (cs.id !in excluded) out.add(DryDrawEntry(layer.docTopPx, cs)) }
         }
         return out
     }
@@ -244,7 +256,7 @@ private class DryStrokesView(context: Context) : View(context) {
         if (viewWidthPx <= 0 || viewHeightPx <= 0) return
         Trace.beginSection("DryStrokes.onDraw")
         try {
-            val current = buildDrawList()
+            val current = drawList
             if (!extendsBaked(current)) {
                 flatten(current) // non-additive change (erase/undo/transform/selection/resize) or first draw
             } else if (current.size - committedEntries.size >= FOLD_TAIL_THRESHOLD) {
