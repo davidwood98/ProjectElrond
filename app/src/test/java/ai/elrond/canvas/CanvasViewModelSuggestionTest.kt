@@ -11,6 +11,7 @@ import ai.elrond.domain.SuggestionType
 import ai.elrond.domain.NotePage
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
+import kotlinx.coroutines.flow.emptyFlow
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -41,7 +42,7 @@ class CanvasViewModelSuggestionTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
-        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns emptyFlow()
         coEvery { repository.getPage("page-1") } returns NotePage(
             id = "page-1", notebookId = "nb", customTitle = "Standup", createdAt = 1L, modifiedAt = 1L,
         )

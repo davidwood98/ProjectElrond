@@ -7,6 +7,10 @@ import androidx.ink.strokes.MutableStrokeInputBatch
 import androidx.ink.strokes.Stroke
 import androidx.ink.strokes.StrokeInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -74,6 +78,33 @@ class StrokeSerializationInstrumentedTest {
         val restored = StrokeSerialization.toStroke(entity)
         assertEquals(entity.colorArgb, restored.brush.colorIntArgb)
         assertEquals(entity.brushSize, restored.brush.size, TOLERANCE)
+    }
+
+    /**
+     * FA-22 progressive load: [NoteRepository.loadStrokesProgressive] rebuilds stroke meshes in
+     * PARALLEL chunks on [Dispatchers.Default]. The chunking/order logic is JVM-tested; what only a
+     * device can prove is that concurrent ink-native mesh construction is safe and lossless. This
+     * mirrors the repository's exact fan-out shape.
+     */
+    @Test
+    fun parallelChunkedReconstruction_isLosslessAndOrdered() = runBlocking {
+        val entities = (0 until 200).map { i ->
+            StrokeSerialization.toEntity(
+                stroke = buildStroke(POINTS.map { (x, y) -> x + i to y + i }),
+                id = "s$i",
+                pageId = "page-1",
+                createdAt = i.toLong(),
+            )
+        }
+
+        val rebuilt = entities.chunked(16).map { chunk ->
+            async(Dispatchers.Default) { chunk.map { StrokeSerialization.toCanvasStroke(it) } }
+        }.awaitAll().flatten()
+
+        assertEquals(entities.map { it.id }, rebuilt.map { it.id })
+        rebuilt.forEach { cs ->
+            assertEquals("stroke ${cs.id} lost points under parallel rebuild", POINTS.size, cs.stroke.inputs.size)
+        }
     }
 
     /** Builds a real ink [Stroke] from a list of (x, y) points with strictly-increasing timestamps. */

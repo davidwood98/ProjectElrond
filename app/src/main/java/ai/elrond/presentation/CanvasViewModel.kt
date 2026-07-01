@@ -614,12 +614,40 @@ class CanvasViewModel(
 
         if (repository != null && pageId != null) {
             viewModelScope.launch {
-                // Reconstruct saved strokes at the standard point spacing (cheaper meshes). Persists
-                // when the page is next re-saved on edit; the DB isn't rewritten just by opening.
-                runCatching { repository.loadStrokes(pageId, STROKE_SIMPLIFY_SPACING) }
-                    .onSuccess { loaded ->
-                        if (loaded.isNotEmpty()) _finishedStrokes.value = loaded
+                // Keep the open page's layer in sync as its strokes change — started BEFORE the
+                // load so each progressively-loaded chunk renders as it arrives.
+                viewModelScope.launch {
+                    _finishedStrokes.collect { rebuildPageLayers() }
+                }
+                // Reconstruct saved strokes at the standard point spacing (cheaper meshes),
+                // rendering each chunk as it lands so a dense page shows ink immediately instead
+                // of after seconds of mesh rebuild. Persists when the page is next re-saved on
+                // edit; the DB isn't rewritten just by opening.
+                var loadedCount = 0
+                runCatching {
+                    repository.loadStrokesProgressive(pageId, STROKE_SIMPLIFY_SPACING).collect { chunk ->
+                        // INSERT at the loaded prefix (never assign) so a stroke drawn while the
+                        // page is still loading is preserved, in order, behind nothing.
+                        _finishedStrokes.update { current ->
+                            buildList(current.size + chunk.size) {
+                                addAll(current.subList(0, loadedCount))
+                                addAll(chunk)
+                                addAll(current.subList(loadedCount, current.size))
+                            }
+                        }
+                        loadedCount += chunk.size
+                        // Chunks come straight from the DB — already persisted. Tracking them here
+                        // (not once at the end) keeps a mid-load exit flush from re-inserting them,
+                        // and keeps strokes drawn during the load counted as unpersisted.
+                        lastPersisted = lastPersisted + chunk
+                        // A history snapshot taken against a partially-loaded page would undo to
+                        // (and then persist) a page missing the not-yet-loaded ink — drop history
+                        // while chunks are landing; it starts clean after load, as before.
+                        undoStack.clear()
+                        redoStack.clear()
+                        updateHistoryFlags()
                     }
+                }
                 runCatching { repository.loadAiNotes(pageId) }
                     .onSuccess { loaded -> _aiNotes.value = loaded }
                 runCatching { repository.getPage(pageId) }.getOrNull()?.let { page ->
@@ -635,10 +663,6 @@ class CanvasViewModel(
                             refreshTitle()
                         }
                     }
-                    // Keep the open page's layer in sync as its strokes change (draw / erase / undo).
-                    viewModelScope.launch {
-                        _finishedStrokes.collect { rebuildPageLayers() }
-                    }
                     // Track the notebook's per-notebook page-style overrides + its name (FA-20).
                     viewModelScope.launch {
                         repository.observeNotebook(page.notebookId).collect { nb ->
@@ -652,7 +676,6 @@ class CanvasViewModel(
                 runCatching { repository.markOpened(pageId) }
                 // Also record it in this foreground session — the editor tabs show session notes (FA-16).
                 sessionNotesTracker?.recordOpened(pageId)
-                lastPersisted = _finishedStrokes.value
                 lastPersistedAiNotes = _aiNotes.value.filterNot { it.isError }
                 startAutoSave(repository, pageId)
             }

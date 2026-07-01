@@ -14,6 +14,8 @@ import ai.elrond.data.NoteRepository
 import ai.elrond.data.SettingsRepository
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
+import io.mockk.every
+import kotlinx.coroutines.flow.emptyFlow
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.Dispatchers
@@ -393,7 +395,7 @@ class CanvasViewModelSelectionTest {
     @Test
     fun `pen ink enqueues background extraction but a lasso edit does not`() = runTest(dispatcher) {
         val repository = mockk<NoteRepository>(relaxed = true)
-        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns emptyFlow()
         val enqueued = mutableListOf<String>()
         val vm = viewModel(repository = repository, enqueue = { enqueued += it })
         advanceUntilIdle()
