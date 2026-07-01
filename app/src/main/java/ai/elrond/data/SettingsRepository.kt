@@ -297,24 +297,6 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    /**
-     * Debug perf knob: minimum spacing (page-space units) between kept stroke points for NEW strokes
-     * (0 = off, full fidelity). Higher = fewer points per stroke = cheaper mesh build/redraw, at the
-     * cost of smoothness. Applied only at capture time — it never rewrites stored strokes. Clamped to
-     * 0–[MAX_STROKE_SIMPLIFICATION_SPACING].
-     */
-    val strokeSimplificationSpacing: Flow<Float> = context.settingsDataStore.data
-        .map {
-            (it[STROKE_SIMPLIFICATION_SPACING_KEY] ?: DEFAULT_STROKE_SIMPLIFICATION_SPACING)
-                .coerceIn(0f, MAX_STROKE_SIMPLIFICATION_SPACING)
-        }
-
-    suspend fun setStrokeSimplificationSpacing(value: Float) {
-        context.settingsDataStore.edit {
-            it[STROKE_SIMPLIFICATION_SPACING_KEY] = value.coerceIn(0f, MAX_STROKE_SIMPLIFICATION_SPACING)
-        }
-    }
-
     /** Whether lasso-move snap-back is on (default true). A 0% threshold also turns it off. */
     val lassoSnapBackEnabled: Flow<Boolean> = context.settingsDataStore.data
         .map { it[LASSO_SNAPBACK_ENABLED_KEY] ?: DEFAULT_LASSO_SNAP_BACK_ENABLED }
@@ -423,10 +405,6 @@ class SettingsRepository(private val context: Context) {
         const val MAX_LASSO_SNAP_BACK_THRESHOLD = 0.10f
         const val DEFAULT_LASSO_SNAP_BACK_ENABLED = true
 
-        /** Stroke simplification (debug): default 0 (off), capped at 12 page-units of point spacing. */
-        const val DEFAULT_STROKE_SIMPLIFICATION_SPACING = 0f
-        const val MAX_STROKE_SIMPLIFICATION_SPACING = 12f
-
         /** Prefix-mode inactivity delay: default 0.5s, clamped to 0.2–3.0s. */
         const val DEFAULT_PREFIX_TRIGGER_DELAY_MS = 500L
         const val MIN_PREFIX_TRIGGER_DELAY_MS = 200L
@@ -463,7 +441,6 @@ class SettingsRepository(private val context: Context) {
         private val AI_NOTE_SELECTED_ON_CREATE_KEY = booleanPreferencesKey("ai_note_selected_on_create")
         private val LASSO_SNAPBACK_THRESHOLD_KEY = floatPreferencesKey("lasso_snapback_threshold")
         private val LASSO_SNAPBACK_ENABLED_KEY = booleanPreferencesKey("lasso_snapback_enabled")
-        private val STROKE_SIMPLIFICATION_SPACING_KEY = floatPreferencesKey("stroke_simplification_spacing")
         private val AUTO_EXTRACTION_KEY = booleanPreferencesKey("auto_extraction_enabled")
         private val EXTRACTION_CONFIRM_KEY = booleanPreferencesKey("extraction_confirmation_enabled")
         private val CONFIRM_TODO_KEY = booleanPreferencesKey("confirm_todo_extraction")

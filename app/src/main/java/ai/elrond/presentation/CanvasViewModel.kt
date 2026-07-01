@@ -90,7 +90,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -136,10 +135,12 @@ class CanvasViewModel(
     private val strokeTransformer: (Stroke, LiveTransform) -> Stroke = StrokeTransforms::transformStroke,
     /** Axis-aligned bounds of a stroke (lasso tool). Injected so JVM tests use a fake. */
     private val strokeBoundsOf: (Stroke) -> SelectionBounds = StrokeTransforms::strokeBounds,
-    /** Decimates a new stroke's points to a min spacing (debug perf knob). Injected for JVM tests. */
-    private val strokeSimplifier: (Stroke, Float) -> Stroke = StrokeTransforms::simplify,
-    /** Min point spacing (page units) applied to new strokes; null/0 = off (full fidelity). */
-    strokeSimplificationSpacingFlow: Flow<Float>? = null,
+    /**
+     * Decimates a stroke's points to [STROKE_SIMPLIFY_SPACING] (cheaper meshes). Defaults to identity
+     * so JVM tests (which use mock Strokes) don't hit ink natives; the @Inject constructor supplies the
+     * real [StrokeTransforms.simplify] for production.
+     */
+    private val strokeSimplifier: (Stroke, Float) -> Stroke = { stroke, _ -> stroke },
     triggerModeFlow: Flow<TriggerMode>? = null,
     /** Prefix-mode inactivity delay (ms) before the question fires; null keeps the default. */
     prefixTriggerDelayMsFlow: Flow<Long>? = null,
@@ -219,10 +220,10 @@ class CanvasViewModel(
         suggestionRepository = suggestionRepository,
         pageId = savedStateHandle.get<String>("pageId"),
         enqueueExtraction = enqueueExtraction,
+        strokeSimplifier = StrokeTransforms::simplify,
         triggerCommandFlow = settings.triggerCommand,
         triggerModeFlow = settings.triggerMode,
         prefixTriggerDelayMsFlow = settings.prefixTriggerDelayMs,
-        strokeSimplificationSpacingFlow = settings.strokeSimplificationSpacing,
         prefixNoPromptTimeoutMsFlow = settings.prefixNoPromptTimeoutMs,
         stylusOnlyFlow = settings.stylusOnly,
         globalPaperStyleFlow = settings.paperStyle,
@@ -545,9 +546,6 @@ class CanvasViewModel(
     @Volatile
     private var prefixNoPromptTimeoutMs: Long = SettingsRepository.DEFAULT_PREFIX_NO_PROMPT_TIMEOUT_MS
 
-    /** Min point spacing applied to new strokes (debug perf knob), kept in sync with settings. */
-    @Volatile
-    private var strokeSimplificationSpacing: Float = SettingsRepository.DEFAULT_STROKE_SIMPLIFICATION_SPACING
 
     /** Unit system the AI must use for measurements, kept in sync with settings. */
     @Volatile
@@ -571,9 +569,6 @@ class CanvasViewModel(
         }
         prefixNoPromptTimeoutMsFlow?.let { flow ->
             viewModelScope.launch { flow.collect { prefixNoPromptTimeoutMs = it } }
-        }
-        strokeSimplificationSpacingFlow?.let { flow ->
-            viewModelScope.launch { flow.collect { strokeSimplificationSpacing = it } }
         }
         stylusOnlyFlow?.let { flow ->
             viewModelScope.launch { flow.collect { _stylusOnly.value = it } }
@@ -619,10 +614,9 @@ class CanvasViewModel(
 
         if (repository != null && pageId != null) {
             viewModelScope.launch {
-                // Debug perf knob: reconstruct saved strokes at reduced point density (in-memory only,
-                // never rewrites the DB). Read the current setting once for this open.
-                val loadSpacing = strokeSimplificationSpacingFlow?.first() ?: 0f
-                runCatching { repository.loadStrokes(pageId, loadSpacing) }
+                // Reconstruct saved strokes at the standard point spacing (cheaper meshes). Persists
+                // when the page is next re-saved on edit; the DB isn't rewritten just by opening.
+                runCatching { repository.loadStrokes(pageId, STROKE_SIMPLIFY_SPACING) }
                     .onSuccess { loaded ->
                         if (loaded.isNotEmpty()) _finishedStrokes.value = loaded
                     }
@@ -1374,12 +1368,9 @@ class CanvasViewModel(
         clearSelection() // a fresh pen stroke isn't part of any lasso selection
         contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
         thumbnailDirty = true // ink changed — the note-card thumbnail is now stale
-        // Debug perf knob: thin the new stroke's points (cheaper mesh build + redraw). Capture-time
-        // only — existing/loaded strokes are untouched. 0 spacing = off (returns the stroke as-is).
-        val spacing = strokeSimplificationSpacing
+        // Thin the new stroke's points to the standard spacing (cheaper mesh build + redraw + storage).
         val newStrokes = strokes.map { stroke ->
-            val processed = if (spacing > 0f) strokeSimplifier(stroke, spacing) else stroke
-            CanvasStroke(newStrokeId(), processed)
+            CanvasStroke(newStrokeId(), strokeSimplifier(stroke, STROKE_SIMPLIFY_SPACING))
         }
         _finishedStrokes.update { current -> current + newStrokes }
 
@@ -2464,6 +2455,13 @@ class CanvasViewModel(
         // strokes save incrementally (see NoteRepository.updateStrokes), so the slightly larger
         // unsaved-in-memory window is a low-risk trade.
         const val AUTOSAVE_DEBOUNCE_MILLIS: Long = 1_500L
+
+        /**
+         * Standard stroke point spacing (page-space units) applied on capture and on load — thins
+         * dense high-rate S Pen capture (~90–130 pts/stroke) so meshes are cheaper to build, render,
+         * and store, at a fidelity chosen to stay visually clean. Persisted when a page is re-saved.
+         */
+        const val STROKE_SIMPLIFY_SPACING: Float = 0.5f
 
         /**
          * Thumbnail regen runs on its own, much longer idle than the stroke save: the note-card

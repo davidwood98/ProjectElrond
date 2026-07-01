@@ -147,13 +147,6 @@ class SettingsRepositoryTest {
         repo.setLassoSnapBackThreshold(0.5f)
         assertEquals(0.10f, repo.lassoSnapBackThreshold.first(), 1e-4f)
 
-        // Debug stroke-simplification spacing: default off (0), round-trips, clamps to 0–12.
-        assertEquals(0f, repo.strokeSimplificationSpacing.first(), 1e-4f)
-        repo.setStrokeSimplificationSpacing(4.5f)
-        assertEquals(4.5f, repo.strokeSimplificationSpacing.first(), 1e-4f)
-        repo.setStrokeSimplificationSpacing(99f)
-        assertEquals(12f, repo.strokeSimplificationSpacing.first(), 1e-4f)
-
         // FA-11 calendar provider: default DEVICE, round-trips to OUTLOOK.
         assertEquals(CalendarProviderType.DEVICE, repo.calendarProvider.first())
         repo.setCalendarProvider(CalendarProviderType.OUTLOOK)

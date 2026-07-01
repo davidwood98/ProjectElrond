@@ -44,7 +44,7 @@ class CanvasViewModelPersistenceTest {
     @Test
     fun `saved strokes are loaded when the note opens`() = runTest(dispatcher) {
         val saved = listOf(CanvasStroke("a", mockk()), CanvasStroke("b", mockk()))
-        coEvery { repository.loadStrokes("page-1") } returns saved
+        coEvery { repository.loadStrokes(any(), any()) } returns saved
 
         val viewModel = viewModel()
         advanceUntilIdle()
@@ -54,7 +54,7 @@ class CanvasViewModelPersistenceTest {
 
     @Test
     fun `new strokes are auto-saved after the debounce`() = runTest(dispatcher) {
-        coEvery { repository.loadStrokes("page-1") } returns emptyList()
+        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
         val viewModel = viewModel()
         advanceUntilIdle()
 
@@ -72,7 +72,7 @@ class CanvasViewModelPersistenceTest {
 
     @Test
     fun `undo back to the loaded state is also persisted`() = runTest(dispatcher) {
-        coEvery { repository.loadStrokes("page-1") } returns emptyList()
+        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
         val viewModel = viewModel()
         advanceUntilIdle()
 
@@ -88,7 +88,7 @@ class CanvasViewModelPersistenceTest {
     @Test
     fun `saved AI response notes are restored when the note opens`() = runTest(dispatcher) {
         val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
-        coEvery { repository.loadStrokes("page-1") } returns emptyList()
+        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
 
         val viewModel = viewModel()
@@ -100,7 +100,7 @@ class CanvasViewModelPersistenceTest {
     @Test
     fun `moving a selected AI note via a committed transform auto-saves it`() = runTest(dispatcher) {
         val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
-        coEvery { repository.loadStrokes("page-1") } returns emptyList()
+        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
         val viewModel = viewModel()
         advanceUntilIdle()
@@ -117,7 +117,7 @@ class CanvasViewModelPersistenceTest {
     @Test
     fun `reflowing an AI note auto-saves the new width`() = runTest(dispatcher) {
         val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
-        coEvery { repository.loadStrokes("page-1") } returns emptyList()
+        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
         val viewModel = viewModel()
         advanceUntilIdle()
@@ -135,7 +135,7 @@ class CanvasViewModelPersistenceTest {
     @Test
     fun `unchanged canvas is not re-saved`() = runTest(dispatcher) {
         val saved = listOf(CanvasStroke("a", mockk()))
-        coEvery { repository.loadStrokes("page-1") } returns saved
+        coEvery { repository.loadStrokes(any(), any()) } returns saved
         coEvery { repository.loadAiNotes("page-1") } returns emptyList()
 
         viewModel()

@@ -46,7 +46,7 @@ class CanvasViewModelExtractionTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
-        coEvery { noteRepository.loadStrokes(any()) } returns emptyList()
+        coEvery { noteRepository.loadStrokes(any(), any()) } returns emptyList()
         coEvery { noteRepository.getPage("page-1") } returns NotePage(
             id = "page-1",
             notebookId = "nb-1",

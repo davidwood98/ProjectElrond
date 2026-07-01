@@ -265,18 +265,6 @@ class SettingsViewModel @Inject constructor(
             SettingsRepository.DEFAULT_LASSO_SNAP_BACK_THRESHOLD,
         )
 
-    /** Debug perf knob: min point spacing for NEW strokes (0 = off). */
-    val strokeSimplificationSpacing: StateFlow<Float> = repository.strokeSimplificationSpacing
-        .stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5_000),
-            SettingsRepository.DEFAULT_STROKE_SIMPLIFICATION_SPACING,
-        )
-
-    fun setStrokeSimplificationSpacing(value: Float) {
-        viewModelScope.launch { repository.setStrokeSimplificationSpacing(value) }
-    }
-
     /** Sets the threshold; a 0% value also turns the feature off (the slider doubles as an off). */
     fun setLassoSnapBackThreshold(value: Float) {
         viewModelScope.launch {
