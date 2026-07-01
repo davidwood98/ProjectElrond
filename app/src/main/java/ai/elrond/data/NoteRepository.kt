@@ -331,6 +331,24 @@ class NoteRepository(
         }
     }
 
+    /**
+     * One-time lossless migration: if a page still holds legacy-JSON stroke points, re-encode them to
+     * the compact format so future loads read + parse ~3× less. Points are unchanged (not simplified).
+     * A cheap 1-row probe skips pages already compact, so this is safe to call on every open. Per-id
+     * UPDATEs (never delete+insert), so a stroke drawn/erased concurrently is never clobbered.
+     */
+    suspend fun recompactStrokes(pageId: String) {
+        val probe = strokeDao.firstInputs(pageId) ?: return
+        if (probe.isEmpty() || probe[0] != '[') return // already compact (or empty page)
+        val rows = strokeDao.getForPage(pageId)
+        val updates = withContext(Dispatchers.Default) {
+            rows.mapNotNull { row -> StrokeSerialization.recompactIfLegacy(row.inputsJson)?.let { row.id to it } }
+        }
+        if (updates.isEmpty()) return
+        strokeDao.updateInputsBatch(updates)
+        Log.d(PERF_TAG, "recompacted page=$pageId rows=${updates.size} (was legacy JSON)")
+    }
+
     suspend fun clearStrokes(pageId: String) {
         val now = clock()
         strokeDao.deleteForPage(pageId)

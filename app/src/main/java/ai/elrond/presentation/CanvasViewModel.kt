@@ -662,6 +662,9 @@ class CanvasViewModel(
                 lastPersistedAiNotes = _aiNotes.value.filterNot { it.isError }
                 startAutoSave(repository, pageId)
             }
+            // One-time, lossless: migrate this page's legacy-JSON strokes to the compact format in the
+            // background so future opens read + parse far less (no-op once already compact).
+            viewModelScope.launch { runCatching { repository.recompactStrokes(pageId) } }
         }
     }
 

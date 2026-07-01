@@ -121,6 +121,14 @@ object StrokeSerialization {
 
     private const val BYTES_PER_POINT = 25 // tool(1) + x,y,t,pressure,tilt,orientation (6 × 4)
 
+    /**
+     * Re-encodes a legacy JSON point payload into the compact format (LOSSLESS — the same points, just
+     * packed), or null if it's already compact / empty. Used by the one-time background migration that
+     * shrinks pages written before the compact format so their reads + parses get faster.
+     */
+    internal fun recompactIfLegacy(inputsJson: String): String? =
+        if (inputsJson.isNotEmpty() && inputsJson[0] == '[') encodeInputs(decodeInputs(inputsJson)) else null
+
     internal fun encodeInputs(points: List<SerializedStrokeInput>): String {
         val buf = ByteBuffer.allocate(4 + points.size * BYTES_PER_POINT)
         buf.putInt(points.size)

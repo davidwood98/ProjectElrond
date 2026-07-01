@@ -59,6 +59,23 @@ class SerializedStrokeInputTest {
     }
 
     @Test
+    fun `recompactIfLegacy converts JSON losslessly and no-ops on compact`() {
+        val json = """[{"x":100.0,"y":200.0,"t":8,"pressure":1.0,"tilt":0.0,"orientation":0.0,"tool":"stylus"}]"""
+
+        val compact = StrokeSerialization.recompactIfLegacy(json)
+
+        assertEquals(false, compact == null)
+        assertEquals(false, compact!!.startsWith("["))
+        // Same points survive the JSON → compact conversion.
+        assertEquals(
+            StrokeSerialization.decodeInputs(json),
+            StrokeSerialization.decodeInputs(compact),
+        )
+        // Already-compact payloads are left alone.
+        assertEquals(null, StrokeSerialization.recompactIfLegacy(compact))
+    }
+
+    @Test
     fun `compact encoding is far smaller than JSON for a realistic stroke`() {
         val points = (0 until 133).map {
             SerializedStrokeInput(x = it * 1.37f, y = it * 2.11f, t = it * 8L, pressure = 0.7f, tilt = 0.2f, orientation = 0.3f)
