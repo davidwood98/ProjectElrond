@@ -1,5 +1,6 @@
 package ai.elrond.data
 
+import ai.elrond.BuildConfig
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.CanvasStroke
 import android.util.Log
@@ -254,11 +255,11 @@ class NoteRepository(
         when {
             removed || changed -> {
                 // Full re-serialize + DELETE-all + INSERT-all of every stroke (the expensive path).
-                Log.d(PERF_TAG, "updateStrokes FULL rewrite strokes=${current.size} removed=$removed changed=$changed")
+                perfLog { "updateStrokes FULL rewrite strokes=${current.size} removed=$removed changed=$changed" }
                 replaceStrokes(pageId, current, isAiInk)
             }
             added.isNotEmpty() -> {
-                Log.d(PERF_TAG, "updateStrokes append=${added.size} (page total=${current.size})")
+                perfLog { "updateStrokes append=${added.size} (page total=${current.size})" }
                 saveStrokes(pageId, added, isAiInk)
             }
             // else: same ids, same stroke refs (e.g. a reorder) — nothing to persist.
@@ -282,11 +283,10 @@ class NoteRepository(
             rows.map { StrokeSerialization.toCanvasStroke(it, simplifySpacing) }
         }
         val buildMs = (System.nanoTime() - buildStart) / 1_000_000.0
-        Log.d(
-            PERF_TAG,
+        perfLog {
             "loadStrokes page=$pageId strokes=${rows.size} simplify=$simplifySpacing " +
-                "query=${"%.1f".format(queryMs)}ms reconstruct=${"%.1f".format(buildMs)}ms",
-        )
+                "query=${"%.1f".format(queryMs)}ms reconstruct=${"%.1f".format(buildMs)}ms"
+        }
         return result
     }
 
@@ -326,27 +326,9 @@ class NoteRepository(
         // Decode + normalize off the caller's thread — the note browser fetches previews from a
         // Compose produceState (Main) for every card; keep that work off the main thread.
         return withContext(Dispatchers.Default) {
-            val polylines = rows.take(maxStrokes).map { StrokeSerialization.decodePoints(it.inputsJson) }
+            val polylines = rows.take(maxStrokes).map { StrokeSerialization.decodePoints(it.inputs) }
             StrokePreviewNormalizer.normalize(polylines)
         }
-    }
-
-    /**
-     * One-time lossless migration: if a page still holds legacy-JSON stroke points, re-encode them to
-     * the compact format so future loads read + parse ~3× less. Points are unchanged (not simplified).
-     * A cheap 1-row probe skips pages already compact, so this is safe to call on every open. Per-id
-     * UPDATEs (never delete+insert), so a stroke drawn/erased concurrently is never clobbered.
-     */
-    suspend fun recompactStrokes(pageId: String) {
-        val probe = strokeDao.firstInputs(pageId) ?: return
-        if (probe.isEmpty() || probe[0] != '[') return // already compact (or empty page)
-        val rows = strokeDao.getForPage(pageId)
-        val updates = withContext(Dispatchers.Default) {
-            rows.mapNotNull { row -> StrokeSerialization.recompactIfLegacy(row.inputsJson)?.let { row.id to it } }
-        }
-        if (updates.isEmpty()) return
-        strokeDao.updateInputsBatch(updates)
-        Log.d(PERF_TAG, "recompacted page=$pageId rows=${updates.size} (was legacy JSON)")
     }
 
     suspend fun clearStrokes(pageId: String) {
@@ -387,7 +369,12 @@ class NoteRepository(
         const val DEFAULT_NOTEBOOK_NAME = "My Notes"
         const val PREVIEW_MAX_STROKES = 60
 
-        /** logcat tag for the stroke-perf instrumentation (filter: `adb logcat -s ElrondPerf`). */
-        private const val PERF_TAG = "ElrondPerf"
+        /**
+         * Stroke-perf instrumentation, debug builds only (filter: `adb logcat -s ElrondPerf`).
+         * Lazy message lambda so release builds skip the string work too.
+         */
+        internal inline fun perfLog(message: () -> String) {
+            if (BuildConfig.DEBUG) Log.d("ElrondPerf", message())
+        }
     }
 }

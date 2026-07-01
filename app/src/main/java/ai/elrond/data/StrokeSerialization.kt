@@ -59,7 +59,7 @@ object StrokeSerialization {
             colorArgb = stroke.brush.colorIntArgb,
             brushSize = stroke.brush.size,
             brushEpsilon = stroke.brush.epsilon,
-            inputsJson = encodeInputs(points),
+            inputs = encodeInputs(points),
             createdAt = createdAt,
             isAiInk = isAiInk,
             groupId = groupId,
@@ -77,7 +77,7 @@ object StrokeSerialization {
         CanvasStroke(id = entity.id, stroke = toStroke(entity, minSpacing), groupId = entity.groupId)
 
     fun toStroke(entity: StrokeEntity, minSpacing: Float = 0f): Stroke {
-        var points = decodeInputs(entity.inputsJson)
+        var points = decodeInputs(entity.inputs)
         if (minSpacing > 0f && points.size > 2) {
             val keep = StrokeSimplifier.keptIndices(points.map { it.x to it.y }, minSpacing)
             points = keep.map { points[it] }
@@ -108,28 +108,18 @@ object StrokeSerialization {
     }
 
     /** Raw (x, y) polyline from a stored stroke — for thumbnails; no ink natives. */
-    fun decodePoints(inputsJson: String): List<Pair<Float, Float>> =
-        decodeInputs(inputsJson).map { it.x to it.y }
+    fun decodePoints(inputs: ByteArray): List<Pair<Float, Float>> =
+        decodeInputs(inputs).map { it.x to it.y }
 
     // --- Point (de)serialization ---------------------------------------------------------------
-    // Points are the bulk of the DB (a dense page is >100k points). The legacy format was a JSON
-    // array (~90-100 bytes/point: full float text + a repeated "tool" string). The compact format
-    // packs them binary (25 bytes/point) then Base64s into the same TEXT column, ~3× smaller — so
-    // smaller files, faster DB reads and less to parse on load. Reads auto-detect: a JSON payload
-    // starts with '[', so anything else is compact — old rows keep working with no migration; new
-    // writes are compact. java.util.Base64/ByteBuffer are pure-JVM (Android 26+), so unit-testable.
+    // Points are the bulk of the DB (a dense page is >100k points), so they're packed as raw
+    // binary (25 bytes/point) in a BLOB column — no JSON/Base64 text layer. Two older TEXT formats
+    // existed (legacy JSON at ~90-100 bytes/point, then Base64-wrapped binary); both are converted
+    // once by MIGRATION_15_16 via [storedTextToBlob]. ByteBuffer is pure-JVM, so unit-testable.
 
     private const val BYTES_PER_POINT = 25 // tool(1) + x,y,t,pressure,tilt,orientation (6 × 4)
 
-    /**
-     * Re-encodes a legacy JSON point payload into the compact format (LOSSLESS — the same points, just
-     * packed), or null if it's already compact / empty. Used by the one-time background migration that
-     * shrinks pages written before the compact format so their reads + parses get faster.
-     */
-    internal fun recompactIfLegacy(inputsJson: String): String? =
-        if (inputsJson.isNotEmpty() && inputsJson[0] == '[') encodeInputs(decodeInputs(inputsJson)) else null
-
-    internal fun encodeInputs(points: List<SerializedStrokeInput>): String {
+    internal fun encodeInputs(points: List<SerializedStrokeInput>): ByteArray {
         val buf = ByteBuffer.allocate(4 + points.size * BYTES_PER_POINT)
         buf.putInt(points.size)
         points.forEach { p ->
@@ -141,14 +131,23 @@ object StrokeSerialization {
             buf.putFloat(p.tilt)
             buf.putFloat(p.orientation)
         }
-        return Base64.getEncoder().encodeToString(buf.array())
+        return buf.array()
     }
 
-    /** Decodes either the legacy JSON array (starts with '[') or the compact Base64 packing. */
-    internal fun decodeInputs(encoded: String): List<SerializedStrokeInput> {
-        if (encoded.isEmpty()) return emptyList()
-        if (encoded[0] == '[') return json.decodeFromString<List<SerializedStrokeInput>>(encoded)
-        val buf = ByteBuffer.wrap(Base64.getDecoder().decode(encoded))
+    /**
+     * v15→v16 migration helper: converts a stroke's stored TEXT payload — either the legacy JSON
+     * array (starts with '[') or the Base64-wrapped binary packing — into the raw BLOB bytes.
+     * Both source formats are FROZEN (they only ever appear in pre-v16 rows); don't change this.
+     */
+    internal fun storedTextToBlob(stored: String): ByteArray = when {
+        stored.isEmpty() -> encodeInputs(emptyList())
+        stored[0] == '[' -> encodeInputs(json.decodeFromString<List<SerializedStrokeInput>>(stored))
+        else -> Base64.getDecoder().decode(stored)
+    }
+
+    internal fun decodeInputs(inputs: ByteArray): List<SerializedStrokeInput> {
+        if (inputs.isEmpty()) return emptyList()
+        val buf = ByteBuffer.wrap(inputs)
         val count = buf.int
         val out = ArrayList<SerializedStrokeInput>(count)
         repeat(count) {

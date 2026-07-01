@@ -131,7 +131,8 @@ class RoomDaoTest {
 
     private fun stroke(id: String) = StrokeEntity(
         id = id, pageId = "p1", brushFamily = "pressure-pen", colorArgb = 0,
-        brushSize = 4f, brushEpsilon = 0.1f, inputsJson = "[]", createdAt = 0,
+        brushSize = 4f, brushEpsilon = 0.1f,
+        inputs = StrokeSerialization.encodeInputs(emptyList()), createdAt = 0,
     )
 
     private fun event(id: String, title: String, aiSuggested: Boolean, confirmed: Boolean) =

@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SubjectEntity::class,
         NoteSubjectEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -331,6 +331,64 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v16 (FA-22) finishes the stroke storage format: `strokes.inputsJson TEXT` becomes
+         * `strokes.inputs BLOB` holding the packed binary points directly (no Base64 text layer —
+         * ~25% smaller rows, no encode/decode on every save/load). Every existing row is converted
+         * here — Base64-compact rows decode straight to bytes; pre-compact legacy-JSON rows are
+         * parsed and packed ([StrokeSerialization.storedTextToBlob]) — so the legacy read paths are
+         * gone from the app code. Row-by-row with a compiled statement, so a large DB migrates
+         * without holding every stroke in memory.
+         */
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE strokes_new (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        pageId TEXT NOT NULL,
+                        brushFamily TEXT NOT NULL,
+                        colorArgb INTEGER NOT NULL,
+                        brushSize REAL NOT NULL,
+                        brushEpsilon REAL NOT NULL,
+                        inputs BLOB NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        isAiInk INTEGER NOT NULL,
+                        groupId TEXT,
+                        FOREIGN KEY(pageId) REFERENCES note_pages(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                val insert = db.compileStatement(
+                    "INSERT INTO strokes_new (id, pageId, brushFamily, colorArgb, brushSize, " +
+                        "brushEpsilon, inputs, createdAt, isAiInk, groupId) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                db.query(
+                    "SELECT id, pageId, brushFamily, colorArgb, brushSize, brushEpsilon, " +
+                        "inputsJson, createdAt, isAiInk, groupId FROM strokes",
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        insert.clearBindings()
+                        insert.bindString(1, cursor.getString(0))
+                        insert.bindString(2, cursor.getString(1))
+                        insert.bindString(3, cursor.getString(2))
+                        insert.bindLong(4, cursor.getLong(3))
+                        insert.bindDouble(5, cursor.getDouble(4))
+                        insert.bindDouble(6, cursor.getDouble(5))
+                        insert.bindBlob(7, StrokeSerialization.storedTextToBlob(cursor.getString(6)))
+                        insert.bindLong(8, cursor.getLong(7))
+                        insert.bindLong(9, cursor.getLong(8))
+                        if (cursor.isNull(9)) insert.bindNull(10) else insert.bindString(10, cursor.getString(9))
+                        insert.executeInsert()
+                    }
+                }
+                db.execSQL("DROP TABLE strokes")
+                db.execSQL("ALTER TABLE strokes_new RENAME TO strokes")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_strokes_pageId ON strokes(pageId)")
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -343,7 +401,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
                     MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-                    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
+                    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 ).build().also { instance = it }
             }
     }

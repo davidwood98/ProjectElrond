@@ -45,7 +45,7 @@ class NoteRepositoryTest {
                 colorArgb = 0,
                 brushSize = 1f,
                 brushEpsilon = 0.1f,
-                inputsJson = "[]",
+                inputs = StrokeSerialization.encodeInputs(emptyList()),
                 createdAt = 0L,
             )
         }
@@ -252,10 +252,12 @@ class NoteRepositoryTest {
             colorArgb = 0,
             brushSize = 4f,
             brushEpsilon = 0.1f,
-            inputsJson = """[
-                {"x":100.0,"y":200.0,"t":0,"pressure":1.0,"tilt":0.0,"orientation":0.0},
-                {"x":300.0,"y":200.0,"t":16,"pressure":1.0,"tilt":0.0,"orientation":0.0}
-            ]""",
+            inputs = StrokeSerialization.encodeInputs(
+                listOf(
+                    SerializedStrokeInput(x = 100f, y = 200f, t = 0, pressure = 1f, tilt = 0f, orientation = 0f),
+                    SerializedStrokeInput(x = 300f, y = 200f, t = 16, pressure = 1f, tilt = 0f, orientation = 0f),
+                ),
+            ),
             createdAt = 1L,
         )
         coEvery { strokeDao.getForPage("page-1") } returns listOf(entity)
