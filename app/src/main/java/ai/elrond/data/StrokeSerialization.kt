@@ -1,6 +1,7 @@
 package ai.elrond.data
 
 import ai.elrond.domain.CanvasStroke
+import ai.elrond.domain.StrokeSimplifier
 import androidx.ink.brush.Brush
 import androidx.ink.brush.BrushFamily
 import androidx.ink.brush.InputToolType
@@ -8,6 +9,8 @@ import androidx.ink.brush.StockBrushes
 import androidx.ink.strokes.MutableStrokeInputBatch
 import androidx.ink.strokes.Stroke
 import androidx.ink.strokes.StrokeInput
+import java.nio.ByteBuffer
+import java.util.Base64
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -56,19 +59,29 @@ object StrokeSerialization {
             colorArgb = stroke.brush.colorIntArgb,
             brushSize = stroke.brush.size,
             brushEpsilon = stroke.brush.epsilon,
-            inputsJson = json.encodeToString(points),
+            inputsJson = encodeInputs(points),
             createdAt = createdAt,
             isAiInk = isAiInk,
             groupId = groupId,
         )
     }
 
-    /** Reconstructs a [CanvasStroke] (stable id + group membership + ink) from a stored row. */
-    fun toCanvasStroke(entity: StrokeEntity): CanvasStroke =
-        CanvasStroke(id = entity.id, stroke = toStroke(entity), groupId = entity.groupId)
+    /**
+     * Reconstructs a [CanvasStroke] (stable id + group membership + ink) from a stored row.
+     *
+     * [minSpacing] > 0 decimates the stored points to that page-space spacing when rebuilding the mesh
+     * (debug perf knob) — an IN-MEMORY simplification only: the stored row is never rewritten, so it's
+     * fully reversible by lowering the setting. Fewer points ⇒ cheaper mesh + lighter memory.
+     */
+    fun toCanvasStroke(entity: StrokeEntity, minSpacing: Float = 0f): CanvasStroke =
+        CanvasStroke(id = entity.id, stroke = toStroke(entity, minSpacing), groupId = entity.groupId)
 
-    fun toStroke(entity: StrokeEntity): Stroke {
-        val points = json.decodeFromString<List<SerializedStrokeInput>>(entity.inputsJson)
+    fun toStroke(entity: StrokeEntity, minSpacing: Float = 0f): Stroke {
+        var points = decodeInputs(entity.inputsJson)
+        if (minSpacing > 0f && points.size > 2) {
+            val keep = StrokeSimplifier.keptIndices(points.map { it.x to it.y }, minSpacing)
+            points = keep.map { points[it] }
+        }
         val batch = MutableStrokeInputBatch()
         points.forEach { p ->
             // addOrIgnore skips a point that would be invalid relative to the batch (e.g. a
@@ -96,7 +109,78 @@ object StrokeSerialization {
 
     /** Raw (x, y) polyline from a stored stroke — for thumbnails; no ink natives. */
     fun decodePoints(inputsJson: String): List<Pair<Float, Float>> =
-        json.decodeFromString<List<SerializedStrokeInput>>(inputsJson).map { it.x to it.y }
+        decodeInputs(inputsJson).map { it.x to it.y }
+
+    // --- Point (de)serialization ---------------------------------------------------------------
+    // Points are the bulk of the DB (a dense page is >100k points). The legacy format was a JSON
+    // array (~90-100 bytes/point: full float text + a repeated "tool" string). The compact format
+    // packs them binary (25 bytes/point) then Base64s into the same TEXT column, ~3× smaller — so
+    // smaller files, faster DB reads and less to parse on load. Reads auto-detect: a JSON payload
+    // starts with '[', so anything else is compact — old rows keep working with no migration; new
+    // writes are compact. java.util.Base64/ByteBuffer are pure-JVM (Android 26+), so unit-testable.
+
+    private const val BYTES_PER_POINT = 25 // tool(1) + x,y,t,pressure,tilt,orientation (6 × 4)
+
+    /**
+     * Re-encodes a legacy JSON point payload into the compact format (LOSSLESS — the same points, just
+     * packed), or null if it's already compact / empty. Used by the one-time background migration that
+     * shrinks pages written before the compact format so their reads + parses get faster.
+     */
+    internal fun recompactIfLegacy(inputsJson: String): String? =
+        if (inputsJson.isNotEmpty() && inputsJson[0] == '[') encodeInputs(decodeInputs(inputsJson)) else null
+
+    internal fun encodeInputs(points: List<SerializedStrokeInput>): String {
+        val buf = ByteBuffer.allocate(4 + points.size * BYTES_PER_POINT)
+        buf.putInt(points.size)
+        points.forEach { p ->
+            buf.put(toolToByte(p.tool))
+            buf.putFloat(p.x)
+            buf.putFloat(p.y)
+            buf.putInt(p.t.toInt()) // elapsed-within-stroke millis — always fits Int
+            buf.putFloat(p.pressure)
+            buf.putFloat(p.tilt)
+            buf.putFloat(p.orientation)
+        }
+        return Base64.getEncoder().encodeToString(buf.array())
+    }
+
+    /** Decodes either the legacy JSON array (starts with '[') or the compact Base64 packing. */
+    internal fun decodeInputs(encoded: String): List<SerializedStrokeInput> {
+        if (encoded.isEmpty()) return emptyList()
+        if (encoded[0] == '[') return json.decodeFromString<List<SerializedStrokeInput>>(encoded)
+        val buf = ByteBuffer.wrap(Base64.getDecoder().decode(encoded))
+        val count = buf.int
+        val out = ArrayList<SerializedStrokeInput>(count)
+        repeat(count) {
+            val tool = toolFromByte(buf.get())
+            out.add(
+                SerializedStrokeInput(
+                    x = buf.float,
+                    y = buf.float,
+                    t = buf.int.toLong(),
+                    pressure = buf.float,
+                    tilt = buf.float,
+                    orientation = buf.float,
+                    tool = tool,
+                ),
+            )
+        }
+        return out
+    }
+
+    private fun toolToByte(key: String): Byte = when (key) {
+        "stylus" -> 0
+        "touch" -> 1
+        "mouse" -> 2
+        else -> 3
+    }
+
+    private fun toolFromByte(b: Byte): String = when (b.toInt()) {
+        0 -> "stylus"
+        1 -> "touch"
+        2 -> "mouse"
+        else -> "unknown"
+    }
 
     private fun familyKey(family: BrushFamily): String = when (family) {
         StockBrushes.markerLatest -> FAMILY_MARKER

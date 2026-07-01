@@ -98,6 +98,23 @@ interface StrokeDao {
     @Query("SELECT * FROM strokes WHERE pageId = :pageId ORDER BY createdAt")
     suspend fun getForPage(pageId: String): List<StrokeEntity>
 
+    /** One row's stored points — a cheap probe to see if a page still holds the legacy JSON format. */
+    @Query("SELECT inputsJson FROM strokes WHERE pageId = :pageId LIMIT 1")
+    suspend fun firstInputs(pageId: String): String?
+
+    /** Rewrites one stroke's stored points (used by the lossless compact-format migration). */
+    @Query("UPDATE strokes SET inputsJson = :inputsJson WHERE id = :id")
+    suspend fun updateInputs(id: String, inputsJson: String)
+
+    /**
+     * Batch-rewrites stored points by id in one transaction. Per-id UPDATE (not delete+insert) so a
+     * stroke drawn or erased concurrently on the same page is never clobbered.
+     */
+    @Transaction
+    suspend fun updateInputsBatch(updates: List<Pair<String, String>>) {
+        updates.forEach { updateInputs(it.first, it.second) }
+    }
+
     @Query("SELECT * FROM strokes WHERE pageId = :pageId ORDER BY createdAt")
     fun observeForPage(pageId: String): Flow<List<StrokeEntity>>
 

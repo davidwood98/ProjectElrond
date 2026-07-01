@@ -393,7 +393,7 @@ class CanvasViewModelSelectionTest {
     @Test
     fun `pen ink enqueues background extraction but a lasso edit does not`() = runTest(dispatcher) {
         val repository = mockk<NoteRepository>(relaxed = true)
-        coEvery { repository.loadStrokes("page-1") } returns emptyList()
+        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
         val enqueued = mutableListOf<String>()
         val vm = viewModel(repository = repository, enqueue = { enqueued += it })
         advanceUntilIdle()

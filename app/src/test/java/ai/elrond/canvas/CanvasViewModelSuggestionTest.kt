@@ -41,7 +41,7 @@ class CanvasViewModelSuggestionTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
-        coEvery { repository.loadStrokes(any()) } returns emptyList()
+        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
         coEvery { repository.getPage("page-1") } returns NotePage(
             id = "page-1", notebookId = "nb", customTitle = "Standup", createdAt = 1L, modifiedAt = 1L,
         )

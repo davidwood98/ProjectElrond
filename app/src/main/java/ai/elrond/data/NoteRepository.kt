@@ -2,6 +2,7 @@ package ai.elrond.data
 
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.CanvasStroke
+import android.util.Log
 import ai.elrond.domain.NoteEditDay
 import ai.elrond.domain.Notebook
 import ai.elrond.domain.NotebookSummary
@@ -205,16 +206,89 @@ class NoteRepository(
 
     // --- Strokes ---
 
+    /**
+     * Appends [strokes] without touching the page's existing rows — the cheap incremental save for
+     * the hot pen-writing path (only the 1–3 freshly-finished strokes are serialized + inserted,
+     * not the whole page; see [updateStrokes]).
+     */
     suspend fun saveStrokes(pageId: String, strokes: List<CanvasStroke>, isAiInk: Boolean = false) {
         if (strokes.isEmpty()) return
         val now = clock()
-        strokeDao.insertAll(strokes.map { it.toEntity(pageId, now, isAiInk) })
+        val entities = withContext(Dispatchers.Default) { strokes.map { it.toEntity(pageId, now, isAiInk) } }
+        strokeDao.insertAll(entities)
         pageDao.touch(pageId, now)
         recordEdit(pageId, now)
     }
 
-    suspend fun loadStrokes(pageId: String): List<CanvasStroke> =
-        strokeDao.getForPage(pageId).map(StrokeSerialization::toCanvasStroke)
+    /**
+     * Persists the page's stroke change as cheaply as the diff allows (autosave hot path).
+     *
+     * The common case while writing is purely additive — new pen strokes appended to an unchanged
+     * prefix — so only the new strokes are inserted ([saveStrokes]), turning the per-save cost from
+     * O(all strokes × points) into O(new strokes × points). Anything that removes or mutates an
+     * existing stroke (erase, undo/redo, lasso move/scale/delete/paste/group) rewrites the whole
+     * page ([replaceStrokes]).
+     *
+     * Correctness is derived from the data, not a flag: an unchanged stroke keeps the same immutable
+     * [CanvasStroke.stroke] reference across emissions, so a changed reference (a baked transform) or
+     * a dropped id forces the full rewrite. No mutation site has to remember to mark itself dirty.
+     */
+    suspend fun updateStrokes(
+        pageId: String,
+        previous: List<CanvasStroke>,
+        current: List<CanvasStroke>,
+        isAiInk: Boolean = false,
+    ) {
+        val prevById = previous.associateBy { it.id }
+        val currentIds = current.mapTo(HashSet(current.size)) { it.id }
+        val removed = previous.any { it.id !in currentIds }
+        val added = ArrayList<CanvasStroke>()
+        var changed = false
+        for (cs in current) {
+            val prev = prevById[cs.id]
+            when {
+                prev == null -> added.add(cs)
+                prev.stroke !== cs.stroke || prev.groupId != cs.groupId -> changed = true
+            }
+        }
+        when {
+            removed || changed -> {
+                // Full re-serialize + DELETE-all + INSERT-all of every stroke (the expensive path).
+                Log.d(PERF_TAG, "updateStrokes FULL rewrite strokes=${current.size} removed=$removed changed=$changed")
+                replaceStrokes(pageId, current, isAiInk)
+            }
+            added.isNotEmpty() -> {
+                Log.d(PERF_TAG, "updateStrokes append=${added.size} (page total=${current.size})")
+                saveStrokes(pageId, added, isAiInk)
+            }
+            // else: same ids, same stroke refs (e.g. a reorder) — nothing to persist.
+        }
+    }
+
+    /**
+     * Loads and reconstructs a page's strokes. [simplifySpacing] > 0 decimates each stroke's points to
+     * that page-space spacing IN MEMORY (debug perf knob) — the stored rows are never rewritten.
+     */
+    suspend fun loadStrokes(pageId: String, simplifySpacing: Float = 0f): List<CanvasStroke> {
+        val queryStart = System.nanoTime()
+        val rows = strokeDao.getForPage(pageId)
+        val queryMs = (System.nanoTime() - queryStart) / 1_000_000.0
+        // Rebuilding each stroke's ink mesh (Stroke(brush, batch)) is heavy CPU work — a full page is
+        // hundreds of strokes / >100k points. The suspend DAO query resumes on the caller's Main
+        // dispatcher (viewModelScope), so without this hop the whole reconstruction blocks the UI
+        // thread on open (the 800–1000ms freeze on a dense page). Mirrors replaceStrokes/loadStrokePreview.
+        val buildStart = System.nanoTime()
+        val result = withContext(Dispatchers.Default) {
+            rows.map { StrokeSerialization.toCanvasStroke(it, simplifySpacing) }
+        }
+        val buildMs = (System.nanoTime() - buildStart) / 1_000_000.0
+        Log.d(
+            PERF_TAG,
+            "loadStrokes page=$pageId strokes=${rows.size} simplify=$simplifySpacing " +
+                "query=${"%.1f".format(queryMs)}ms reconstruct=${"%.1f".format(buildMs)}ms",
+        )
+        return result
+    }
 
     /** Atomically rewrites the page's strokes — canvas auto-save (handles erase/undo/lasso too). */
     suspend fun replaceStrokes(pageId: String, strokes: List<CanvasStroke>, isAiInk: Boolean = false) {
@@ -257,6 +331,24 @@ class NoteRepository(
         }
     }
 
+    /**
+     * One-time lossless migration: if a page still holds legacy-JSON stroke points, re-encode them to
+     * the compact format so future loads read + parse ~3× less. Points are unchanged (not simplified).
+     * A cheap 1-row probe skips pages already compact, so this is safe to call on every open. Per-id
+     * UPDATEs (never delete+insert), so a stroke drawn/erased concurrently is never clobbered.
+     */
+    suspend fun recompactStrokes(pageId: String) {
+        val probe = strokeDao.firstInputs(pageId) ?: return
+        if (probe.isEmpty() || probe[0] != '[') return // already compact (or empty page)
+        val rows = strokeDao.getForPage(pageId)
+        val updates = withContext(Dispatchers.Default) {
+            rows.mapNotNull { row -> StrokeSerialization.recompactIfLegacy(row.inputsJson)?.let { row.id to it } }
+        }
+        if (updates.isEmpty()) return
+        strokeDao.updateInputsBatch(updates)
+        Log.d(PERF_TAG, "recompacted page=$pageId rows=${updates.size} (was legacy JSON)")
+    }
+
     suspend fun clearStrokes(pageId: String) {
         val now = clock()
         strokeDao.deleteForPage(pageId)
@@ -294,5 +386,8 @@ class NoteRepository(
     companion object {
         const val DEFAULT_NOTEBOOK_NAME = "My Notes"
         const val PREVIEW_MAX_STROKES = 60
+
+        /** logcat tag for the stroke-perf instrumentation (filter: `adb logcat -s ElrondPerf`). */
+        private const val PERF_TAG = "ElrondPerf"
     }
 }

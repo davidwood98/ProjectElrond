@@ -2,11 +2,16 @@ package ai.elrond.data
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkObject
 import io.mockk.slot
+import io.mockk.unmockkObject
 import kotlinx.coroutines.test.runTest
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Before
 import org.junit.Test
 
 class NoteRepositoryTest {
@@ -26,6 +31,28 @@ class NoteRepositoryTest {
         clock = { FIXED_TIME },
         newId = { "fixed-id" },
     )
+
+    @Before
+    fun setUp() {
+        // Stub ink serialization (it touches ink natives, absent on the JVM) so the stroke-diff
+        // tests exercise the append-vs-rewrite decision without building real Strokes.
+        mockkObject(StrokeSerialization)
+        every { StrokeSerialization.toEntity(any(), any(), any(), any(), any(), any()) } answers {
+            StrokeEntity(
+                id = secondArg(),
+                pageId = thirdArg(),
+                brushFamily = "pressure-pen",
+                colorArgb = 0,
+                brushSize = 1f,
+                brushEpsilon = 0.1f,
+                inputsJson = "[]",
+                createdAt = 0L,
+            )
+        }
+    }
+
+    @After
+    fun tearDown() = unmockkObject(StrokeSerialization)
 
     @Test
     fun `createNotebook inserts entity with generated id and timestamp`() = runTest {
@@ -178,6 +205,42 @@ class NoteRepositoryTest {
 
         coVerify { strokeDao.replaceForPage("page-1", emptyList()) }
         coVerify { pageDao.touch("page-1", FIXED_TIME) }
+    }
+
+    @Test
+    fun `updateStrokes appends only new strokes when the change is purely additive`() = runTest {
+        val a = ai.elrond.domain.CanvasStroke("a", mockk())
+        val b = ai.elrond.domain.CanvasStroke("b", mockk())
+
+        repository.updateStrokes("page-1", previous = listOf(a), current = listOf(a, b))
+
+        // Only the new stroke is inserted; the page is NOT fully rewritten.
+        val slot = slot<List<StrokeEntity>>()
+        coVerify { strokeDao.insertAll(capture(slot)) }
+        assertEquals(listOf("b"), slot.captured.map { it.id })
+        coVerify(exactly = 0) { strokeDao.replaceForPage(any(), any()) }
+    }
+
+    @Test
+    fun `updateStrokes fully rewrites the page when a stroke is removed`() = runTest {
+        val a = ai.elrond.domain.CanvasStroke("a", mockk())
+        val b = ai.elrond.domain.CanvasStroke("b", mockk())
+
+        repository.updateStrokes("page-1", previous = listOf(a, b), current = listOf(a))
+
+        coVerify { strokeDao.replaceForPage(eq("page-1"), any()) }
+    }
+
+    @Test
+    fun `updateStrokes fully rewrites the page when a stroke's geometry was baked`() = runTest {
+        // Same id, different (transformed) Stroke reference — e.g. a baked lasso move.
+        val before = ai.elrond.domain.CanvasStroke("a", mockk())
+        val after = before.copy(stroke = mockk())
+
+        repository.updateStrokes("page-1", previous = listOf(before), current = listOf(after))
+
+        coVerify { strokeDao.replaceForPage(eq("page-1"), any()) }
+        coVerify(exactly = 0) { strokeDao.insertAll(any()) }
     }
 
     @Test

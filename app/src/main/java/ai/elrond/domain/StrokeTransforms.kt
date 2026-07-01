@@ -69,6 +69,41 @@ object StrokeTransforms {
         return Stroke(brush, stroke.inputs)
     }
 
+    /**
+     * Returns a copy of [stroke] with its input points decimated to [minSpacing] page-units apart
+     * (debug perf knob — fewer points ⇒ cheaper mesh build + redraw). The brush is unchanged; only
+     * the point set is thinned (endpoints always kept). [minSpacing] <= 0, or a stroke already at
+     * its minimum (≤2 points / nothing dropped), returns the same stroke untouched.
+     *
+     * Which points to keep is the pure [StrokeSimplifier.keptIndices]; this just rebuilds the ink
+     * batch from them, mirroring [transformStroke] / `StrokeSerialization.toStroke`.
+     */
+    fun simplify(stroke: Stroke, minSpacing: Float): Stroke {
+        if (minSpacing <= 0f || stroke.inputs.size <= 2) return stroke
+        val scratch = StrokeInput()
+        val points = ArrayList<Pair<Float, Float>>(stroke.inputs.size)
+        for (i in 0 until stroke.inputs.size) {
+            stroke.inputs.populate(i, scratch)
+            points.add(scratch.x to scratch.y)
+        }
+        val keep = StrokeSimplifier.keptIndices(points, minSpacing)
+        if (keep.size == stroke.inputs.size) return stroke // nothing dropped
+        val batch = MutableStrokeInputBatch()
+        for (i in keep) {
+            stroke.inputs.populate(i, scratch)
+            batch.addOrIgnore(
+                type = scratch.toolType,
+                x = scratch.x,
+                y = scratch.y,
+                elapsedTimeMillis = scratch.elapsedTimeMillis,
+                pressure = scratch.pressure,
+                tiltRadians = scratch.tiltRadians,
+                orientationRadians = scratch.orientationRadians,
+            )
+        }
+        return Stroke(stroke.brush, batch)
+    }
+
     /** Axis-aligned bounds of a stroke's input points; a zero box when it has none. */
     fun strokeBounds(stroke: Stroke): SelectionBounds {
         val scratch = StrokeInput()

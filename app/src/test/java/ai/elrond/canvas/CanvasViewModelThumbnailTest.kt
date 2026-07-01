@@ -37,7 +37,7 @@ class CanvasViewModelThumbnailTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
-        coEvery { repository.loadStrokes("page-1") } returns emptyList()
+        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
         coEvery { repository.loadAiNotes("page-1") } returns emptyList()
     }
 
@@ -75,7 +75,7 @@ class CanvasViewModelThumbnailTest {
 
     @Test
     fun `an unchanged page neither saves nor generates a thumbnail`() = runTest(dispatcher) {
-        coEvery { repository.loadStrokes("page-1") } returns listOf(CanvasStroke("a", mockk()))
+        coEvery { repository.loadStrokes(any(), any()) } returns listOf(CanvasStroke("a", mockk()))
         val vm = viewModel()
         advanceUntilIdle()
 

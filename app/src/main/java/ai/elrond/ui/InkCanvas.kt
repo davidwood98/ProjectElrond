@@ -11,8 +11,11 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.RenderNode
 import android.os.Handler
 import android.os.Looper
+import android.os.Trace
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
@@ -95,18 +98,44 @@ internal fun InkCanvas(
  * screen. Stroke-list changes still go through [setStrokes] + `invalidate()` (off Compose, so the
  * first stroke of a freshly opened page paints without waiting on a recomposition — the FA-6 fix).
  */
+/** One stroke in the dry layer's flattened draw order, with the docTop of its page. */
+private class DryDrawEntry(val docTop: Float, val cs: CanvasStroke)
+
 @SuppressLint("ViewConstructor")
 private class DryStrokesView(context: Context) : View(context) {
     private val renderer = CanvasStrokeRenderer.create()
     // Each layer's strokes are stored in that page's own page-space; the view carries the document→
     // screen transform and draws each layer translated by its (open-page-relative) docTop, so a single
     // view + GPU transform renders the whole continuous vertical document (FA-20). The matrix is
-    // reused per layer to avoid per-frame allocation.
+    // reused per entry to avoid per-frame allocation.
     private val layerMatrix = Matrix()
     private var layers: List<PageLayer> = emptyList()
     private var excludedIds: Set<String> = emptySet()
     private var viewWidthPx = 0
     private var viewHeightPx = 0
+
+    // RenderNode baking (page-fill perf). Finished strokes are recorded into [bakedNode]; onDraw replays
+    // that node (one op) plus the few strokes added since the last fold ("tail" drawn live). A new pen
+    // stroke costs O(tail), not O(all-strokes).
+    //
+    // Folding the tail in is INCREMENTAL: a new node replays the previous node (one O(1) drawRenderNode
+    // op) then records only the tail — so a fold costs O(tail), NOT O(all). (Device measurement showed a
+    // full O(N) re-record every 32 strokes was a ~70–114ms UI-thread hitch on an ~800-stroke page — the
+    // remaining stutter.) This chains the nodes; once the chain reaches [MAX_CHAIN_DEPTH], or the stroke
+    // set changes non-additively (erase / undo / lasso transform / selection / resize), it FLATTENS
+    // (records every stroke into one fresh node — the only O(N) path, now rare). Scroll/zoom never call
+    // onDraw (GPU view properties), so nothing is re-recorded then.
+    private var bakedNode = RenderNode("dryBaked")
+    private var bakedValid = false
+    private var committedEntries: List<DryDrawEntry> = emptyList()
+    private var bakedExcluded: Set<String> = emptySet()
+    private var chainDepth = 0
+
+    // Current draw order, rebuilt in setLayers (the content-change signal) instead of every onDraw, and
+    // reused by onDraw. Also lets setLayers diff against the previous list to invalidate only the new
+    // strokes' rectangle — so the RenderThread re-rasterises just that region, not the whole ~800-mesh
+    // page (the per-stroke GPU cost that still janks a dense page, worst in landscape's larger fill).
+    private var drawList: List<DryDrawEntry> = emptyList()
 
     init {
         // A plain View can skip onDraw as an optimisation; ensure it always draws our ink.
@@ -116,8 +145,14 @@ private class DryStrokesView(context: Context) : View(context) {
         pivotY = 0f
     }
 
-    /** Replace the rendered page layers (minus any lasso-selected ids) and repaint immediately. */
+    /**
+     * Replace the rendered page layers (minus any lasso-selected ids) and repaint. The draw list is
+     * built here (the content-change signal) and reused by onDraw. We rely on HWUI's own damage diff to
+     * re-rasterise only the changed ops: since [bakedNode] is an unchanged reference between folds, a
+     * new pen stroke damages only its own bounds; a fold (new node) or a non-append damages the page.
+     */
     fun setLayers(value: List<PageLayer>, excluded: Set<String>) {
+        drawList = buildDrawList(value, excluded)
         layers = value
         excludedIds = excluded
         invalidate()
@@ -138,6 +173,7 @@ private class DryStrokesView(context: Context) : View(context) {
         if (w != viewWidthPx || h != viewHeightPx) {
             viewWidthPx = w
             viewHeightPx = h
+            bakedValid = false // the node is sized to the document; re-bake at the new size
             requestLayout()
         }
     }
@@ -150,17 +186,98 @@ private class DryStrokesView(context: Context) : View(context) {
         }
     }
 
+    /** Draw order (page order × stroke order) for [value], excluding lasso-selected [excluded] ids. */
+    private fun buildDrawList(value: List<PageLayer>, excluded: Set<String>): List<DryDrawEntry> {
+        val out = ArrayList<DryDrawEntry>()
+        value.forEach { layer ->
+            layer.strokes.forEach { cs -> if (cs.id !in excluded) out.add(DryDrawEntry(layer.docTopPx, cs)) }
+        }
+        return out
+    }
+
+    /** True when [current] extends [committedEntries] with the same prefix (same stroke ref + docTop). */
+    private fun extendsBaked(current: List<DryDrawEntry>): Boolean {
+        if (!bakedValid || excludedIds != bakedExcluded || current.size < committedEntries.size) return false
+        for (i in committedEntries.indices) {
+            val b = committedEntries[i]
+            val c = current[i]
+            if (b.cs.stroke !== c.cs.stroke || b.docTop != c.docTop) return false
+        }
+        return true
+    }
+
+    private fun drawEntry(canvas: Canvas, e: DryDrawEntry) {
+        layerMatrix.setTranslate(0f, e.docTop)
+        renderer.draw(canvas = canvas, stroke = e.cs.stroke, strokeToScreenTransform = layerMatrix)
+    }
+
+    /** Records EVERY stroke into a fresh node (O(N)) — the rare path (non-additive change / deep chain). */
+    private fun flatten(entries: List<DryDrawEntry>) {
+        Trace.beginSection("DryStrokes.flatten")
+        val t0 = System.nanoTime()
+        val node = RenderNode("dryBaked")
+        node.setPosition(0, 0, viewWidthPx.coerceAtLeast(1), viewHeightPx.coerceAtLeast(1))
+        val rc = node.beginRecording()
+        try {
+            entries.forEach { drawEntry(rc, it) }
+        } finally {
+            node.endRecording()
+        }
+        bakedNode = node
+        committedEntries = entries
+        bakedExcluded = excludedIds
+        bakedValid = true
+        chainDepth = 0
+        Log.d(PERF_TAG, "flatten strokes=${entries.size} ${"%.1f".format((System.nanoTime() - t0) / 1_000_000.0)}ms")
+        Trace.endSection()
+    }
+
+    /** Folds the tail (strokes after [committedEntries]) into a new node that replays the old one (O(tail)). */
+    private fun foldTail(current: List<DryDrawEntry>) {
+        Trace.beginSection("DryStrokes.foldTail")
+        val start = committedEntries.size
+        val node = RenderNode("dryBaked")
+        node.setPosition(0, 0, viewWidthPx.coerceAtLeast(1), viewHeightPx.coerceAtLeast(1))
+        val rc = node.beginRecording()
+        try {
+            rc.drawRenderNode(bakedNode) // replay the prior chain in one op — no re-record of old strokes
+            for (i in start until current.size) drawEntry(rc, current[i])
+        } finally {
+            node.endRecording()
+        }
+        bakedNode = node
+        committedEntries = current
+        chainDepth++
+        Trace.endSection()
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        layers.forEach { layer ->
-            // The view is laid out over the whole document (local y=0 = document top). Each page draws
-            // at its absolute docTop; the view's GPU transform maps the document onto the screen.
-            layerMatrix.setTranslate(0f, layer.docTopPx)
-            layer.strokes.forEach { cs ->
-                if (cs.id in excludedIds) return@forEach
-                renderer.draw(canvas = canvas, stroke = cs.stroke, strokeToScreenTransform = layerMatrix)
+        if (viewWidthPx <= 0 || viewHeightPx <= 0) return
+        Trace.beginSection("DryStrokes.onDraw")
+        try {
+            val current = drawList
+            if (!extendsBaked(current)) {
+                flatten(current) // non-additive change (erase/undo/transform/selection/resize) or first draw
+            } else if (current.size - committedEntries.size >= FOLD_TAIL_THRESHOLD) {
+                // Enough new strokes accumulated to fold them into the node so onDraw stays O(1)+tail.
+                if (chainDepth >= MAX_CHAIN_DEPTH) flatten(current) else foldTail(current)
             }
+            canvas.drawRenderNode(bakedNode) // replays all committed strokes in one op
+            // Any not-yet-folded tail (< FOLD_TAIL_THRESHOLD) is drawn live on top.
+            for (i in committedEntries.size until current.size) drawEntry(canvas, current[i])
+        } finally {
+            Trace.endSection()
         }
+    }
+
+    private companion object {
+        /** Fold the tail into the node once it reaches this many strokes (each fold costs O(tail)). */
+        const val FOLD_TAIL_THRESHOLD = 32
+
+        /** Flatten (one O(N) record) once the incremental-fold chain gets this deep, to bound replay. */
+        const val MAX_CHAIN_DEPTH = 16
+        private const val PERF_TAG = "ElrondPerf"
     }
 }
 
@@ -374,7 +491,14 @@ private fun createTouchListener(
         if (viewModel.tool.value == CanvasTool.LASSO) return@OnTouchListener false
 
         predictor.record(event)
-        val predictedEvent = predictor.predict()
+        // Motion prediction is DISABLED: the predicted (speculative) event routinely produced points
+        // that duplicate the last real point's (position, time), which androidx.ink rejects with
+        // "Inputs must not have duplicate position and elapsed_time" (37× in one writing session on the
+        // device). Those were only speculative points — the real pen points still enqueue, so no real
+        // ink was ever lost — but it was log noise + occasional speculative flicker. Front-buffered
+        // low-latency rendering already keeps the pen-to-ink gap small, so the ~1-frame prediction is a
+        // cheap thing to drop. `record()` is kept so re-enabling is one line: `predictor.predict()`.
+        val predictedEvent: android.view.MotionEvent? = null
         try {
             val toolType = event.getToolType(event.actionIndex)
             val isFinger = toolType == MotionEvent.TOOL_TYPE_FINGER

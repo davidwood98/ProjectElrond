@@ -135,6 +135,12 @@ class CanvasViewModel(
     private val strokeTransformer: (Stroke, LiveTransform) -> Stroke = StrokeTransforms::transformStroke,
     /** Axis-aligned bounds of a stroke (lasso tool). Injected so JVM tests use a fake. */
     private val strokeBoundsOf: (Stroke) -> SelectionBounds = StrokeTransforms::strokeBounds,
+    /**
+     * Decimates a stroke's points to [STROKE_SIMPLIFY_SPACING] (cheaper meshes). Defaults to identity
+     * so JVM tests (which use mock Strokes) don't hit ink natives; the @Inject constructor supplies the
+     * real [StrokeTransforms.simplify] for production.
+     */
+    private val strokeSimplifier: (Stroke, Float) -> Stroke = { stroke, _ -> stroke },
     triggerModeFlow: Flow<TriggerMode>? = null,
     /** Prefix-mode inactivity delay (ms) before the question fires; null keeps the default. */
     prefixTriggerDelayMsFlow: Flow<Long>? = null,
@@ -180,6 +186,7 @@ class CanvasViewModel(
     private val sessionNotesTracker: SessionNotesTracker? = null,
     private val triggerDebounceMillis: Long = TRIGGER_DEBOUNCE_MILLIS,
     private val autoSaveDebounceMillis: Long = AUTOSAVE_DEBOUNCE_MILLIS,
+    private val thumbnailIdleMillis: Long = THUMBNAIL_IDLE_MILLIS,
     private val requestTimeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
 ) : ViewModel() {
 
@@ -213,6 +220,7 @@ class CanvasViewModel(
         suggestionRepository = suggestionRepository,
         pageId = savedStateHandle.get<String>("pageId"),
         enqueueExtraction = enqueueExtraction,
+        strokeSimplifier = StrokeTransforms::simplify,
         triggerCommandFlow = settings.triggerCommand,
         triggerModeFlow = settings.triggerMode,
         prefixTriggerDelayMsFlow = settings.prefixTriggerDelayMs,
@@ -538,6 +546,7 @@ class CanvasViewModel(
     @Volatile
     private var prefixNoPromptTimeoutMs: Long = SettingsRepository.DEFAULT_PREFIX_NO_PROMPT_TIMEOUT_MS
 
+
     /** Unit system the AI must use for measurements, kept in sync with settings. */
     @Volatile
     private var unitSystem: UnitSystem = UnitSystem.DEFAULT
@@ -605,7 +614,9 @@ class CanvasViewModel(
 
         if (repository != null && pageId != null) {
             viewModelScope.launch {
-                runCatching { repository.loadStrokes(pageId) }
+                // Reconstruct saved strokes at the standard point spacing (cheaper meshes). Persists
+                // when the page is next re-saved on edit; the DB isn't rewritten just by opening.
+                runCatching { repository.loadStrokes(pageId, STROKE_SIMPLIFY_SPACING) }
                     .onSuccess { loaded ->
                         if (loaded.isNotEmpty()) _finishedStrokes.value = loaded
                     }
@@ -645,6 +656,9 @@ class CanvasViewModel(
                 lastPersistedAiNotes = _aiNotes.value.filterNot { it.isError }
                 startAutoSave(repository, pageId)
             }
+            // One-time, lossless: migrate this page's legacy-JSON strokes to the compact format in the
+            // background so future opens read + parse far less (no-op once already compact).
+            viewModelScope.launch { runCatching { repository.recompactStrokes(pageId) } }
         }
     }
 
@@ -1147,13 +1161,19 @@ class CanvasViewModel(
     private fun startAutoSave(repository: NoteRepository, pageId: String) {
         viewModelScope.launch {
             _finishedStrokes.debounce(autoSaveDebounceMillis).collect { strokes ->
-                if (strokes != lastPersisted) {
-                    val saved = runCatching { repository.replaceStrokes(pageId, strokes) }.isSuccess
+                val previous = lastPersisted
+                if (strokes != previous) {
+                    // Incremental: appends only the new strokes on the pen-writing hot path; full
+                    // rewrite only when an existing stroke was removed or its geometry baked.
+                    val saved = runCatching {
+                        repository.updateStrokes(pageId, previous, strokes)
+                    }.isSuccess
                     if (saved) {
                         lastPersisted = strokes
-                        // The persisted ink changed — refresh the note-card thumbnail (reads the
-                        // freshly-saved strokes, so it runs after the write).
-                        generateThumbnail(pageId)
+                        // The persisted ink changed — the note-card thumbnail is now stale. The actual
+                        // regen runs on the separate, longer thumbnail-idle collector below (it reads
+                        // the freshly-saved strokes, so it must run after this write).
+                        thumbnailDirty = true
                         // Kick off background TODO/calendar extraction only when genuinely new
                         // pen ink was written — never for lasso edits (move/scale/duplicate/
                         // paste/…), so pasted/duplicated ink isn't re-run by the extractor.
@@ -1163,6 +1183,14 @@ class CanvasViewModel(
                         }
                     }
                 }
+            }
+        }
+        // Regenerate the note-card thumbnail on a long idle, decoupled from the stroke save so the
+        // heavy render + WebP compress never competes with the main-thread dry-layer rebuild while
+        // writing. Fires well after the autosave has persisted, so it reads current strokes.
+        viewModelScope.launch {
+            _finishedStrokes.debounce(thumbnailIdleMillis).collect {
+                if (thumbnailDirty) generateThumbnail(pageId)
             }
         }
         viewModelScope.launch {
@@ -1196,8 +1224,11 @@ class CanvasViewModel(
             if (strokes != lastPersisted || needsThumbnail) {
                 // Flush the strokes, THEN regenerate the thumbnail (it reads the just-saved strokes),
                 // so a back-press inside the autosave debounce still leaves a fresh thumbnail.
+                val previous = lastPersisted
                 flushScope.launch {
-                    if (strokes != lastPersisted) runCatching { repository.replaceStrokes(pageId, strokes) }
+                    if (strokes != previous) {
+                        runCatching { repository.updateStrokes(pageId, previous, strokes) }
+                    }
                     if (needsThumbnail && generateThumbnail != null) {
                         runCatching { generateThumbnail(pageId) }
                     }
@@ -1337,7 +1368,10 @@ class CanvasViewModel(
         clearSelection() // a fresh pen stroke isn't part of any lasso selection
         contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
         thumbnailDirty = true // ink changed — the note-card thumbnail is now stale
-        val newStrokes = strokes.map { CanvasStroke(newStrokeId(), it) }
+        // Thin the new stroke's points to the standard spacing (cheaper mesh build + redraw + storage).
+        val newStrokes = strokes.map { stroke ->
+            CanvasStroke(newStrokeId(), strokeSimplifier(stroke, STROKE_SIMPLIFY_SPACING))
+        }
         _finishedStrokes.update { current -> current + newStrokes }
 
         // Prefix `/Q`: while listening, every new stroke is part of the question — track its id and
@@ -2416,7 +2450,27 @@ class CanvasViewModel(
 
         /** Max strokes a line may have and still be scanned as a possible standalone prefix `/Q`. */
         const val MAX_PREFIX_TRIGGER_STROKES: Int = 6
-        const val AUTOSAVE_DEBOUNCE_MILLIS: Long = 800L
+        // Fires only after a gap longer than a typical sentence pause (~1–1.5s), so the save lands at
+        // paragraph breaks / genuine idle rather than between sentences. Each fire is cheap now that
+        // strokes save incrementally (see NoteRepository.updateStrokes), so the slightly larger
+        // unsaved-in-memory window is a low-risk trade.
+        const val AUTOSAVE_DEBOUNCE_MILLIS: Long = 1_500L
+
+        /**
+         * Standard stroke point spacing (page-space units) applied on capture and on load — thins
+         * dense high-rate S Pen capture (~90–130 pts/stroke) so meshes are cheaper to build, render,
+         * and store, at a fidelity chosen to stay visually clean. Persisted when a page is re-saved.
+         */
+        const val STROKE_SIMPLIFY_SPACING: Float = 0.5f
+
+        /**
+         * Thumbnail regen runs on its own, much longer idle than the stroke save: the note-card
+         * thumbnail is only seen back in the browser, so rendering + WebP-compressing it on every
+         * autosave is wasted mid-writing work. This fires well after writing has stopped (and after
+         * the autosave has persisted the strokes it reads). onCleared still flushes a fresh thumbnail
+         * on page close so leaving early never strands a stale card.
+         */
+        const val THUMBNAIL_IDLE_MILLIS: Long = 4_000L
         const val REQUEST_TIMEOUT_MILLIS: Long = 15_000L
         const val MAX_HISTORY: Int = 50
 
