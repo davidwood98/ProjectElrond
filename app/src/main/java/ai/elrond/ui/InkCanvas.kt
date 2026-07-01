@@ -491,7 +491,14 @@ private fun createTouchListener(
         if (viewModel.tool.value == CanvasTool.LASSO) return@OnTouchListener false
 
         predictor.record(event)
-        val predictedEvent = predictor.predict()
+        // Motion prediction is DISABLED: the predicted (speculative) event routinely produced points
+        // that duplicate the last real point's (position, time), which androidx.ink rejects with
+        // "Inputs must not have duplicate position and elapsed_time" (37× in one writing session on the
+        // device). Those were only speculative points — the real pen points still enqueue, so no real
+        // ink was ever lost — but it was log noise + occasional speculative flicker. Front-buffered
+        // low-latency rendering already keeps the pen-to-ink gap small, so the ~1-frame prediction is a
+        // cheap thing to drop. `record()` is kept so re-enabling is one line: `predictor.predict()`.
+        val predictedEvent: android.view.MotionEvent? = null
         try {
             val toolType = event.getToolType(event.actionIndex)
             val isFinger = toolType == MotionEvent.TOOL_TYPE_FINGER
