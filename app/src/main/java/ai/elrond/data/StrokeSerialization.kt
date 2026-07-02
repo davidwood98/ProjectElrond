@@ -82,13 +82,24 @@ object StrokeSerialization {
             val keep = StrokeSimplifier.keptIndices(points.map { it.x to it.y }, minSpacing)
             points = keep.map { points[it] }
         }
+        val brush = Brush.createWithColorIntArgb(
+            family = familyFromKey(entity.brushFamily),
+            colorIntArgb = entity.colorArgb,
+            size = entity.brushSize,
+            epsilon = entity.brushEpsilon,
+        )
+        return Stroke(brush, inkBatchFrom(points))
+    }
+
+    /**
+     * The ONE place stored points become an ink input batch. ink 1.0.0's `add` throws on a point
+     * invalid relative to the batch (no skip-invalid variant exists), so the points are sanitized
+     * first — after [StrokeInputSanitizer] a throw means a genuine bug, not bad stored data.
+     */
+    private fun inkBatchFrom(points: List<SerializedStrokeInput>): MutableStrokeInputBatch {
         val batch = MutableStrokeInputBatch()
-        points.forEach { p ->
-            // addOrIgnore skips a point that would be invalid relative to the batch (e.g. a
-            // non-increasing timestamp) instead of throwing, so a reloaded stroke keeps every
-            // valid point. (FA-8: ink 1.0.0's add() threw on those points and collapsed reloaded
-            // strokes to a single dot — see CLAUDE.md; pinned back to 1.0.0-alpha04.)
-            batch.addOrIgnore(
+        StrokeInputSanitizer.sanitize(points).forEach { p ->
+            batch.add(
                 type = toolFromKey(p.tool),
                 x = p.x,
                 y = p.y,
@@ -98,13 +109,7 @@ object StrokeSerialization {
                 orientationRadians = p.orientation,
             )
         }
-        val brush = Brush.createWithColorIntArgb(
-            family = familyFromKey(entity.brushFamily),
-            colorIntArgb = entity.colorArgb,
-            size = entity.brushSize,
-            epsilon = entity.brushEpsilon,
-        )
-        return Stroke(brush, batch)
+        return batch
     }
 
     /** Raw (x, y) polyline from a stored stroke — for thumbnails; no ink natives. */
@@ -182,15 +187,15 @@ object StrokeSerialization {
     }
 
     private fun familyKey(family: BrushFamily): String = when (family) {
-        StockBrushes.markerLatest -> FAMILY_MARKER
-        StockBrushes.highlighterLatest -> FAMILY_HIGHLIGHTER
+        StockBrushes.marker() -> FAMILY_MARKER
+        StockBrushes.highlighter() -> FAMILY_HIGHLIGHTER
         else -> FAMILY_PRESSURE_PEN
     }
 
     private fun familyFromKey(key: String): BrushFamily = when (key) {
-        FAMILY_MARKER -> StockBrushes.markerLatest
-        FAMILY_HIGHLIGHTER -> StockBrushes.highlighterLatest
-        else -> StockBrushes.pressurePenLatest
+        FAMILY_MARKER -> StockBrushes.marker()
+        FAMILY_HIGHLIGHTER -> StockBrushes.highlighter()
+        else -> StockBrushes.pressurePen()
     }
 
     private fun toolKey(type: InputToolType): String = when (type) {

@@ -24,6 +24,8 @@ import org.junit.runner.RunWith
  *
  * The regression (ink 1.0.0's `add` throwing where alpha04's `addOrIgnore` skipped) collapsed every
  * reloaded multi-point stroke down to a single dot. The size assertion below fails exactly that case.
+ * Since the FA-23 upgrade to ink 1.0.0 the load path relies on [StrokeInputSanitizer], so the
+ * adversarial fixtures here are the merge gate: stored garbage must reconstruct without throwing.
  */
 @RunWith(AndroidJUnit4::class)
 class StrokeSerializationInstrumentedTest {
@@ -107,11 +109,52 @@ class StrokeSerializationInstrumentedTest {
         }
     }
 
+    /**
+     * FA-23 (ink 1.0.0) merge gate: adversarial stored payloads — duplicate and decreasing
+     * timestamps, NaN coords, out-of-range pressure — must reconstruct via the sanitizer without
+     * throwing and without collapsing to a dot.
+     */
+    @Test
+    fun adversarialStoredPoints_reconstructSanitized() {
+        val dirty = listOf(
+            SerializedStrokeInput(x = 10f, y = 10f, t = 0L, pressure = 0.5f, tilt = 0.1f, orientation = 0.2f),
+            SerializedStrokeInput(x = 20f, y = 18f, t = 0L, pressure = 0.5f, tilt = 0.1f, orientation = 0.2f), // dup t
+            SerializedStrokeInput(x = 35f, y = 30f, t = -5L, pressure = 1.7f, tilt = 0.1f, orientation = 0.2f), // decreasing t, bad pressure
+            SerializedStrokeInput(x = Float.NaN, y = 40f, t = 30L, pressure = 0.5f, tilt = 0.1f, orientation = 0.2f), // NaN x — dropped
+            SerializedStrokeInput(x = 52f, y = 41f, t = 30L, pressure = -0.5f, tilt = 9f, orientation = -3f),
+            SerializedStrokeInput(x = 70f, y = 49f, t = 40L, pressure = 0.9f, tilt = 0.1f, orientation = 0.2f),
+        )
+        val entity = StrokeEntity(
+            id = "dirty-1",
+            pageId = "page-1",
+            brushFamily = "pressure-pen",
+            colorArgb = USER_INK_COLOR,
+            brushSize = 5f,
+            brushEpsilon = 0.1f,
+            inputs = StrokeSerialization.encodeInputs(dirty),
+            createdAt = 0L,
+            isAiInk = false,
+            groupId = null,
+        )
+
+        val restored = StrokeSerialization.toStroke(entity) // must not throw
+
+        // 5 finite points survive (the NaN one is dropped); no collapse-to-dot.
+        assertEquals(5, restored.inputs.size)
+        val scratch = StrokeInput()
+        var prevT = Long.MIN_VALUE
+        for (i in 0 until restored.inputs.size) {
+            restored.inputs.populate(i, scratch)
+            assertTrue("timestamps must be strictly increasing", scratch.elapsedTimeMillis > prevT)
+            prevT = scratch.elapsedTimeMillis
+        }
+    }
+
     /** Builds a real ink [Stroke] from a list of (x, y) points with strictly-increasing timestamps. */
     private fun buildStroke(points: List<Pair<Float, Float>>): Stroke {
         val batch = MutableStrokeInputBatch()
         points.forEachIndexed { index, (x, y) ->
-            batch.addOrIgnore(
+            batch.add(
                 type = InputToolType.STYLUS,
                 x = x,
                 y = y,
@@ -122,7 +165,7 @@ class StrokeSerializationInstrumentedTest {
             )
         }
         val brush = Brush.createWithColorIntArgb(
-            family = StockBrushes.pressurePenLatest,
+            family = StockBrushes.pressurePen(),
             colorIntArgb = USER_INK_COLOR,
             size = 5f,
             epsilon = 0.1f,

@@ -114,7 +114,7 @@ class SelectionStrokesRenderTest {
     private fun buildStroke(): Stroke {
         val batch = MutableStrokeInputBatch()
         POINTS.forEachIndexed { i, (x, y) ->
-            batch.addOrIgnore(
+            batch.add(
                 type = InputToolType.STYLUS,
                 x = x,
                 y = y,
@@ -125,7 +125,7 @@ class SelectionStrokesRenderTest {
             )
         }
         val brush = Brush.createWithColorIntArgb(
-            family = StockBrushes.pressurePenLatest,
+            family = StockBrushes.pressurePen(),
             colorIntArgb = INK_COLOR,
             size = 6f,
             epsilon = 0.1f,

@@ -9,8 +9,9 @@ import androidx.ink.strokes.StrokeInput
  * Ink-native stroke transforms for the lasso tool: move / scale, clone (duplicate & paste), and
  * per-stroke bounds. Mirrors [ai.elrond.data.StrokeSerialization.toStroke] — an immutable [Stroke]
  * is "transformed" by reading its inputs, remapping x/y, and rebuilding a new `Stroke` from a
- * fresh [MutableStrokeInputBatch] (scaling the brush size with the geometry). `addOrIgnore` keeps
- * skip-invalid behaviour, matching the persistence path (see CLAUDE.md FA-7/8).
+ * fresh [MutableStrokeInputBatch] (scaling the brush size with the geometry). Inputs come from a
+ * live stroke, so they're already valid for `add` (ink 1.0.0 removed `addOrIgnore`); only the
+ * persistence path needs sanitising (see `StrokeInputSanitizer` / CLAUDE.md FA-7/8).
  *
  * These touch ink natives, so they're injected into [CanvasViewModel] as seams (JVM unit tests use
  * fakes) and verified on-device by `StrokeTransformsInstrumentedTest`.
@@ -24,7 +25,7 @@ object StrokeTransforms {
         val scratch = StrokeInput()
         for (i in 0 until stroke.inputs.size) {
             stroke.inputs.populate(i, scratch)
-            batch.addOrIgnore(
+            batch.add(
                 type = scratch.toolType,
                 x = t.applyX(scratch.x),
                 y = t.applyY(scratch.y),
@@ -91,7 +92,7 @@ object StrokeTransforms {
         val batch = MutableStrokeInputBatch()
         for (i in keep) {
             stroke.inputs.populate(i, scratch)
-            batch.addOrIgnore(
+            batch.add(
                 type = scratch.toolType,
                 x = scratch.x,
                 y = scratch.y,
