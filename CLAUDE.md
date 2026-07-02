@@ -1631,8 +1631,9 @@ ink in ~0.2s instead of ~2–3.5s**. All FA-22 instrumented tests pass on-device
 reconstruction test). The same session measured the **flatten cost curve** (`ElrondPerf`): ~10ms @
 100 strokes, ~25ms @ 300, ~50ms @ 1,000 — linear, one flatten per destructive/selection mutation on
 the UI thread. Normal writing is unaffected (appends fold at O(tail)), but a dense-page eraser drag
-repeats that cost per clipped stroke — **the trigger to pull the segmented/chunked bake forward**
-(same structure FA-20 multi-page + viewport culling want) **once dense-page erase feels bad**.
+repeats that cost per clipped stroke. **Erase was device-tested on the 1,003-stroke page and feels
+fine** (2026-07-02), so the segmented/chunked bake is **parked** — revisit if pages grow well past
+~1,000 strokes or when FA-20 multi-page needs the same structure (per-page nodes + viewport culling).
 
 - **Stroke storage finished: `strokes.inputsJson TEXT` → `strokes.inputs BLOB` (v16).** The compact
   binary points now store raw (25 bytes/point, no Base64 text layer — ~25% smaller rows, no
