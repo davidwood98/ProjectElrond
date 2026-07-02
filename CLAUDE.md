@@ -1623,8 +1623,16 @@ A code audit first confirmed that doc's Fix 1 (RenderNode incremental bake) and 
 autosave, 1.5s debounce) were **already delivered** by the merged `perf-stroke-fill-degradation` PR —
 so FA-22 targets what remained. **DB is now v16** (`MIGRATION_15_16`). **381 app + 24 aibackend
 JVM/Robolectric tests pass** (0 failures; was 378+24); `:app:assembleDebug` +
-`:app:assembleDebugAndroidTest` build on the WSL Linux SDK. The progressive-render feel and the
-parallel ink-native reconstruction are **device-verify pending** (new instrumented test below).
+`:app:assembleDebugAndroidTest` build on the WSL Linux SDK. **Device-confirmed on a Galaxy Tab S
+(SM-X510, 2026-07-02):** the v15→v16 migration ran clean on real data, and reopening a
+**1,003-stroke page** logged `query=113ms firstChunk=86ms reconstruct=219ms` — vs the pre-FA-22
+baseline of ~0.4–0.6s query + 1.5–2.9s *sequential* reconstruct on a 793-stroke page, i.e. **first
+ink in ~0.2s instead of ~2–3.5s**. All FA-22 instrumented tests pass on-device (incl. the parallel
+reconstruction test). The same session measured the **flatten cost curve** (`ElrondPerf`): ~10ms @
+100 strokes, ~25ms @ 300, ~50ms @ 1,000 — linear, one flatten per destructive/selection mutation on
+the UI thread. Normal writing is unaffected (appends fold at O(tail)), but a dense-page eraser drag
+repeats that cost per clipped stroke — **the trigger to pull the segmented/chunked bake forward**
+(same structure FA-20 multi-page + viewport culling want) **once dense-page erase feels bad**.
 
 - **Stroke storage finished: `strokes.inputsJson TEXT` → `strokes.inputs BLOB` (v16).** The compact
   binary points now store raw (25 bytes/point, no Base64 text layer — ~25% smaller rows, no
