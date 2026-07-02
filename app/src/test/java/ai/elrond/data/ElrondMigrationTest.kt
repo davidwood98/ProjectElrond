@@ -42,6 +42,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_12_13,
         ElrondDatabase.MIGRATION_13_14,
         ElrondDatabase.MIGRATION_14_15,
+        ElrondDatabase.MIGRATION_15_16,
     )
 
     /**
@@ -65,11 +66,62 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v15_and_validates_final_schema() {
+    fun migrates_v1_to_v16_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v15 schema (FA-21 adds
-        // ai_notes.fontScale on top of the FA-20 notebook/page columns).
-        helper.runMigrationsAndValidate(TEST_DB, 15, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v16 schema (FA-22 rebuilds
+        // strokes with the binary inputs BLOB on top of FA-21's ai_notes.fontScale).
+        helper.runMigrationsAndValidate(TEST_DB, 16, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_15_to_16_converts_both_stored_text_formats_to_the_inputs_blob() {
+        val points = listOf(
+            SerializedStrokeInput(x = 100f, y = 200f, t = 0, pressure = 1f, tilt = 0f, orientation = 0f, tool = "stylus"),
+            SerializedStrokeInput(x = 300f, y = 200f, t = 16, pressure = 0.5f, tilt = 0.1f, orientation = 0.2f, tool = "stylus"),
+        )
+        // The two pre-v16 stored TEXT forms of the same points: the original JSON array and the
+        // Base64-wrapped binary packing.
+        val legacyJson =
+            """[{"x":100.0,"y":200.0,"t":0,"pressure":1.0,"tilt":0.0,"orientation":0.0,"tool":"stylus"},""" +
+                """{"x":300.0,"y":200.0,"t":16,"pressure":0.5,"tilt":0.1,"orientation":0.2,"tool":"stylus"}]"""
+        val base64Compact = java.util.Base64.getEncoder()
+            .encodeToString(StrokeSerialization.encodeInputs(points))
+
+        helper.createDatabase(TEST_DB, 15).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt, modifiedAt) VALUES ('nb1', 'N', 1, 1)")
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, " +
+                    "lastOpenedAt, tags, contextSummary, pageNumber, isBookmarked) " +
+                    "VALUES ('p1', 'nb1', NULL, 1, 1, 1, '', NULL, 1, 0)",
+            )
+            execSQL(
+                "INSERT INTO strokes (id, pageId, brushFamily, colorArgb, brushSize, brushEpsilon, " +
+                    "inputsJson, createdAt, isAiInk, groupId) " +
+                    "VALUES ('legacy', 'p1', 'pressure-pen', 0, 4.0, 0.1, '$legacyJson', 1, 0, NULL)",
+            )
+            execSQL(
+                "INSERT INTO strokes (id, pageId, brushFamily, colorArgb, brushSize, brushEpsilon, " +
+                    "inputsJson, createdAt, isAiInk, groupId) " +
+                    "VALUES ('compact', 'p1', 'pressure-pen', 0, 4.0, 0.1, '$base64Compact', 2, 0, 'g1')",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 16, true, *allMigrations)
+        val decodedById = mutableMapOf<String, List<SerializedStrokeInput>>()
+        var migratedGroupId: String? = null
+        db.query("SELECT id, inputs, groupId FROM strokes").use { c ->
+            while (c.moveToNext()) {
+                decodedById[c.getString(0)] = StrokeSerialization.decodeInputs(c.getBlob(1))
+                if (c.getString(0) == "compact") migratedGroupId = c.getString(2)
+            }
+        }
+        db.close()
+
+        // Both old formats decode to the same points from the new BLOB — nothing lost.
+        assertEquals(points, decodedById["legacy"])
+        assertEquals(points, decodedById["compact"])
+        assertEquals("g1", migratedGroupId) // the other columns carry over
     }
 
     @Test

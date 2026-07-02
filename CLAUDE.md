@@ -6,6 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Project Elrond** is an AI-first handwriting note-taking app for Android tablets (primary target: Samsung Galaxy Tab S series with S Pen). Handwritten notes are the primary input; an embedded AI assistant reads handwritten content and acts on it (TODO extraction, calendar entries, organisation, Q&A).
 
+## Rules
+
+Always use canvas application best practices when developing. 
+Android optimisation and SDK simplication, storage reduction and task repetition should always be minimised where possible.
+Examples:
+-The best code for a performance-critical path is less code
+-Write the instrumented test before you claim the fix works. 
+-Your storage format is part of your architecture.
+-The main thread is for UI decisions, not work.
+-Distinguish additive from destructive operations.
+
 ## Build Commands
 
 ```bash
@@ -1605,6 +1616,70 @@ Two small post-merge fixes on `main`, both device-verified on a Galaxy Tab S; Co
   erases ink under the box). Raw-`MotionEvent` touch-listener change, so device/manual-verified like
   the other ink flows (no JVM test path).
 
+## FA-22 — storage format finish + progressive page load + AI semantic-layer design (2026-07-01)
+
+Architecture-optimisation pass on branch **FA-22**, scoped against `canvas-rendering-architecture.md`.
+A code audit first confirmed that doc's Fix 1 (RenderNode incremental bake) and Fix 2 (append-only
+autosave, 1.5s debounce) were **already delivered** by the merged `perf-stroke-fill-degradation` PR —
+so FA-22 targets what remained. **DB is now v16** (`MIGRATION_15_16`). **381 app + 24 aibackend
+JVM/Robolectric tests pass** (0 failures; was 378+24); `:app:assembleDebug` +
+`:app:assembleDebugAndroidTest` build on the WSL Linux SDK. **Device-confirmed on a Galaxy Tab S
+(SM-X510, 2026-07-02):** the v15→v16 migration ran clean on real data, and reopening a
+**1,003-stroke page** logged `query=113ms firstChunk=86ms reconstruct=219ms` — vs the pre-FA-22
+baseline of ~0.4–0.6s query + 1.5–2.9s *sequential* reconstruct on a 793-stroke page, i.e. **first
+ink in ~0.2s instead of ~2–3.5s**. All FA-22 instrumented tests pass on-device (incl. the parallel
+reconstruction test). The same session measured the **flatten cost curve** (`ElrondPerf`): ~10ms @
+100 strokes, ~25ms @ 300, ~50ms @ 1,000 — linear, one flatten per destructive/selection mutation on
+the UI thread. Normal writing is unaffected (appends fold at O(tail)), but a dense-page eraser drag
+repeats that cost per clipped stroke. **Erase was device-tested on the 1,003-stroke page and feels
+fine** (2026-07-02), so the segmented/chunked bake is **parked** — revisit if pages grow well past
+~1,000 strokes or when FA-20 multi-page needs the same structure (per-page nodes + viewport culling).
+
+- **Stroke storage finished: `strokes.inputsJson TEXT` → `strokes.inputs BLOB` (v16).** The compact
+  binary points now store raw (25 bytes/point, no Base64 text layer — ~25% smaller rows, no
+  encode/decode per save/load). `MIGRATION_15_16` rebuilds the table and converts **every existing
+  row** — Base64-compact rows decode straight to bytes; pre-compact legacy-JSON rows parse + pack —
+  via `StrokeSerialization.storedTextToBlob` (frozen formats, migration-only), row-by-row with a
+  compiled statement so a large DB migrates without holding all strokes in memory. Because the
+  migration converts everything, the legacy-JSON decode branch, `NoteRepository.recompactStrokes`
+  (the on-open migration), and its three `StrokeDao` helpers were **deleted** — less code on the
+  hot path. `StrokeEntity` overrides equals/hashCode (`ByteArray` needs content equality).
+- **`ElrondPerf` instrumentation gated to debug builds** (`NoteRepository.perfLog` lazy-message
+  helper + a `BuildConfig.DEBUG` guard on the `InkCanvas` flatten log) — release builds skip the
+  logging and the string formatting.
+- **Progressive + parallel page load** (the audit's biggest remaining user-facing cost: ~0.5s query
+  + 1.5–2.9s sequential mesh rebuild on a dense page before any ink appeared).
+  `NoteRepository.loadStrokesProgressive(pageId, spacing, chunkSize=64)` emits reconstructed
+  strokes as ordered chunks; chunks are **built in parallel** across `Dispatchers.Default` workers
+  and **emitted in stroke order**. `loadStrokes` is reimplemented on top (ExtractionWorker
+  unchanged). `CanvasViewModel` collects chunks and **inserts them at the loaded prefix** (never
+  assigns) — which also fixes a pre-existing bug where a stroke drawn during the load window was
+  silently clobbered by the atomic `_finishedStrokes.value = loaded`. Safety around partial loads:
+  `lastPersisted` accumulates per chunk (so a mid-load exit flush can never re-insert
+  already-persisted rows) and the undo/redo stacks are cleared while chunks land (an undo to a
+  partially-loaded page would delete the not-yet-loaded ink from the DB). The layer-rebuild
+  collector now starts **before** the load so each chunk renders as it arrives (the dry layer's
+  incremental fold absorbs chunk-sized appends).
+- **New instrumented test** `parallelChunkedReconstruction_isLosslessAndOrdered`
+  (StrokeSerializationInstrumentedTest) — 200 strokes rebuilt in parallel 16-stroke chunks, asserts
+  order + zero point loss; mirrors the repository's exact fan-out (concurrent ink-native mesh
+  construction is the one thing JVM tests can't see). Run via `connectedDebugAndroidTest`.
+- **AI semantic layer — designed, not yet implemented: see `ai-semantic-layer-design.md`.** Audit
+  finding: no recognition result is ever reused — `ExtractionWorker` re-recognizes the whole page
+  on every autosave and every `/Q` re-recognizes all context lines pre-network. The doc proposes a
+  `recognized_lines` cache (DB v17, keyed by ordered stroke-id sets so invalidation is automatic),
+  cache-fed extraction + `/Q` context (full page context retained), and an extraction skip-gate
+  that avoids redundant Anthropic calls. Implementation is a follow-up FA batch.
+- New/updated tests: `ElrondMigrationTest` (chain → **v16** + a both-formats data-conversion test),
+  `SerializedStrokeInputTest` (ByteArray round-trip, `storedTextToBlob`, empty payloads),
+  `NoteRepositoryTest` (+progressive chunk order/flatten, empty page),
+  `CanvasViewModelPersistenceTest` (+mid-load stroke preserved, history dropped, first autosave
+  appends only the user stroke); the `loadStrokes` stubs across 4 VM test files became
+  `loadStrokesProgressive` flow stubs.
+
+`canvas-rendering-architecture.md` is retained as the investigation record; its three fixes are all
+now implemented (1–2 pre-FA-22, 3 completed here).
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
@@ -1688,7 +1763,7 @@ discipline.)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v15** — most recently `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v16** — most recently `strokes.inputs` became a raw binary BLOB in `MIGRATION_15_16` (FA-22 storage-format finish); `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
 - **Outlook Azure app registration — required final step before release.** FA-11's Outlook integration is fully coded but ships **inert** until an Azure app is registered and `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` are set (see *Outlook / Microsoft Graph OAuth setup*). This is intentionally deferred to a final pre-release task; until done, Outlook stays NotConfigured and the calendar falls back to the device provider (not a bug). Pairs with the Anthropic-key release blocker above.

@@ -1,5 +1,6 @@
 package ai.elrond.data
 
+import ai.elrond.BuildConfig
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.CanvasStroke
 import android.util.Log
@@ -17,7 +18,9 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -254,11 +257,11 @@ class NoteRepository(
         when {
             removed || changed -> {
                 // Full re-serialize + DELETE-all + INSERT-all of every stroke (the expensive path).
-                Log.d(PERF_TAG, "updateStrokes FULL rewrite strokes=${current.size} removed=$removed changed=$changed")
+                perfLog { "updateStrokes FULL rewrite strokes=${current.size} removed=$removed changed=$changed" }
                 replaceStrokes(pageId, current, isAiInk)
             }
             added.isNotEmpty() -> {
-                Log.d(PERF_TAG, "updateStrokes append=${added.size} (page total=${current.size})")
+                perfLog { "updateStrokes append=${added.size} (page total=${current.size})" }
                 saveStrokes(pageId, added, isAiInk)
             }
             // else: same ids, same stroke refs (e.g. a reorder) — nothing to persist.
@@ -266,28 +269,46 @@ class NoteRepository(
     }
 
     /**
-     * Loads and reconstructs a page's strokes. [simplifySpacing] > 0 decimates each stroke's points to
-     * that page-space spacing IN MEMORY (debug perf knob) — the stored rows are never rewritten.
+     * Loads and reconstructs a page's strokes as ordered chunks, so the canvas can render ink as it
+     * arrives instead of waiting the full mesh-reconstruction time of a dense page (seconds). The
+     * chunks are BUILT in parallel across [Dispatchers.Default] workers (mesh regeneration is pure
+     * CPU work on independent strokes) but EMITTED in stroke order, so drawing order is identical
+     * to an atomic load. [simplifySpacing] > 0 decimates each stroke's points to that page-space
+     * spacing IN MEMORY — the stored rows are never rewritten.
      */
-    suspend fun loadStrokes(pageId: String, simplifySpacing: Float = 0f): List<CanvasStroke> {
+    fun loadStrokesProgressive(
+        pageId: String,
+        simplifySpacing: Float = 0f,
+        chunkSize: Int = LOAD_CHUNK_SIZE,
+    ): Flow<List<CanvasStroke>> = channelFlow {
         val queryStart = System.nanoTime()
         val rows = strokeDao.getForPage(pageId)
         val queryMs = (System.nanoTime() - queryStart) / 1_000_000.0
-        // Rebuilding each stroke's ink mesh (Stroke(brush, batch)) is heavy CPU work — a full page is
-        // hundreds of strokes / >100k points. The suspend DAO query resumes on the caller's Main
-        // dispatcher (viewModelScope), so without this hop the whole reconstruction blocks the UI
-        // thread on open (the 800–1000ms freeze on a dense page). Mirrors replaceStrokes/loadStrokePreview.
-        val buildStart = System.nanoTime()
-        val result = withContext(Dispatchers.Default) {
-            rows.map { StrokeSerialization.toCanvasStroke(it, simplifySpacing) }
+        if (rows.isEmpty()) {
+            perfLog { "loadStrokes page=$pageId strokes=0 query=${"%.1f".format(queryMs)}ms" }
+            return@channelFlow
         }
-        val buildMs = (System.nanoTime() - buildStart) / 1_000_000.0
-        Log.d(
-            PERF_TAG,
+        val buildStart = System.nanoTime()
+        val built = rows.chunked(chunkSize).map { chunk ->
+            async(Dispatchers.Default) { chunk.map { StrokeSerialization.toCanvasStroke(it, simplifySpacing) } }
+        }
+        var firstChunkMs = -1.0
+        for (deferred in built) {
+            send(deferred.await())
+            if (firstChunkMs < 0) firstChunkMs = (System.nanoTime() - buildStart) / 1_000_000.0
+        }
+        perfLog {
             "loadStrokes page=$pageId strokes=${rows.size} simplify=$simplifySpacing " +
-                "query=${"%.1f".format(queryMs)}ms reconstruct=${"%.1f".format(buildMs)}ms",
-        )
-        return result
+                "query=${"%.1f".format(queryMs)}ms firstChunk=${"%.1f".format(firstChunkMs)}ms " +
+                "reconstruct=${"%.1f".format((System.nanoTime() - buildStart) / 1_000_000.0)}ms"
+        }
+    }
+
+    /** Atomic form of [loadStrokesProgressive] — for callers that need the whole page at once. */
+    suspend fun loadStrokes(pageId: String, simplifySpacing: Float = 0f): List<CanvasStroke> {
+        val out = ArrayList<CanvasStroke>()
+        loadStrokesProgressive(pageId, simplifySpacing).collect { out.addAll(it) }
+        return out
     }
 
     /** Atomically rewrites the page's strokes — canvas auto-save (handles erase/undo/lasso too). */
@@ -326,27 +347,9 @@ class NoteRepository(
         // Decode + normalize off the caller's thread — the note browser fetches previews from a
         // Compose produceState (Main) for every card; keep that work off the main thread.
         return withContext(Dispatchers.Default) {
-            val polylines = rows.take(maxStrokes).map { StrokeSerialization.decodePoints(it.inputsJson) }
+            val polylines = rows.take(maxStrokes).map { StrokeSerialization.decodePoints(it.inputs) }
             StrokePreviewNormalizer.normalize(polylines)
         }
-    }
-
-    /**
-     * One-time lossless migration: if a page still holds legacy-JSON stroke points, re-encode them to
-     * the compact format so future loads read + parse ~3× less. Points are unchanged (not simplified).
-     * A cheap 1-row probe skips pages already compact, so this is safe to call on every open. Per-id
-     * UPDATEs (never delete+insert), so a stroke drawn/erased concurrently is never clobbered.
-     */
-    suspend fun recompactStrokes(pageId: String) {
-        val probe = strokeDao.firstInputs(pageId) ?: return
-        if (probe.isEmpty() || probe[0] != '[') return // already compact (or empty page)
-        val rows = strokeDao.getForPage(pageId)
-        val updates = withContext(Dispatchers.Default) {
-            rows.mapNotNull { row -> StrokeSerialization.recompactIfLegacy(row.inputsJson)?.let { row.id to it } }
-        }
-        if (updates.isEmpty()) return
-        strokeDao.updateInputsBatch(updates)
-        Log.d(PERF_TAG, "recompacted page=$pageId rows=${updates.size} (was legacy JSON)")
     }
 
     suspend fun clearStrokes(pageId: String) {
@@ -387,7 +390,15 @@ class NoteRepository(
         const val DEFAULT_NOTEBOOK_NAME = "My Notes"
         const val PREVIEW_MAX_STROKES = 60
 
-        /** logcat tag for the stroke-perf instrumentation (filter: `adb logcat -s ElrondPerf`). */
-        private const val PERF_TAG = "ElrondPerf"
+        /** Strokes per progressive-load chunk — one parallel mesh-build work unit / render batch. */
+        const val LOAD_CHUNK_SIZE = 64
+
+        /**
+         * Stroke-perf instrumentation, debug builds only (filter: `adb logcat -s ElrondPerf`).
+         * Lazy message lambda so release builds skip the string work too.
+         */
+        internal inline fun perfLog(message: () -> String) {
+            if (BuildConfig.DEBUG) Log.d("ElrondPerf", message())
+        }
     }
 }

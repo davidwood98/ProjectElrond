@@ -118,8 +118,13 @@ class LibraryScreenTest {
     @Test
     fun long_press_then_confirm_deletes_a_note() {
         runBlocking {
-            val notebook = repository.ensureDefaultNotebook()
-            repository.createPage(notebook.id, customTitle = "Test Note")
+            // FA-20 model: every note is its own blank-named notebook, and the browser card's
+            // title is the NOTEBOOK name when set, falling back to the cover page's title only
+            // when the name is blank — so create the note the way the app does. (Planting a
+            // titled page inside ensureDefaultNotebook() rendered a "My Notes" card, and this
+            // test timed out waiting for a "Test Note" title that could never appear.)
+            val page = repository.createNote()
+            repository.renamePage(page.id, "Test Note")
         }
         setLibrary()
 

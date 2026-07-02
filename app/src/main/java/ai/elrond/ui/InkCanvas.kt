@@ -1,5 +1,6 @@
 package ai.elrond.ui
 
+import ai.elrond.BuildConfig
 import ai.elrond.domain.PalmRejection
 import ai.elrond.domain.PageLayer
 import ai.elrond.domain.PageTransform
@@ -228,7 +229,9 @@ private class DryStrokesView(context: Context) : View(context) {
         bakedExcluded = excludedIds
         bakedValid = true
         chainDepth = 0
-        Log.d(PERF_TAG, "flatten strokes=${entries.size} ${"%.1f".format((System.nanoTime() - t0) / 1_000_000.0)}ms")
+        if (BuildConfig.DEBUG) {
+            Log.d(PERF_TAG, "flatten strokes=${entries.size} ${"%.1f".format((System.nanoTime() - t0) / 1_000_000.0)}ms")
+        }
         Trace.endSection()
     }
 

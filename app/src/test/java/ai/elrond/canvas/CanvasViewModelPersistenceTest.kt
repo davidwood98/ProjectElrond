@@ -5,6 +5,11 @@ import ai.elrond.domain.CanvasStroke
 import ai.elrond.data.NoteRepository
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
+import io.mockk.every
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
@@ -44,7 +49,7 @@ class CanvasViewModelPersistenceTest {
     @Test
     fun `saved strokes are loaded when the note opens`() = runTest(dispatcher) {
         val saved = listOf(CanvasStroke("a", mockk()), CanvasStroke("b", mockk()))
-        coEvery { repository.loadStrokes(any(), any()) } returns saved
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns flowOf(saved)
 
         val viewModel = viewModel()
         advanceUntilIdle()
@@ -54,7 +59,7 @@ class CanvasViewModelPersistenceTest {
 
     @Test
     fun `new strokes are auto-saved after the debounce`() = runTest(dispatcher) {
-        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns emptyFlow()
         val viewModel = viewModel()
         advanceUntilIdle()
 
@@ -72,7 +77,7 @@ class CanvasViewModelPersistenceTest {
 
     @Test
     fun `undo back to the loaded state is also persisted`() = runTest(dispatcher) {
-        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns emptyFlow()
         val viewModel = viewModel()
         advanceUntilIdle()
 
@@ -88,7 +93,7 @@ class CanvasViewModelPersistenceTest {
     @Test
     fun `saved AI response notes are restored when the note opens`() = runTest(dispatcher) {
         val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
-        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns emptyFlow()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
 
         val viewModel = viewModel()
@@ -100,7 +105,7 @@ class CanvasViewModelPersistenceTest {
     @Test
     fun `moving a selected AI note via a committed transform auto-saves it`() = runTest(dispatcher) {
         val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
-        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns emptyFlow()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
         val viewModel = viewModel()
         advanceUntilIdle()
@@ -117,7 +122,7 @@ class CanvasViewModelPersistenceTest {
     @Test
     fun `reflowing an AI note auto-saves the new width`() = runTest(dispatcher) {
         val note = ai.elrond.domain.AiInkNote(id = "n1", text = "answer", x = 0f, y = 0f, widthPx = 300f)
-        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns emptyFlow()
         coEvery { repository.loadAiNotes("page-1") } returns listOf(note)
         val viewModel = viewModel()
         advanceUntilIdle()
@@ -133,9 +138,43 @@ class CanvasViewModelPersistenceTest {
     }
 
     @Test
+    fun `a stroke drawn while the page is still loading is preserved and appended by autosave`() = runTest(dispatcher) {
+        val chunk1 = listOf(CanvasStroke("a", mockk()))
+        val chunk2 = listOf(CanvasStroke("b", mockk()))
+        val gate = Channel<Unit>()
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns flow {
+            emit(chunk1)
+            gate.receive()
+            emit(chunk2)
+        }
+        val viewModel = viewModel()
+        advanceUntilIdle() // chunk1 landed; the load is parked on the gate
+
+        val user = mockk<Stroke>()
+        viewModel.onStrokesFinished(listOf(user))
+        advanceUntilIdle()
+        gate.send(Unit) // release chunk2 — it must slot in AFTER chunk1 and BEFORE the user stroke
+        advanceUntilIdle()
+
+        // Loaded ink keeps its order; the mid-load user stroke survives at the end (the old atomic
+        // load assigned the list and silently discarded it).
+        assertEquals(listOf("a", "b"), viewModel.finishedStrokes.value.dropLast(1).map { it.id })
+        assertEquals(user, viewModel.finishedStrokes.value.last().stroke)
+        // Mid-load undo snapshots are dropped — undoing to a partially-loaded page would persist it.
+        assertEquals(false, viewModel.canUndo.value)
+
+        // The first autosave appends ONLY the user stroke: loaded chunks are already persisted.
+        val previous = slot<List<CanvasStroke>>()
+        val current = slot<List<CanvasStroke>>()
+        coVerify { repository.updateStrokes(eq("page-1"), capture(previous), capture(current)) }
+        assertEquals(listOf("a", "b"), previous.captured.map { it.id })
+        assertEquals(3, current.captured.size)
+    }
+
+    @Test
     fun `unchanged canvas is not re-saved`() = runTest(dispatcher) {
         val saved = listOf(CanvasStroke("a", mockk()))
-        coEvery { repository.loadStrokes(any(), any()) } returns saved
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns flowOf(saved)
         coEvery { repository.loadAiNotes("page-1") } returns emptyList()
 
         viewModel()

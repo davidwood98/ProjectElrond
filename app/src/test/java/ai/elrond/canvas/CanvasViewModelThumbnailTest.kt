@@ -5,6 +5,9 @@ import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.data.NoteRepository
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
+import io.mockk.every
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -37,7 +40,7 @@ class CanvasViewModelThumbnailTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
-        coEvery { repository.loadStrokes(any(), any()) } returns emptyList()
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns emptyFlow()
         coEvery { repository.loadAiNotes("page-1") } returns emptyList()
     }
 
@@ -75,7 +78,7 @@ class CanvasViewModelThumbnailTest {
 
     @Test
     fun `an unchanged page neither saves nor generates a thumbnail`() = runTest(dispatcher) {
-        coEvery { repository.loadStrokes(any(), any()) } returns listOf(CanvasStroke("a", mockk()))
+        every { repository.loadStrokesProgressive(any(), any(), any()) } returns flowOf(listOf(CanvasStroke("a", mockk())))
         val vm = viewModel()
         advanceUntilIdle()
 

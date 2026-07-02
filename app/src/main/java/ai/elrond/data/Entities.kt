@@ -75,8 +75,8 @@ data class StrokeEntity(
     val colorArgb: Int,
     val brushSize: Float,
     val brushEpsilon: Float,
-    /** JSON-serialized list of stroke input points (x, y, t, pressure, tilt, orientation). */
-    val inputsJson: String,
+    /** Packed binary stroke input points (count header + 25 bytes/point) — see [StrokeSerialization]. */
+    val inputs: ByteArray,
     val createdAt: Long,
     /** True for AI response ink, which is rendered visually distinct from user ink. */
     val isAiInk: Boolean = false,
@@ -85,7 +85,18 @@ data class StrokeEntity(
      * form one group that selects together and reloads grouped. Added in DB v7 (MIGRATION_6_7).
      */
     val groupId: String? = null,
-)
+) {
+    // ByteArray gets reference equality from the generated data-class members; compare contents so
+    // entity round-trip assertions (tests) behave structurally.
+    override fun equals(other: Any?): Boolean =
+        other is StrokeEntity &&
+            id == other.id && pageId == other.pageId && brushFamily == other.brushFamily &&
+            colorArgb == other.colorArgb && brushSize == other.brushSize &&
+            brushEpsilon == other.brushEpsilon && inputs.contentEquals(other.inputs) &&
+            createdAt == other.createdAt && isAiInk == other.isAiInk && groupId == other.groupId
+
+    override fun hashCode(): Int = 31 * id.hashCode() + inputs.contentHashCode()
+}
 
 /**
  * A persisted AI response rendered on the canvas as handwriting-style text.

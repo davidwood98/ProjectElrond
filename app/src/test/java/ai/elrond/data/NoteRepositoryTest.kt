@@ -1,5 +1,6 @@
 package ai.elrond.data
 
+import ai.elrond.domain.CanvasStroke
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -7,6 +8,7 @@ import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.slot
 import io.mockk.unmockkObject
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -45,7 +47,7 @@ class NoteRepositoryTest {
                 colorArgb = 0,
                 brushSize = 1f,
                 brushEpsilon = 0.1f,
-                inputsJson = "[]",
+                inputs = StrokeSerialization.encodeInputs(emptyList()),
                 createdAt = 0L,
             )
         }
@@ -252,10 +254,12 @@ class NoteRepositoryTest {
             colorArgb = 0,
             brushSize = 4f,
             brushEpsilon = 0.1f,
-            inputsJson = """[
-                {"x":100.0,"y":200.0,"t":0,"pressure":1.0,"tilt":0.0,"orientation":0.0},
-                {"x":300.0,"y":200.0,"t":16,"pressure":1.0,"tilt":0.0,"orientation":0.0}
-            ]""",
+            inputs = StrokeSerialization.encodeInputs(
+                listOf(
+                    SerializedStrokeInput(x = 100f, y = 200f, t = 0, pressure = 1f, tilt = 0f, orientation = 0f),
+                    SerializedStrokeInput(x = 300f, y = 200f, t = 16, pressure = 1f, tilt = 0f, orientation = 0f),
+                ),
+            ),
             createdAt = 1L,
         )
         coEvery { strokeDao.getForPage("page-1") } returns listOf(entity)
@@ -265,6 +269,36 @@ class NoteRepositoryTest {
         // 200-unit-wide horizontal stroke → normalized to 0..1 on x, 0 on y.
         assertEquals(listOf(listOf(0f to 0f, 1f to 0f)), preview)
     }
+
+    @Test
+    fun `progressive load emits ordered chunks and loadStrokes flattens them`() = runTest {
+        // Stub the ink reconstruction (natives absent on the JVM); identity is the row id.
+        every { StrokeSerialization.toCanvasStroke(any(), any()) } answers {
+            CanvasStroke(firstArg<StrokeEntity>().id, mockk())
+        }
+        val rows = (1..5).map { blankStroke("s$it") }
+        coEvery { strokeDao.getForPage("page-1") } returns rows
+
+        val chunks = repository.loadStrokesProgressive("page-1", chunkSize = 2).toList()
+
+        // Chunked as 2+2+1, flattening back to the original stroke order.
+        assertEquals(listOf(2, 2, 1), chunks.map { it.size })
+        assertEquals((1..5).map { "s$it" }, chunks.flatten().map { it.id })
+        assertEquals((1..5).map { "s$it" }, repository.loadStrokes("page-1").map { it.id })
+    }
+
+    @Test
+    fun `progressive load of an empty page emits nothing`() = runTest {
+        coEvery { strokeDao.getForPage("page-1") } returns emptyList()
+
+        assertEquals(0, repository.loadStrokesProgressive("page-1").toList().size)
+    }
+
+    private fun blankStroke(id: String) = StrokeEntity(
+        id = id, pageId = "page-1", brushFamily = "pressure-pen", colorArgb = 0,
+        brushSize = 4f, brushEpsilon = 0.1f,
+        inputs = StrokeSerialization.encodeInputs(emptyList()), createdAt = 0L,
+    )
 
     companion object {
         private const val FIXED_TIME = 1_780_000_000_000
