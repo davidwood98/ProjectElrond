@@ -1,6 +1,8 @@
 package ai.elrond.ui
 
 import ai.elrond.BuildConfig
+import ai.elrond.data.StrokeSerialization
+import ai.elrond.domain.BrushSpec
 import ai.elrond.domain.PalmRejection
 import ai.elrond.domain.PageLayer
 import ai.elrond.domain.PageTransform
@@ -26,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.ink.brush.Brush
 import androidx.ink.authoring.InProgressStrokeId
 import androidx.ink.authoring.InProgressStrokesFinishedListener
 import androidx.ink.authoring.InProgressStrokesView
@@ -104,7 +107,7 @@ private class DryDrawEntry(val docTop: Float, val cs: CanvasStroke)
 
 @SuppressLint("ViewConstructor")
 private class DryStrokesView(context: Context) : View(context) {
-    private val renderer = CanvasStrokeRenderer.create()
+    private val renderer = CanvasStrokeRenderer.create(InkTextures.store(context.resources))
     // Each layer's strokes are stored in that page's own page-space; the view carries the document→
     // screen transform and draws each layer translated by its (open-page-relative) docTop, so a single
     // view + GPU transform renders the whole continuous vertical document (FA-20). The matrix is
@@ -299,6 +302,8 @@ private fun createInkView(
     val dryStrokesView = DryStrokesView(context).apply { layoutParams = matchParent }
     val inProgressStrokesView = InProgressStrokesView(context).apply {
         layoutParams = matchParent
+        // Resolve the textured pencil family's bitmaps in the wet layer too (FA-23).
+        textureBitmapStore = InkTextures.store(context.resources)
         addFinishedStrokesListener(
             object : InProgressStrokesFinishedListener {
                 override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
@@ -424,6 +429,17 @@ private fun fingerSpan(event: MotionEvent, excludeIndex: Int = -1): FingerSpan {
     }
     return FingerSpan(n, cx, cy, spread / n)
 }
+
+/**
+ * Builds the ink-native [Brush] for the active tool's pure [BrushSpec] (FA-23). The family comes
+ * from the same key mapping persistence uses, so a drawn stroke and its stored row always agree.
+ */
+private fun strokeBrushFor(spec: BrushSpec): Brush = Brush.createWithColorIntArgb(
+    family = StrokeSerialization.familyFromKey(spec.familyKey),
+    colorIntArgb = spec.colorArgb,
+    size = spec.size,
+    epsilon = spec.epsilon,
+)
 
 /** Press-and-hold duration to select an AI box (FA-21), and the movement that aborts it (a stroke). */
 private const val AI_NOTE_HOLD_MS = 800L
@@ -615,7 +631,7 @@ private fun createTouchListener(
                         currentStrokeId = inProgressStrokesView.startStroke(
                             event,
                             pointerId,
-                            viewModel.penBrush,
+                            strokeBrushFor(viewModel.currentBrushSpec()),
                             Matrix().apply {
                                 setTranslate(-t.offsetX, -t.offsetY)
                                 postScale(invScale, invScale)

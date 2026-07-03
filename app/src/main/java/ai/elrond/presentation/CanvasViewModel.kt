@@ -8,8 +8,13 @@ import ai.elrond.domain.StrokeSelection
 import ai.elrond.domain.SelectionState
 import ai.elrond.domain.SelectionBounds
 import ai.elrond.domain.ClipboardState
+import ai.elrond.domain.BrushSpec
 import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.CanvasStroke
+import ai.elrond.domain.HighlighterColor
+import ai.elrond.domain.HighlighterWidth
+import ai.elrond.domain.InkLineType
+import ai.elrond.domain.PenColor
 import ai.elrond.domain.FingerGesture
 import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.StylusHoldTool
@@ -58,8 +63,6 @@ import ai.elrond.data.SettingsRepository
 import ai.elrond.domain.PendingTaskExtraction
 import ai.elrond.domain.TodoPriority
 import android.content.Context
-import androidx.ink.brush.Brush
-import androidx.ink.brush.StockBrushes
 import androidx.ink.geometry.ImmutableBox
 import androidx.ink.geometry.ImmutableVec
 import androidx.ink.strokes.Stroke
@@ -175,6 +178,18 @@ class CanvasViewModel(
     stylusDoubleClickActionFlow: Flow<FingerGestureAction>? = null,
     /** Action bound to a single S Pen button click; null keeps the default (none). */
     stylusSingleClickActionFlow: Flow<FingerGestureAction>? = null,
+    // FA-23 tool configuration (the toolbar's per-tool dropdown): each flow seeds the in-memory
+    // state; the persist writers mirror persistStylusOnly. Null in JVM tests keeps the defaults.
+    penColorFlow: Flow<PenColor>? = null,
+    penLineTypeFlow: Flow<InkLineType>? = null,
+    highlighterColorFlow: Flow<HighlighterColor>? = null,
+    highlighterWidthFlow: Flow<HighlighterWidth>? = null,
+    pencilLineTypeFlow: Flow<InkLineType>? = null,
+    private val persistPenColor: (suspend (PenColor) -> Unit)? = null,
+    private val persistPenLineType: (suspend (InkLineType) -> Unit)? = null,
+    private val persistHighlighterColor: (suspend (HighlighterColor) -> Unit)? = null,
+    private val persistHighlighterWidth: (suspend (HighlighterWidth) -> Unit)? = null,
+    private val persistPencilLineType: (suspend (InkLineType) -> Unit)? = null,
     /** Write-through for the palm-rejection preference (null in tests). */
     private val persistStylusOnly: (suspend (Boolean) -> Unit)? = null,
     /**
@@ -240,6 +255,16 @@ class CanvasViewModel(
         stylusHoldToolFlow = settings.stylusHoldTool,
         stylusDoubleClickActionFlow = settings.stylusDoubleClickAction,
         stylusSingleClickActionFlow = settings.stylusSingleClickAction,
+        penColorFlow = settings.penColor,
+        penLineTypeFlow = settings.penLineType,
+        highlighterColorFlow = settings.highlighterColor,
+        highlighterWidthFlow = settings.highlighterWidth,
+        pencilLineTypeFlow = settings.pencilLineType,
+        persistPenColor = { settings.setPenColor(it) },
+        persistPenLineType = { settings.setPenLineType(it) },
+        persistHighlighterColor = { settings.setHighlighterColor(it) },
+        persistHighlighterWidth = { settings.setHighlighterWidth(it) },
+        persistPencilLineType = { settings.setPencilLineType(it) },
         persistStylusOnly = { settings.setStylusOnly(it) },
         // Real generator: render the page's normalized polylines (the same data the card draws) to a
         // bitmap off-thread and cache it; an empty page drops any stale file so the card shows blank.
@@ -289,6 +314,83 @@ class CanvasViewModel(
 
     /** The tool selected before the current one — restored by the FA-19 "last tool swap" gesture. */
     private var previousTool: CanvasTool = CanvasTool.PEN
+
+    // ── Tool configuration (FA-23) ────────────────────────────────────────────────────────────
+    // Per-tool colour / width / line type, seeded from settings and persisted on change. The brush
+    // itself is derived on demand by [currentBrushSpec]; InkCanvas builds the ink-native Brush.
+
+    private val _penColor = MutableStateFlow(PenColor.DEFAULT)
+    val penColor: StateFlow<PenColor> = _penColor.asStateFlow()
+
+    private val _penLineType = MutableStateFlow(InkLineType.DEFAULT)
+    val penLineType: StateFlow<InkLineType> = _penLineType.asStateFlow()
+
+    private val _highlighterColor = MutableStateFlow(HighlighterColor.DEFAULT)
+    val highlighterColor: StateFlow<HighlighterColor> = _highlighterColor.asStateFlow()
+
+    private val _highlighterWidth = MutableStateFlow(HighlighterWidth.DEFAULT)
+    val highlighterWidth: StateFlow<HighlighterWidth> = _highlighterWidth.asStateFlow()
+
+    private val _pencilLineType = MutableStateFlow(InkLineType.DEFAULT)
+    val pencilLineType: StateFlow<InkLineType> = _pencilLineType.asStateFlow()
+
+    fun setPenColor(color: PenColor) {
+        _penColor.value = color
+        persistPenColor?.let { write -> viewModelScope.launch { write(color) } }
+    }
+
+    fun setPenLineType(type: InkLineType) {
+        _penLineType.value = type
+        persistPenLineType?.let { write -> viewModelScope.launch { write(type) } }
+    }
+
+    fun setHighlighterColor(color: HighlighterColor) {
+        _highlighterColor.value = color
+        persistHighlighterColor?.let { write -> viewModelScope.launch { write(color) } }
+    }
+
+    fun setHighlighterWidth(width: HighlighterWidth) {
+        _highlighterWidth.value = width
+        persistHighlighterWidth?.let { write -> viewModelScope.launch { write(width) } }
+    }
+
+    fun setPencilLineType(type: InkLineType) {
+        _pencilLineType.value = type
+        persistPencilLineType?.let { write -> viewModelScope.launch { write(type) } }
+    }
+
+    /**
+     * The brush the active tool draws with. Pure data — the ink-native `Brush` is built from this
+     * at the UI boundary. The `else` branch covers PEN plus the paths that draw with pen ink
+     * (the GESTURE-mode trigger circle; LASSO never starts a wet stroke).
+     */
+    fun currentBrushSpec(): BrushSpec = when (_tool.value) {
+        CanvasTool.HIGHLIGHTER -> BrushSpec(
+            familyKey = BrushSpec.FAMILY_HIGHLIGHTER,
+            colorArgb = _highlighterColor.value.argb,
+            size = _highlighterWidth.value.size,
+            epsilon = HIGHLIGHTER_EPSILON,
+        )
+        CanvasTool.PENCIL -> BrushSpec(
+            familyKey = BrushSpec.FAMILY_PENCIL,
+            colorArgb = PENCIL_COLOR,
+            size = PENCIL_BRUSH_SIZE,
+            epsilon = BRUSH_EPSILON,
+        )
+        else -> BrushSpec(
+            familyKey = BrushSpec.FAMILY_PRESSURE_PEN,
+            colorArgb = _penColor.value.argb,
+            size = DEFAULT_BRUSH_SIZE,
+            epsilon = BRUSH_EPSILON,
+        )
+    }
+
+    /** Line type for strokes drawn by the active tool — SOLID for everything but pen and pencil. */
+    fun currentLineType(): InkLineType = when (_tool.value) {
+        CanvasTool.PEN -> _penLineType.value
+        CanvasTool.PENCIL -> _pencilLineType.value
+        else -> InkLineType.SOLID
+    }
 
     // ── Finger gestures (FA-19) ───────────────────────────────────────────────────────────────
     // Multi-finger taps bound to canvas actions, kept in sync with settings. [fingerGesturesEnabled]
@@ -608,6 +710,21 @@ class CanvasViewModel(
         }
         stylusSingleClickActionFlow?.let { flow ->
             viewModelScope.launch { flow.collect { _stylusSingleClickAction.value = it } }
+        }
+        penColorFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _penColor.value = it } }
+        }
+        penLineTypeFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _penLineType.value = it } }
+        }
+        highlighterColorFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _highlighterColor.value = it } }
+        }
+        highlighterWidthFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _highlighterWidth.value = it } }
+        }
+        pencilLineTypeFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _pencilLineType.value = it } }
         }
         // Pre-download the handwriting model so the first /Q is fast.
         recognizer?.let { viewModelScope.launch { it.warmUp() } }
@@ -1263,15 +1380,6 @@ class CanvasViewModel(
         super.onCleared()
     }
 
-    /** Pressure-sensitive pen brush for user ink. Lazy so JVM unit tests never touch ink natives. */
-    val penBrush: Brush by lazy {
-        Brush.createWithColorIntArgb(
-            family = StockBrushes.pressurePen(),
-            colorIntArgb = USER_INK_COLOR,
-            size = DEFAULT_BRUSH_SIZE,
-            epsilon = BRUSH_EPSILON,
-        )
-    }
 
     fun selectTool(tool: CanvasTool) {
         // Remember the tool being left so the FA-19 "last tool swap" gesture can restore it.
@@ -2465,6 +2573,13 @@ class CanvasViewModel(
         const val USER_INK_COLOR: Int = 0xFF1A237E.toInt()
         const val DEFAULT_BRUSH_SIZE: Float = 4f
         const val BRUSH_EPSILON: Float = 0.1f
+
+        // FA-23 highlighter/pencil brushes. The wide flat highlighter tolerates a coarser mesh
+        // epsilon; the pencil approximates graphite with ink's textured pencil family — its colour
+        // carries a slight translucency so overlapping pencil lines darken like real graphite.
+        const val HIGHLIGHTER_EPSILON: Float = 0.5f
+        const val PENCIL_COLOR: Int = 0xE043484E.toInt()
+        const val PENCIL_BRUSH_SIZE: Float = 3.5f
         const val ERASER_RADIUS: Float = 16f
         const val TRIGGER_DEBOUNCE_MILLIS: Long = 900L
 

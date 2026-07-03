@@ -1,9 +1,11 @@
 package ai.elrond.data
 
+import ai.elrond.domain.BrushSpec
 import ai.elrond.domain.CanvasStroke
 import ai.elrond.domain.StrokeSimplifier
 import androidx.ink.brush.Brush
 import androidx.ink.brush.BrushFamily
+import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.InputToolType
 import androidx.ink.brush.StockBrushes
 import androidx.ink.strokes.MutableStrokeInputBatch
@@ -24,9 +26,10 @@ object StrokeSerialization {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    private const val FAMILY_PRESSURE_PEN = "pressure-pen"
+    private const val FAMILY_PRESSURE_PEN = BrushSpec.FAMILY_PRESSURE_PEN
     private const val FAMILY_MARKER = "marker"
-    private const val FAMILY_HIGHLIGHTER = "highlighter"
+    private const val FAMILY_HIGHLIGHTER = BrushSpec.FAMILY_HIGHLIGHTER
+    private const val FAMILY_PENCIL = BrushSpec.FAMILY_PENCIL
 
     fun toEntity(
         stroke: Stroke,
@@ -186,15 +189,25 @@ object StrokeSerialization {
         else -> "unknown"
     }
 
-    private fun familyKey(family: BrushFamily): String = when (family) {
+    /**
+     * The single family ↔ key mapping shared by persistence and brush construction ([BrushSpec]
+     * carries these keys; `InkCanvas` builds brushes through [familyFromKey]). The pencil is ink
+     * 1.0.0's texture-backed [StockBrushes.pencilUnstable] — "unstable" means the family's look
+     * may change across ink versions, which is fine: we persist only our own key string.
+     */
+    @OptIn(ExperimentalInkCustomBrushApi::class)
+    fun familyKey(family: BrushFamily): String = when (family) {
         StockBrushes.marker() -> FAMILY_MARKER
         StockBrushes.highlighter() -> FAMILY_HIGHLIGHTER
+        StockBrushes.pencilUnstable -> FAMILY_PENCIL
         else -> FAMILY_PRESSURE_PEN
     }
 
-    private fun familyFromKey(key: String): BrushFamily = when (key) {
+    @OptIn(ExperimentalInkCustomBrushApi::class)
+    fun familyFromKey(key: String): BrushFamily = when (key) {
         FAMILY_MARKER -> StockBrushes.marker()
         FAMILY_HIGHLIGHTER -> StockBrushes.highlighter()
+        FAMILY_PENCIL -> StockBrushes.pencilUnstable
         else -> StockBrushes.pressurePen()
     }
 

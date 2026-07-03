@@ -438,10 +438,6 @@ fun NoteCanvasScreen(
                 selected = tool == CanvasTool.PEN,
                 treatment = toolTreatment,
             )
-            // Visual placeholders (Highlighter / Pencil / Text) — NOT yet wired as tools. Present in
-            // the handoff order so the full toolbar spacing/feel can be reviewed on-device; they
-            // render in the resting state and no-op on tap. The pen-family icons honour the FA-14
-            // Body/Tip setting.
             ToolbarButton(
                 painter = painterResource(
                     ElrondIcons.penToolIcon(
@@ -450,15 +446,19 @@ fun NoteCanvasScreen(
                         penIconStyle,
                     ),
                 ),
-                contentDescription = "Highlighter (coming soon)",
-                onClick = {},
+                contentDescription = "Highlighter",
+                onClick = { viewModel.selectTool(CanvasTool.HIGHLIGHTER) },
+                selected = tool == CanvasTool.HIGHLIGHTER,
+                treatment = toolTreatment,
             )
             ToolbarButton(
                 painter = painterResource(
                     ElrondIcons.penToolIcon(ElrondIcons.Pencil, ElrondIcons.PencilTip, penIconStyle),
                 ),
-                contentDescription = "Pencil (coming soon)",
-                onClick = {},
+                contentDescription = "Pencil",
+                onClick = { viewModel.selectTool(CanvasTool.PENCIL) },
+                selected = tool == CanvasTool.PENCIL,
+                treatment = toolTreatment,
             )
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Eraser),

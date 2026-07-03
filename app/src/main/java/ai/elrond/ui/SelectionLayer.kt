@@ -590,7 +590,8 @@ internal fun SelectionStrokes(
     transform: LiveTransform,
     page: PageTransform = PageTransform(scale = 1f, offsetX = 0f, offsetY = 0f),
 ) {
-    val renderer = remember { CanvasStrokeRenderer.create() }
+    val resources = androidx.compose.ui.platform.LocalContext.current.resources
+    val renderer = remember { CanvasStrokeRenderer.create(InkTextures.store(resources)) }
     // Strokes are drawn at IDENTITY (page coordinates); the page → screen mapping (centring offset +
     // scroll + scale) is applied as a GPU graphicsLayer — the SAME mechanism the dry-ink layer uses
     // (InkCanvas.DryStrokesView translates a page-space view), so the live selection lands exactly
