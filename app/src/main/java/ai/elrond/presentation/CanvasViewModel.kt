@@ -14,6 +14,8 @@ import ai.elrond.domain.CanvasStroke
 import ai.elrond.domain.HighlighterColor
 import ai.elrond.domain.HighlighterWidth
 import ai.elrond.domain.InkLineType
+import ai.elrond.domain.InkPoint
+import ai.elrond.domain.LivePatternStroke
 import ai.elrond.domain.PenColor
 import ai.elrond.domain.FingerGesture
 import ai.elrond.domain.FingerGestureAction
@@ -23,6 +25,7 @@ import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.MlKitHandwritingRecognizer
+import ai.elrond.data.StrokeSerialization
 import ai.elrond.data.isRecognizableInk
 import ai.elrond.domain.NotePosition
 import ai.elrond.domain.PrefixTriggerState
@@ -150,6 +153,16 @@ class CanvasViewModel(
      * Reads the ink-native brush in production, so it's a seam (JVM tests keep the default).
      */
     private val recognizableInk: (Stroke) -> Boolean = { true },
+    /**
+     * Cuts a finished non-solid-line stroke into its dash/dot segment strokes (FA-23). Touches ink
+     * natives, so it's a seam: identity by default; the @Inject ctor wires [StrokeTransforms.segment].
+     */
+    private val strokeSegmenter: (Stroke, InkLineType) -> List<Stroke> = { stroke, _ -> listOf(stroke) },
+    /**
+     * Bakes a live pattern stroke's buffered points into a real ink stroke (FA-23). Ink-native, so
+     * it's a seam — null in JVM tests (finish then just clears the preview).
+     */
+    private val patternStrokeBuilder: ((BrushSpec, List<InkPoint>) -> Stroke)? = null,
     triggerModeFlow: Flow<TriggerMode>? = null,
     /** Prefix-mode inactivity delay (ms) before the question fires; null keeps the default. */
     prefixTriggerDelayMsFlow: Flow<Long>? = null,
@@ -243,6 +256,10 @@ class CanvasViewModel(
         enqueueExtraction = enqueueExtraction,
         strokeSimplifier = StrokeTransforms::simplify,
         recognizableInk = ::isRecognizableInk,
+        strokeSegmenter = StrokeTransforms::segment,
+        patternStrokeBuilder = { spec, points ->
+            StrokeTransforms.buildStroke(StrokeSerialization.brushFor(spec), points)
+        },
         triggerCommandFlow = settings.triggerCommand,
         triggerModeFlow = settings.triggerMode,
         prefixTriggerDelayMsFlow = settings.prefixTriggerDelayMs,
@@ -397,6 +414,36 @@ class CanvasViewModel(
         CanvasTool.PEN -> _penLineType.value
         CanvasTool.PENCIL -> _pencilLineType.value
         else -> InkLineType.SOLID
+    }
+
+    // ── Live pattern stroke (FA-23) ───────────────────────────────────────────────────────────
+    // A non-solid stroke bypasses the wet ink layer (it can't dash); InkCanvas feeds the points
+    // here and the Compose overlay renders the pattern live. Pen-up bakes a real ink stroke via
+    // [patternStrokeBuilder] and routes it through [onStrokesFinished] → segmentation.
+
+    private val _livePatternStroke = MutableStateFlow<LivePatternStroke?>(null)
+    val livePatternStroke: StateFlow<LivePatternStroke?> = _livePatternStroke.asStateFlow()
+
+    fun beginPatternStroke() {
+        _livePatternStroke.value = LivePatternStroke(emptyList(), currentBrushSpec(), currentLineType())
+    }
+
+    fun addPatternPoint(x: Float, y: Float, t: Long, pressure: Float) {
+        _livePatternStroke.update { live ->
+            live?.copy(points = live.points + InkPoint(x = x, y = y, t = t, pressure = pressure))
+        }
+    }
+
+    fun finishPatternStroke() {
+        val live = _livePatternStroke.value ?: return
+        _livePatternStroke.value = null
+        val builder = patternStrokeBuilder ?: return
+        if (live.points.isEmpty()) return
+        onStrokesFinished(listOf(builder(live.spec, live.points)))
+    }
+
+    fun cancelPatternStroke() {
+        _livePatternStroke.value = null
     }
 
     // ── Finger gestures (FA-19) ───────────────────────────────────────────────────────────────
@@ -1503,9 +1550,16 @@ class CanvasViewModel(
         clearSelection() // a fresh pen stroke isn't part of any lasso selection
         contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
         thumbnailDirty = true // ink changed — the note-card thumbnail is now stale
-        // Thin the new stroke's points to the standard spacing (cheaper mesh build + redraw + storage).
-        val newStrokes = strokes.map { stroke ->
-            CanvasStroke(newStrokeId(), strokeSimplifier(stroke, STROKE_SIMPLIFY_SPACING))
+        // Thin the new stroke's points to the standard spacing (cheaper mesh build + redraw + storage),
+        // then cut a non-solid line type into its dash/dot segments — grouped, so the lasso treats the
+        // whole patterned line as one object (FA-23). One undo (the snapshot above) removes it all.
+        val lineType = currentLineType()
+        val newStrokes = strokes.flatMap { stroke ->
+            val simplified = strokeSimplifier(stroke, STROKE_SIMPLIFY_SPACING)
+            val parts =
+                if (lineType == InkLineType.SOLID) listOf(simplified) else strokeSegmenter(simplified, lineType)
+            val groupId = if (parts.size > 1) newGroupId() else null
+            parts.map { CanvasStroke(newStrokeId(), it, groupId = groupId) }
         }
         _finishedStrokes.update { current -> current + newStrokes }
 

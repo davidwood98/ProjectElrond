@@ -203,6 +203,14 @@ object StrokeSerialization {
         else -> FAMILY_PRESSURE_PEN
     }
 
+    /** Builds the ink-native [Brush] a [BrushSpec] describes — the one spec → brush bridge. */
+    fun brushFor(spec: BrushSpec): Brush = Brush.createWithColorIntArgb(
+        family = familyFromKey(spec.familyKey),
+        colorIntArgb = spec.colorArgb,
+        size = spec.size,
+        epsilon = spec.epsilon,
+    )
+
     @OptIn(ExperimentalInkCustomBrushApi::class)
     fun familyFromKey(key: String): BrushFamily = when (key) {
         FAMILY_MARKER -> StockBrushes.marker()

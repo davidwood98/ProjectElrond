@@ -321,6 +321,10 @@ fun NoteCanvasScreen(
             onInteract = { focusManager.clearFocus() },
         )
 
+        // Live dashed/dotted stroke while the pen is down (FA-23) — the wet ink layer can't render
+        // patterns, so InkCanvas buffers the points and this overlay paints them in the line style.
+        LivePatternStrokeOverlay(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+
         // On-canvas AI activity: loading dots while thinking, red ink on failure.
         when (val state = aiState) {
             is AiUiState.Thinking -> AiLoadingIndicator(

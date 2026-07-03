@@ -29,8 +29,27 @@ enum class InkLineType {
             DASH_DOT -> listOf(PatternRun(8f, 3f), PatternRun(0f, 3f))
         }
 
+    /**
+     * The pattern as draw/gap dash intervals in page units for [brushSize], for preview rendering
+     * with a dash path effect (round caps turn the near-zero "dot" intervals into dots). Empty for
+     * [SOLID]. Derived from [patternRuns], so previews and baked segments always match.
+     */
+    fun dashIntervals(brushSize: Float): FloatArray {
+        val runs = patternRuns
+        if (runs.isEmpty()) return FloatArray(0)
+        val out = FloatArray(runs.size * 2)
+        runs.forEachIndexed { i, run ->
+            out[i * 2] = (run.drawLen * brushSize).coerceAtLeast(DOT_INTERVAL_PX)
+            out[i * 2 + 1] = run.gapLen * brushSize
+        }
+        return out
+    }
+
     companion object {
         val DEFAULT = SOLID
+
+        /** Near-zero "on" interval so a zero-length dot run still paints under a round cap. */
+        private const val DOT_INTERVAL_PX = 0.1f
 
         fun fromName(name: String?): InkLineType = entries.firstOrNull { it.name == name } ?: DEFAULT
     }

@@ -7,6 +7,7 @@ import ai.elrond.domain.HighlighterWidth
 import ai.elrond.domain.InkLineType
 import ai.elrond.domain.PenColor
 import ai.elrond.presentation.CanvasViewModel
+import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -103,6 +104,92 @@ class CanvasViewModelToolConfigTest {
         vm.selectTool(CanvasTool.HIGHLIGHTER)
         vm.onFingerGesture(ai.elrond.domain.FingerGesture.TwoFingerDoubleTap) // default LAST_TOOL_SWAP
         assertEquals(CanvasTool.PEN, vm.tool.value)
+    }
+
+    @Test
+    fun `a non-solid stroke bakes into grouped segments with one undo step`() {
+        val parts = listOf(mockk<androidx.ink.strokes.Stroke>(), mockk<androidx.ink.strokes.Stroke>(), mockk<androidx.ink.strokes.Stroke>())
+        val vm = CanvasViewModel(
+            strokeSegmenter = { _, _ -> parts },
+        )
+        vm.setPenLineType(InkLineType.DASHED)
+
+        vm.onStrokesFinished(listOf(mockk<androidx.ink.strokes.Stroke>()))
+
+        val strokes = vm.finishedStrokes.value
+        assertEquals(3, strokes.size)
+        val groupIds = strokes.map { it.groupId }.toSet()
+        assertEquals(1, groupIds.size)
+        org.junit.Assert.assertNotNull("segments must share a group", groupIds.single())
+
+        vm.undo()
+        assertEquals(0, vm.finishedStrokes.value.size)
+    }
+
+    @Test
+    fun `a solid stroke bypasses the segmenter and stays ungrouped`() {
+        var segmenterCalls = 0
+        val vm = CanvasViewModel(
+            strokeSegmenter = { s, _ -> segmenterCalls++; listOf(s) },
+        )
+
+        vm.onStrokesFinished(listOf(mockk<androidx.ink.strokes.Stroke>()))
+
+        assertEquals(0, segmenterCalls)
+        assertEquals(1, vm.finishedStrokes.value.size)
+        org.junit.Assert.assertNull(vm.finishedStrokes.value.single().groupId)
+    }
+
+    @Test
+    fun `a pattern that stays one stroke gets no group`() {
+        val vm = CanvasViewModel(strokeSegmenter = { s, _ -> listOf(s) })
+        vm.setPenLineType(InkLineType.DASHED)
+
+        vm.onStrokesFinished(listOf(mockk<androidx.ink.strokes.Stroke>()))
+
+        org.junit.Assert.assertNull(vm.finishedStrokes.value.single().groupId)
+    }
+
+    @Test
+    fun `live pattern stroke buffers points and bakes through the finish pipeline`() {
+        val built = mockk<androidx.ink.strokes.Stroke>()
+        var builtSpec: BrushSpec? = null
+        var builtPoints: List<ai.elrond.domain.InkPoint>? = null
+        val vm = CanvasViewModel(
+            patternStrokeBuilder = { spec, points ->
+                builtSpec = spec
+                builtPoints = points
+                built
+            },
+            strokeSegmenter = { s, _ -> listOf(s, s) }, // segmentation still applies to the baked stroke
+        )
+        vm.setPenLineType(InkLineType.DOTTED)
+
+        vm.beginPatternStroke()
+        vm.addPatternPoint(1f, 2f, 0L, 0.5f)
+        vm.addPatternPoint(3f, 4f, 8L, 0.6f)
+        assertEquals(2, vm.livePatternStroke.value?.points?.size)
+        assertEquals(InkLineType.DOTTED, vm.livePatternStroke.value?.lineType)
+
+        vm.finishPatternStroke()
+
+        org.junit.Assert.assertNull(vm.livePatternStroke.value)
+        assertEquals(BrushSpec.FAMILY_PRESSURE_PEN, builtSpec?.familyKey)
+        assertEquals(2, builtPoints?.size)
+        assertEquals(2, vm.finishedStrokes.value.size) // baked stroke went through segmentation
+    }
+
+    @Test
+    fun `cancelling a live pattern stroke leaves no ink`() {
+        val vm = CanvasViewModel(patternStrokeBuilder = { _, _ -> mockk() })
+        vm.setPenLineType(InkLineType.DASHED)
+        vm.beginPatternStroke()
+        vm.addPatternPoint(1f, 2f, 0L, 0.5f)
+
+        vm.cancelPatternStroke()
+
+        org.junit.Assert.assertNull(vm.livePatternStroke.value)
+        assertEquals(0, vm.finishedStrokes.value.size)
     }
 
     @Test

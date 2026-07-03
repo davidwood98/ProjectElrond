@@ -2,7 +2,7 @@ package ai.elrond.ui
 
 import ai.elrond.BuildConfig
 import ai.elrond.data.StrokeSerialization
-import ai.elrond.domain.BrushSpec
+import ai.elrond.domain.InkLineType
 import ai.elrond.domain.PalmRejection
 import ai.elrond.domain.PageLayer
 import ai.elrond.domain.PageTransform
@@ -28,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.ink.brush.Brush
 import androidx.ink.authoring.InProgressStrokeId
 import androidx.ink.authoring.InProgressStrokesFinishedListener
 import androidx.ink.authoring.InProgressStrokesView
@@ -430,17 +429,6 @@ private fun fingerSpan(event: MotionEvent, excludeIndex: Int = -1): FingerSpan {
     return FingerSpan(n, cx, cy, spread / n)
 }
 
-/**
- * Builds the ink-native [Brush] for the active tool's pure [BrushSpec] (FA-23). The family comes
- * from the same key mapping persistence uses, so a drawn stroke and its stored row always agree.
- */
-private fun strokeBrushFor(spec: BrushSpec): Brush = Brush.createWithColorIntArgb(
-    family = StrokeSerialization.familyFromKey(spec.familyKey),
-    colorIntArgb = spec.colorArgb,
-    size = spec.size,
-    epsilon = spec.epsilon,
-)
-
 /** Press-and-hold duration to select an AI box (FA-21), and the movement that aborts it (a stroke). */
 private const val AI_NOTE_HOLD_MS = 800L
 private const val HOLD_MOVE_SLOP_PX = 24f
@@ -461,6 +449,10 @@ private fun createTouchListener(
     var currentStrokeId: InProgressStrokeId? = null
     var currentIsFinger = false
     var erasing = false
+    // FA-23: a non-solid line type bypasses the wet ink layer (it can't dash) — the points are fed
+    // to the ViewModel and a Compose overlay renders the pattern live; pen-up bakes the stroke.
+    var patternActive = false
+    var patternStartTime = 0L
     // A lone finger drag scrolls vertically OR swipes horizontally to turn pages (FA-20); the axis
     // locks after a small slop so scroll and page-turn don't fight.
     var scrollPointerId: Int? = null
@@ -536,9 +528,13 @@ private fun createTouchListener(
                     // Pinch zoom (FA-20): two or more fingers → enter pinch mode, cancelling any nascent
                     // finger stroke + single-finger scroll. Skipped while a stylus stroke is active.
                     val span = fingerSpan(event)
-                    if (span.count >= 2 && (currentStrokeId == null || currentIsFinger)) {
+                    if (span.count >= 2 && ((currentStrokeId == null && !patternActive) || currentIsFinger)) {
                         if (currentIsFinger && currentStrokeId != null) {
                             currentStrokeId?.let { inProgressStrokesView.cancelStroke(it, event) }
+                        }
+                        if (patternActive && currentIsFinger) {
+                            viewModel.cancelPatternStroke()
+                            patternActive = false
                         }
                         currentPointerId = null
                         currentStrokeId = null
@@ -557,9 +553,13 @@ private fun createTouchListener(
                     // leaves no mark (FA-19). Stylus strokes (a resting palm landing mid-stroke)
                     // are untouched: currentIsFinger is false for them.
                     if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN &&
-                        currentIsFinger && currentStrokeId != null
+                        currentIsFinger && (currentStrokeId != null || patternActive)
                     ) {
                         currentStrokeId?.let { inProgressStrokesView.cancelStroke(it, event) }
+                        if (patternActive) {
+                            viewModel.cancelPatternStroke()
+                            patternActive = false
+                        }
                         currentPointerId = null
                         currentStrokeId = null
                         currentIsFinger = false
@@ -624,20 +624,30 @@ private fun createTouchListener(
                         // Pen down: hold off any prefix-/Q inactivity send until this stroke finishes,
                         // so the AI never answers mid-writing (and always gets the full question).
                         viewModel.onWritingStarted()
-                        // Capture in the OPEN page's coords via its transform — undo the centring offset,
-                        // the scroll, and the zoom scale so the finished stroke is stored in page space.
-                        // The wet stroke still renders at the pen tip (motionEventToViewTransform = identity).
-                        val invScale = if (t.scale != 0f) 1f / t.scale else 1f
-                        currentStrokeId = inProgressStrokesView.startStroke(
-                            event,
-                            pointerId,
-                            strokeBrushFor(viewModel.currentBrushSpec()),
-                            Matrix().apply {
-                                setTranslate(-t.offsetX, -t.offsetY)
-                                postScale(invScale, invScale)
-                            },
-                            Matrix(),
-                        )
+                        if (viewModel.currentLineType() != InkLineType.SOLID) {
+                            // FA-23 patterned stroke: buffer page-space points for the live overlay
+                            // instead of starting a wet ink stroke (the wet layer can't dash).
+                            patternActive = true
+                            patternStartTime = event.eventTime
+                            viewModel.beginPatternStroke()
+                            viewModel.addPatternPoint(pageX, pageY, 0L, event.getPressure(pointerIndex))
+                        } else {
+                            // Capture in the OPEN page's coords via its transform — undo the centring
+                            // offset, the scroll, and the zoom scale so the finished stroke is stored in
+                            // page space. The wet stroke still renders at the pen tip
+                            // (motionEventToViewTransform = identity).
+                            val invScale = if (t.scale != 0f) 1f / t.scale else 1f
+                            currentStrokeId = inProgressStrokesView.startStroke(
+                                event,
+                                pointerId,
+                                StrokeSerialization.brushFor(viewModel.currentBrushSpec()),
+                                Matrix().apply {
+                                    setTranslate(-t.offsetX, -t.offsetY)
+                                    postScale(invScale, invScale)
+                                },
+                                Matrix(),
+                            )
+                        }
                         // Over an AI box? Arm the 1.5s hold-to-select. Movement (a real stroke) cancels
                         // it below, so writing over the box still works (FA-21).
                         val noteId = viewModel.aiNoteAt(pageX, pageY)
@@ -727,6 +737,23 @@ private fun createTouchListener(
                     if (holdConsumed) return@OnTouchListener true
                     if (erasing) {
                         viewModel.eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
+                    } else if (patternActive) {
+                        // Feed the batched (historical) points too, so fast strokes stay smooth.
+                        val pt = viewModel.pageTransform.value
+                        for (h in 0 until event.historySize) {
+                            viewModel.addPatternPoint(
+                                pt.screenToPageX(event.getHistoricalX(pointerIndex, h)),
+                                pt.screenToPageY(event.getHistoricalY(pointerIndex, h)),
+                                event.getHistoricalEventTime(h) - patternStartTime,
+                                event.getHistoricalPressure(pointerIndex, h),
+                            )
+                        }
+                        viewModel.addPatternPoint(
+                            pt.screenToPageX(event.getX(pointerIndex)),
+                            pt.screenToPageY(event.getY(pointerIndex)),
+                            event.eventTime - patternStartTime,
+                            event.getPressure(pointerIndex),
+                        )
                     } else {
                         val strokeId = currentStrokeId ?: return@OnTouchListener true
                         inProgressStrokesView.addToStroke(event, pointerId, strokeId, predictedEvent)
@@ -780,6 +807,10 @@ private fun createTouchListener(
                                 inProgressStrokesView.finishStroke(event, pointerId, strokeId)
                             }
                         }
+                        if (patternActive) {
+                            if (holdConsumed) viewModel.cancelPatternStroke() else viewModel.finishPatternStroke()
+                            patternActive = false
+                        }
                         holdConsumed = false
                         currentPointerId = null
                         currentStrokeId = null
@@ -794,6 +825,10 @@ private fun createTouchListener(
                     cancelPendingHold()
                     holdConsumed = false
                     currentStrokeId?.let { inProgressStrokesView.cancelStroke(it, event) }
+                    if (patternActive) {
+                        viewModel.cancelPatternStroke()
+                        patternActive = false
+                    }
                     currentPointerId = null
                     currentStrokeId = null
                     currentIsFinger = false
