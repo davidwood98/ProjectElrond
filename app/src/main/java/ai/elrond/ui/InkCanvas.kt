@@ -433,6 +433,14 @@ private fun fingerSpan(event: MotionEvent, excludeIndex: Int = -1): FingerSpan {
 private const val AI_NOTE_HOLD_MS = 800L
 private const val HOLD_MOVE_SLOP_PX = 24f
 
+/**
+ * Hold-to-straighten (FA-23): a stroke at least [STRAIGHTEN_MIN_LENGTH_PX] of displacement whose
+ * pen then rests within [STRAIGHTEN_SLOP_PX] for [STRAIGHTEN_HOLD_MS] snaps to a straight line.
+ */
+private const val STRAIGHTEN_HOLD_MS = 600L
+private const val STRAIGHTEN_SLOP_PX = 8f
+private const val STRAIGHTEN_MIN_LENGTH_PX = 48f
+
 /** Screen-px slop around a selection box so a DOWN on its edge-straddling resize handles isn't
  *  treated as a draw/deselect (FA-21). */
 private const val SELECTION_TOUCH_MARGIN_PX = 44f
@@ -453,6 +461,18 @@ private fun createTouchListener(
     // to the ViewModel and a Compose overlay renders the pattern live; pen-up bakes the stroke.
     var patternActive = false
     var patternStartTime = 0L
+    // FA-23 hold-to-straighten: once a drawn stroke is longer than [STRAIGHTEN_MIN_LENGTH_PX] and
+    // the pen then rests within [STRAIGHTEN_SLOP_PX] for [STRAIGHTEN_HOLD_MS], the stroke snaps to
+    // a straight line (the wet/pattern stroke is cancelled and the VM preview takes over); further
+    // movement adjusts the endpoint, lift commits.
+    var straightening = false
+    var straightenRunnable: Runnable? = null
+    var strokeStartScreenX = 0f
+    var strokeStartScreenY = 0f
+    var straightenAnchorX = 0f
+    var straightenAnchorY = 0f
+    var lastMoveScreenX = 0f
+    var lastMoveScreenY = 0f
     // A lone finger drag scrolls vertically OR swipes horizontally to turn pages (FA-20); the axis
     // locks after a small slop so scroll and page-turn don't fight.
     var scrollPointerId: Int? = null
@@ -486,6 +506,10 @@ private fun createTouchListener(
     fun cancelPendingHold() {
         pendingHold?.let { holdHandler.removeCallbacks(it) }
         pendingHold = null
+    }
+    fun cancelStraightenTimer() {
+        straightenRunnable?.let { holdHandler.removeCallbacks(it) }
+        straightenRunnable = null
     }
 
     return View.OnTouchListener { view, event ->
@@ -536,6 +560,13 @@ private fun createTouchListener(
                             viewModel.cancelPatternStroke()
                             patternActive = false
                         }
+                        if (currentIsFinger) {
+                            cancelStraightenTimer()
+                            if (straightening) {
+                                viewModel.cancelStraightLine()
+                                straightening = false
+                            }
+                        }
                         currentPointerId = null
                         currentStrokeId = null
                         currentIsFinger = false
@@ -559,6 +590,11 @@ private fun createTouchListener(
                         if (patternActive) {
                             viewModel.cancelPatternStroke()
                             patternActive = false
+                        }
+                        cancelStraightenTimer()
+                        if (straightening) {
+                            viewModel.cancelStraightLine()
+                            straightening = false
                         }
                         currentPointerId = null
                         currentStrokeId = null
@@ -624,6 +660,15 @@ private fun createTouchListener(
                         // Pen down: hold off any prefix-/Q inactivity send until this stroke finishes,
                         // so the AI never answers mid-writing (and always gets the full question).
                         viewModel.onWritingStarted()
+                        // Seed the hold-to-straighten tracker for this stroke (FA-23).
+                        strokeStartScreenX = downX
+                        strokeStartScreenY = downY
+                        straightenAnchorX = downX
+                        straightenAnchorY = downY
+                        lastMoveScreenX = downX
+                        lastMoveScreenY = downY
+                        straightening = false
+                        cancelStraightenTimer()
                         if (viewModel.currentLineType() != InkLineType.SOLID) {
                             // FA-23 patterned stroke: buffer page-space points for the live overlay
                             // instead of starting a wet ink stroke (the wet layer can't dash).
@@ -735,6 +780,50 @@ private fun createTouchListener(
                         cancelPendingHold()
                     }
                     if (holdConsumed) return@OnTouchListener true
+                    // FA-23 hold-to-straighten. Once snapped, MOVEs only adjust the line endpoint;
+                    // before that, any travel past the slop re-arms the stationary timer, and the
+                    // timer is only armed at all once the stroke is deliberately long (so taps,
+                    // short marks and the FA-21 stationary AI-box hold can never convert).
+                    if (!erasing) {
+                        val mx = event.getX(pointerIndex)
+                        val my = event.getY(pointerIndex)
+                        if (straightening) {
+                            val pt = viewModel.pageTransform.value
+                            viewModel.updateStraightLine(pt.screenToPageX(mx), pt.screenToPageY(my))
+                            return@OnTouchListener true
+                        }
+                        lastMoveScreenX = mx
+                        lastMoveScreenY = my
+                        if (hypot(mx - straightenAnchorX, my - straightenAnchorY) > STRAIGHTEN_SLOP_PX) {
+                            straightenAnchorX = mx
+                            straightenAnchorY = my
+                            cancelStraightenTimer()
+                            if (hypot(mx - strokeStartScreenX, my - strokeStartScreenY) >
+                                STRAIGHTEN_MIN_LENGTH_PX
+                            ) {
+                                val runnable = Runnable {
+                                    straightenRunnable = null
+                                    straightening = true
+                                    // The drawn ink vanishes; the VM preview line takes over.
+                                    currentStrokeId?.let { inProgressStrokesView.cancelStroke(it) }
+                                    currentStrokeId = null
+                                    if (patternActive) {
+                                        viewModel.cancelPatternStroke()
+                                        patternActive = false
+                                    }
+                                    val pt = viewModel.pageTransform.value
+                                    viewModel.beginStraightLine(
+                                        pt.screenToPageX(strokeStartScreenX),
+                                        pt.screenToPageY(strokeStartScreenY),
+                                        pt.screenToPageX(lastMoveScreenX),
+                                        pt.screenToPageY(lastMoveScreenY),
+                                    )
+                                }
+                                straightenRunnable = runnable
+                                holdHandler.postDelayed(runnable, STRAIGHTEN_HOLD_MS)
+                            }
+                        }
+                    }
                     if (erasing) {
                         viewModel.eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
                     } else if (patternActive) {
@@ -799,6 +888,11 @@ private fun createTouchListener(
                     }
                     if (pointerId == currentPointerId) {
                         cancelPendingHold()
+                        cancelStraightenTimer()
+                        if (straightening) {
+                            viewModel.commitStraightLine()
+                            straightening = false
+                        }
                         currentStrokeId?.let { strokeId ->
                             // A fired hold-to-select cancels the stroke so it leaves no dot (FA-21).
                             if (holdConsumed) {
@@ -823,6 +917,11 @@ private fun createTouchListener(
 
                 MotionEvent.ACTION_CANCEL -> {
                     cancelPendingHold()
+                    cancelStraightenTimer()
+                    if (straightening) {
+                        viewModel.cancelStraightLine()
+                        straightening = false
+                    }
                     holdConsumed = false
                     currentStrokeId?.let { inProgressStrokesView.cancelStroke(it, event) }
                     if (patternActive) {

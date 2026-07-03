@@ -180,6 +180,52 @@ class CanvasViewModelToolConfigTest {
     }
 
     @Test
+    fun `hold-to-straighten preview adjusts its endpoint and commits through the finish pipeline`() {
+        var builtPoints: List<ai.elrond.domain.InkPoint>? = null
+        var builtSpec: BrushSpec? = null
+        val vm = CanvasViewModel(
+            patternStrokeBuilder = { spec, points ->
+                builtSpec = spec
+                builtPoints = points
+                mockk<androidx.ink.strokes.Stroke>()
+            },
+        )
+        vm.setPenColor(PenColor.RED)
+        vm.setPenLineType(InkLineType.DASHED)
+
+        vm.beginStraightLine(0f, 0f, 40f, 0f)
+        assertEquals(InkLineType.DASHED, vm.straightLinePreview.value?.lineType)
+        assertEquals(PenColor.RED.argb, vm.straightLinePreview.value?.spec?.colorArgb)
+
+        vm.updateStraightLine(100f, 50f)
+        assertEquals(100f, vm.straightLinePreview.value?.x2)
+        assertEquals(50f, vm.straightLinePreview.value?.y2)
+
+        vm.commitStraightLine()
+
+        org.junit.Assert.assertNull(vm.straightLinePreview.value)
+        assertEquals(BrushSpec.FAMILY_PRESSURE_PEN, builtSpec?.familyKey)
+        val points = builtPoints!!
+        assertEquals(0f, points.first().x)
+        assertEquals(100f, points.last().x)
+        assertEquals(50f, points.last().y)
+        assertEquals(1, vm.finishedStrokes.value.size) // committed via onStrokesFinished
+        vm.undo()
+        assertEquals(0, vm.finishedStrokes.value.size) // one undo step
+    }
+
+    @Test
+    fun `cancelling a straight line leaves no ink`() {
+        val vm = CanvasViewModel(patternStrokeBuilder = { _, _ -> mockk() })
+        vm.beginStraightLine(0f, 0f, 40f, 0f)
+
+        vm.cancelStraightLine()
+
+        org.junit.Assert.assertNull(vm.straightLinePreview.value)
+        assertEquals(0, vm.finishedStrokes.value.size)
+    }
+
+    @Test
     fun `cancelling a live pattern stroke leaves no ink`() {
         val vm = CanvasViewModel(patternStrokeBuilder = { _, _ -> mockk() })
         vm.setPenLineType(InkLineType.DASHED)

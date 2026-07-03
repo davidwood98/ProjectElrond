@@ -26,6 +26,20 @@ data class LivePatternStroke(
 )
 
 /**
+ * A hold-to-straighten line while the pen is still down (FA-23): after a stationary hold the drawn
+ * stroke snaps to this straight line; further movement adjusts the endpoint, lift commits. Rendered
+ * by the same Compose overlay as [LivePatternStroke], in the tool's colour and line style.
+ */
+data class StraightLinePreview(
+    val x1: Float,
+    val y1: Float,
+    val x2: Float,
+    val y2: Float,
+    val spec: BrushSpec,
+    val lineType: InkLineType,
+)
+
+/**
  * Pure geometry for FA-23 line patterns: walks a drawn polyline by cumulative arc length and cuts
  * it into the dash/dot segments of an [InkLineType]. Each returned segment becomes its own ink
  * stroke (carrying the tool's real brush) sharing a groupId — see `StrokeTransforms.segment` for

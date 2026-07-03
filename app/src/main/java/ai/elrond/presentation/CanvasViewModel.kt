@@ -15,7 +15,9 @@ import ai.elrond.domain.HighlighterColor
 import ai.elrond.domain.HighlighterWidth
 import ai.elrond.domain.InkLineType
 import ai.elrond.domain.InkPoint
+import ai.elrond.domain.LinePatterning
 import ai.elrond.domain.LivePatternStroke
+import ai.elrond.domain.StraightLinePreview
 import ai.elrond.domain.PenColor
 import ai.elrond.domain.FingerGesture
 import ai.elrond.domain.FingerGestureAction
@@ -444,6 +446,39 @@ class CanvasViewModel(
 
     fun cancelPatternStroke() {
         _livePatternStroke.value = null
+    }
+
+    // ── Hold-to-straighten (FA-23) ────────────────────────────────────────────────────────────
+    // InkCanvas detects a stationary hold at the end of a drawn stroke, cancels the wet/pattern
+    // stroke, and drives this preview: the overlay renders a straight line in the tool's colour +
+    // line style, MOVEs adjust the endpoint, lift commits — through the same builder + finish
+    // pipeline as everything else, so a straightened dashed line is straight THEN segmented.
+
+    private val _straightLinePreview = MutableStateFlow<StraightLinePreview?>(null)
+    val straightLinePreview: StateFlow<StraightLinePreview?> = _straightLinePreview.asStateFlow()
+
+    fun beginStraightLine(x1: Float, y1: Float, x2: Float, y2: Float) {
+        _straightLinePreview.value =
+            StraightLinePreview(x1, y1, x2, y2, currentBrushSpec(), currentLineType())
+    }
+
+    fun updateStraightLine(x2: Float, y2: Float) {
+        _straightLinePreview.update { it?.copy(x2 = x2, y2 = y2) }
+    }
+
+    fun commitStraightLine() {
+        val line = _straightLinePreview.value ?: return
+        _straightLinePreview.value = null
+        val builder = patternStrokeBuilder ?: return
+        val points = LinePatterning.straightLinePoints(
+            line.x1, line.y1, line.x2, line.y2,
+            spacing = STRAIGHT_LINE_POINT_SPACING,
+        )
+        onStrokesFinished(listOf(builder(line.spec, points)))
+    }
+
+    fun cancelStraightLine() {
+        _straightLinePreview.value = null
     }
 
     // ── Finger gestures (FA-19) ───────────────────────────────────────────────────────────────
@@ -2652,6 +2687,9 @@ class CanvasViewModel(
         const val HIGHLIGHTER_EPSILON: Float = 0.5f
         const val PENCIL_COLOR: Int = 0xE043484E.toInt()
         const val PENCIL_BRUSH_SIZE: Float = 3.5f
+
+        /** Point spacing of a committed hold-to-straighten line (page units). */
+        const val STRAIGHT_LINE_POINT_SPACING: Float = 2f
         const val ERASER_RADIUS: Float = 16f
         const val TRIGGER_DEBOUNCE_MILLIS: Long = 900L
 

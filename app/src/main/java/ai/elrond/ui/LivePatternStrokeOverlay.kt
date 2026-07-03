@@ -25,23 +25,31 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @Composable
 internal fun LivePatternStrokeOverlay(viewModel: CanvasViewModel, modifier: Modifier = Modifier) {
     val live by viewModel.livePatternStroke.collectAsStateWithLifecycle()
+    val straight by viewModel.straightLinePreview.collectAsStateWithLifecycle()
     val page by viewModel.pageTransform.collectAsStateWithLifecycle()
     Canvas(modifier) {
+        val t = page
+
+        // Hold-to-straighten preview (FA-23): the snapped line, endpoint following the pen.
+        straight?.let { line ->
+            drawLine(
+                color = Color(line.spec.colorArgb),
+                start = Offset(t.pageToScreenX(line.x1), t.pageToScreenY(line.y1)),
+                end = Offset(t.pageToScreenX(line.x2), t.pageToScreenY(line.y2)),
+                strokeWidth = (line.spec.size * t.scale).coerceAtLeast(1f),
+                cap = StrokeCap.Round,
+                pathEffect = patternEffect(line.lineType, line.spec.size, t.scale),
+            )
+        }
+
         val stroke = live ?: return@Canvas
         if (stroke.points.isEmpty()) return@Canvas
-        val t = page
         val width = (stroke.spec.size * t.scale).coerceAtLeast(1f)
         val color = Color(stroke.spec.colorArgb)
         if (stroke.points.size == 1) {
             val p = stroke.points.first()
             drawCircle(color, radius = width / 2f, center = Offset(t.pageToScreenX(p.x), t.pageToScreenY(p.y)))
             return@Canvas
-        }
-        val intervals = stroke.lineType.dashIntervals(stroke.spec.size)
-        val effect = if (intervals.isEmpty()) {
-            null
-        } else {
-            PathEffect.dashPathEffect(FloatArray(intervals.size) { i -> intervals[i] * t.scale })
         }
         val path = Path()
         stroke.points.forEachIndexed { i, p ->
@@ -52,7 +60,22 @@ internal fun LivePatternStrokeOverlay(viewModel: CanvasViewModel, modifier: Modi
         drawPath(
             path = path,
             color = color,
-            style = Stroke(width = width, cap = StrokeCap.Round, pathEffect = effect),
+            style = Stroke(
+                width = width,
+                cap = StrokeCap.Round,
+                pathEffect = patternEffect(stroke.lineType, stroke.spec.size, t.scale),
+            ),
         )
     }
+}
+
+/** The [type]'s dash effect in screen pixels ([brushSize] page units × [scale]); null for solid. */
+private fun patternEffect(
+    type: ai.elrond.domain.InkLineType,
+    brushSize: Float,
+    scale: Float,
+): PathEffect? {
+    val intervals = type.dashIntervals(brushSize)
+    if (intervals.isEmpty()) return null
+    return PathEffect.dashPathEffect(FloatArray(intervals.size) { i -> intervals[i] * scale })
 }
