@@ -91,8 +91,8 @@ class NoteListViewModel @Inject constructor(
     /** Cached WebP thumbnail for the card (decoded off the main thread), or null if none exists yet. */
     suspend fun thumbnail(pageId: String): Bitmap? = thumbnailCache.read(pageId)
 
-    /** Normalized stroke polylines — the fallback thumbnail when no cached bitmap exists yet. */
-    suspend fun preview(pageId: String): List<List<Pair<Float, Float>>> =
+    /** Normalized per-stroke previews — the fallback thumbnail when no cached bitmap exists yet. */
+    suspend fun preview(pageId: String): List<ai.elrond.domain.StrokePreview> =
         runCatching { repository.loadStrokePreview(pageId) }.getOrDefault(emptyList())
 
     private companion object {
