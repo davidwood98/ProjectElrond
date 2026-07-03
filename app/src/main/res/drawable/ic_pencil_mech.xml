@@ -1,0 +1,49 @@
+<!-- Leap note tool · Mechanical pencil (FA-23). Bespoke, angled 45° at 1.2 weight to match the family. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:name="rot"
+        android:pivotX="12"
+        android:pivotY="12"
+        android:rotation="45">
+        <!-- push button -->
+        <path
+            android:pathData="M10.9 1.6h2.2v1.6h-2.2z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="1.2"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <!-- barrel -->
+        <path
+            android:pathData="M9.8 3.2h4.4v10.8h-4.4z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="1.2"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <!-- clip -->
+        <path
+            android:pathData="M15.2 4.2v4.2"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="1.2"
+            android:strokeLineCap="round" />
+        <!-- taper to the metal sleeve -->
+        <path
+            android:pathData="M9.8 14l1.3 3.2h1.8L14.2 14z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="1.2"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <!-- lead -->
+        <path
+            android:pathData="M12 17.2v2.6"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="1.2"
+            android:strokeLineCap="round" />
+    </group>
+</vector>

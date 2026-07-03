@@ -178,6 +178,15 @@ fun NoteCanvasScreen(
     val viewOrientation by viewModel.viewOrientation.collectAsStateWithLifecycle()
     val pageNavigationMode by viewModel.pageNavigationMode.collectAsStateWithLifecycle()
     val penIconStyle by settingsViewModel.penIconStyle.collectAsStateWithLifecycle()
+    // FA-23 tool configuration (colour / line type / tip width), edited via the per-tool dropdown.
+    val penColor by viewModel.penColor.collectAsStateWithLifecycle()
+    val penLineType by viewModel.penLineType.collectAsStateWithLifecycle()
+    val highlighterColor by viewModel.highlighterColor.collectAsStateWithLifecycle()
+    val highlighterWidth by viewModel.highlighterWidth.collectAsStateWithLifecycle()
+    val pencilLineType by viewModel.pencilLineType.collectAsStateWithLifecycle()
+    var showPenMenu by remember { mutableStateOf(false) }
+    var showHighlighterMenu by remember { mutableStateOf(false) }
+    var showPencilMenu by remember { mutableStateOf(false) }
     val pageTitle by viewModel.pageTitle.collectAsStateWithLifecycle()
     val pageDateLabel by viewModel.pageDateLabel.collectAsStateWithLifecycle()
     // Quick Nav lists NOTEBOOKS (one per notebook, titled by the notebook name so renames show), never
@@ -433,37 +442,83 @@ fun NoteCanvasScreen(
         // Centre pod: drawing tools + undo/redo. The active tool uses the user's chosen highlight
         // style (A soft tile / B filled / C underline). Undo/Redo are actions — greyed when unavailable.
         val centreTools: @Composable RowScope.() -> Unit = {
-            ToolbarButton(
-                painter = painterResource(
-                    ElrondIcons.penToolIcon(ElrondIcons.Pen, ElrondIcons.PenTip, penIconStyle),
-                ),
-                contentDescription = "Pen",
-                onClick = { viewModel.selectTool(CanvasTool.PEN) },
-                selected = tool == CanvasTool.PEN,
-                treatment = toolTreatment,
-            )
-            ToolbarButton(
-                painter = painterResource(
-                    ElrondIcons.penToolIcon(
-                        ElrondIcons.Highlighter,
-                        ElrondIcons.HighlighterTip,
-                        penIconStyle,
+            // FA-23: tapping the ALREADY-selected pen/highlighter/pencil opens its config dropdown
+            // (colour / line type / tip width) anchored below the button; a first tap just selects.
+            Box {
+                ToolbarButton(
+                    painter = painterResource(
+                        ElrondIcons.penToolIcon(ElrondIcons.Pen, ElrondIcons.PenTip, penIconStyle),
                     ),
-                ),
-                contentDescription = "Highlighter",
-                onClick = { viewModel.selectTool(CanvasTool.HIGHLIGHTER) },
-                selected = tool == CanvasTool.HIGHLIGHTER,
-                treatment = toolTreatment,
-            )
-            ToolbarButton(
-                painter = painterResource(
-                    ElrondIcons.penToolIcon(ElrondIcons.Pencil, ElrondIcons.PencilTip, penIconStyle),
-                ),
-                contentDescription = "Pencil",
-                onClick = { viewModel.selectTool(CanvasTool.PENCIL) },
-                selected = tool == CanvasTool.PENCIL,
-                treatment = toolTreatment,
-            )
+                    contentDescription = "Pen",
+                    onClick = {
+                        if (tool == CanvasTool.PEN) showPenMenu = true
+                        else viewModel.selectTool(CanvasTool.PEN)
+                    },
+                    selected = tool == CanvasTool.PEN,
+                    treatment = toolTreatment,
+                )
+                DropdownMenu(expanded = showPenMenu, onDismissRequest = { showPenMenu = false }) {
+                    PenConfigMenu(
+                        selectedColor = penColor,
+                        onColor = viewModel::setPenColor,
+                        selectedLineType = penLineType,
+                        onLineType = viewModel::setPenLineType,
+                    )
+                }
+            }
+            Box {
+                ToolbarButton(
+                    painter = painterResource(
+                        ElrondIcons.penToolIcon(
+                            ElrondIcons.Highlighter,
+                            ElrondIcons.HighlighterTip,
+                            penIconStyle,
+                        ),
+                    ),
+                    contentDescription = "Highlighter",
+                    onClick = {
+                        if (tool == CanvasTool.HIGHLIGHTER) showHighlighterMenu = true
+                        else viewModel.selectTool(CanvasTool.HIGHLIGHTER)
+                    },
+                    selected = tool == CanvasTool.HIGHLIGHTER,
+                    treatment = toolTreatment,
+                )
+                DropdownMenu(
+                    expanded = showHighlighterMenu,
+                    onDismissRequest = { showHighlighterMenu = false },
+                ) {
+                    HighlighterConfigMenu(
+                        selectedColor = highlighterColor,
+                        onColor = viewModel::setHighlighterColor,
+                        selectedWidth = highlighterWidth,
+                        onWidth = viewModel::setHighlighterWidth,
+                    )
+                }
+            }
+            Box {
+                ToolbarButton(
+                    painter = painterResource(
+                        ElrondIcons.penToolIcon(
+                            ElrondIcons.PencilMech,
+                            ElrondIcons.PencilMechTip,
+                            penIconStyle,
+                        ),
+                    ),
+                    contentDescription = "Pencil",
+                    onClick = {
+                        if (tool == CanvasTool.PENCIL) showPencilMenu = true
+                        else viewModel.selectTool(CanvasTool.PENCIL)
+                    },
+                    selected = tool == CanvasTool.PENCIL,
+                    treatment = toolTreatment,
+                )
+                DropdownMenu(expanded = showPencilMenu, onDismissRequest = { showPencilMenu = false }) {
+                    PencilConfigMenu(
+                        selectedLineType = pencilLineType,
+                        onLineType = viewModel::setPencilLineType,
+                    )
+                }
+            }
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Eraser),
                 contentDescription = "Eraser",
