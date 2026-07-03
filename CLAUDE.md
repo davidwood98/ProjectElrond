@@ -631,6 +631,10 @@ swapped a native lib, so it's worth one `readelf` check.
 
 ### Future: upgrading androidx.ink to 1.0.0 (stable) safely
 
+_(DONE in FA-23 (2026-07-03) following exactly this checklist — sanitizer + single `inkBatchFrom`
+seam + adversarial instrumented fixtures; the on-device gate items are listed in the FA-23 record.
+Kept as the reference for any future ink bump, e.g. 1.1.x.)_
+
 We are intentionally pinned to `1.0.0-alpha04`. A later move to stable `1.0.0` is still desirable,
 but it must be done deliberately — the FA-7 regression happened because the upgrade was treated as a
 drop-in. The exact API delta (verified by inspecting both AARs with `javap`) is:
@@ -1679,6 +1683,97 @@ fine** (2026-07-02), so the segmented/chunked bake is **parked** — revisit if 
 
 `canvas-rendering-architecture.md` is retained as the investigation record; its three fixes are all
 now implemented (1–2 pre-FA-22, 3 completed here).
+
+## FA-23 — canvas tools: ink 1.0.0 upgrade, colours, line types, highlighter, textured pencil, hold-to-straighten (2026-07-03)
+
+Feature batch on branch **FA-23** (one commit per stage). **424 app + 24 aibackend JVM/Robolectric
+tests pass** (0 failures; was 381+24); `:app:assembleDebug` + `:app:assembleDebugAndroidTest` build on
+the WSL Linux SDK and every native lib in the built APK (incl. the new ink 1.0.0 `libink.so`) is
+16 KB (`0x4000`) LOAD-aligned. **No schema change — DB stays v16** (per-stroke `brushFamily`/
+`colorArgb`/`brushSize`/`groupId` already persisted everything; the five tool configs are DataStore
+prefs). The Compose/ink surfaces (dropdowns, live pattern preview, straighten feel, pencil texture,
+highlighter compositing) are **device/manual-verify pending** like the other ink flows. Scope was
+confirmed with the user up front: snap-live straighten with endpoint adjust; do the ink upgrade now
+(for the pencil texture) rather than approximate; segment ALL patterns (per-dash erase, whole-line
+lasso) but render the line style live while drawing; exclude highlighter from AI recognition.
+
+- **Stage 0 — androidx.ink `1.0.0-alpha04` → `1.0.0` (stable), per the FA-8 checklist.** New
+  `data/StrokeInputSanitizer` (pure JVM: strictly-increasing t, drop non-finite/coincident points,
+  clamp channels to valid-or-sentinel) guards the load boundary; `StrokeSerialization.toStroke`
+  builds batches in one private `inkBatchFrom` seam using the throwing `add` (1.0.0 removed
+  `addOrIgnore`) — after sanitising, a throw means a bug, not bad data. `StockBrushes.*Latest`
+  properties became functions. Adversarial stored-point fixtures (dup/decreasing t, NaN,
+  out-of-range pressure) were added to `StrokeSerializationInstrumentedTest` as the on-device merge
+  gate. **Device gate still pending:** `connectedDebugAndroidTest`, strokes survive close/reopen on
+  real data, first-touch check (`eagerInit` is retained in 1.0.0 — verified by javap).
+- **Tools & brushes.** `CanvasTool` gains **HIGHLIGHTER** and **PENCIL** (real tools, not
+  placeholders). `CanvasViewModel.currentBrushSpec()` derives a pure `BrushSpec(familyKey, colour,
+  size, epsilon)` per tool — pen = configurable colour (`PenColor` BLACK/RED/BLUE, default BLUE =
+  the old `USER_INK_COLOR` navy, pixel-identical), highlighter = `HighlighterColor` (5, baked ~35%
+  alpha) × `HighlighterWidth` (12/20/32f), pencil = ink 1.0.0's texture-backed
+  **`StockBrushes.pencilUnstable`** (opt-in `@ExperimentalInkCustomBrushApi`; translucent graphite
+  grey, 3.5f). `StrokeSerialization.familyKey/familyFromKey` are public, gained the `"pencil"` key,
+  and `brushFor(spec)` is the one spec→Brush bridge (used by `InkCanvas.startStroke` and the VM's
+  pattern-stroke builder). `ui/InkTextures` shares one `StockTextureBitmapStore` across the wet
+  `InProgressStrokesView.textureBitmapStore` and every `CanvasStrokeRenderer.create(store)` call
+  site (dry layer + SelectionLayer) so the pencil texture resolves everywhere; the old `penBrush`
+  val is gone.
+- **Tool config dropdowns (`ui/ToolConfigMenu.kt`).** Tapping the **already-selected**
+  pen/highlighter/pencil toolbar icon opens a compact `DropdownMenu` below it (the More-menu
+  precedent); a first tap just selects. Pen = colour swatches + an expandable line-type list;
+  highlighter = 5 swatches (drawn opaque) + 3 tip-width dots; pencil = line types only. Line-type
+  glyphs are Compose-drawn from the same `InkLineType` pattern spec the baked segments use, so menu
+  and ink can't drift. New bespoke `ic_pencil_mech(.tip)` drawables (mechanical pencil, 1.2 weight)
+  registered in `ElrondIcons`; classic `ic_pencil` kept unregistered-from-toolbar.
+- **Line types = write-time segmentation + live patterned wet ink.** `InkLineType { SOLID,
+  CENTRELINE, DASHED, DOTTED, DASH_DOT }` carries the pattern as `PatternRun(drawLen, gapLen)`
+  multiples of brush size (dashed 6/3, dotted dot/2.5, centreline 12/3+3/3, dash-dot 8/3+dot/3) and
+  derives `dashIntervals()` for previews. Pure `domain/LinePatterning.segmentPolyline` walks the
+  polyline by arc length, lerps all channels at boundaries, rebases per-segment timestamps (always
+  valid for the throwing `add`), and caps at 400 segments (remainder = one solid tail).
+  `StrokeTransforms.segment` is the ink bridge; the `strokeSegmenter` seam hooks
+  `onStrokesFinished` after simplification — segments share one `groupId` (lasso moves the whole
+  line via `expandToGroups`; **eraser clips individual dashes** — chosen semantics) and carry the
+  tool's real brush, so a **dashed pencil line keeps its texture**. Chosen over ink's stock
+  `dashedLine()` brush for uniformity (only DASHED is brush-native even in 1.1.0-alpha; texture
+  mapping is tile-only, no along-stroke patterns). **Live render:** a non-solid stroke bypasses
+  `InProgressStrokesView` — InkCanvas buffers page-space points into
+  `CanvasViewModel.livePatternStroke` and `ui/LivePatternStrokeOverlay` (Compose, state read inside
+  the draw lambda per FA-10) draws the path with the pattern's dash effect; pen-up bakes a real ink
+  stroke (`patternStrokeBuilder` seam) through the normal finish → segmentation pipeline.
+- **Hold-to-straighten (snap live).** In `InkCanvas`: once a stroke's displacement exceeds 48px and
+  the pen then rests within 8px for 600ms, the wet/pattern stroke is cancelled
+  (`cancelStroke(strokeId)` — eventless overload) and `CanvasViewModel.beginStraightLine` takes
+  over: the overlay renders a straight line in the tool's colour **and line style**, MOVEs adjust
+  the endpoint, lift commits via `LinePatterning.straightLinePoints` → the shared builder →
+  `onStrokesFinished` (so a straightened dashed line is straight **then** segmented, with undo).
+  The min-length gate keeps taps/short marks/the FA-21 stationary AI-box hold from converting; the
+  displacement (not arc-length) gate also means closed shapes (gesture circles) never straighten.
+- **Highlighter excluded from AI recognition.** `data/LineRecognition.isRecognizableInk` (brush
+  family ≠ highlighter) filters `buildRecognizedLines` (background extraction), and a
+  `recognizableInk` VM seam filters trigger detection (a highlighter mark can never BE the trigger
+  line), gesture-enclosed content, prefix prompt/context, and lasso AI prompts. Pencil stays
+  recognized (it's writing).
+- **Settings.** Five DataStore prefs (`penColor`, `penLineType`, `highlighterColor`,
+  `highlighterWidth`, `pencilLineType`, enum-by-name) collected into the VM via the established
+  nullable-flow + persist-writer ctor seams. No Settings-screen UI — config lives in the canvas
+  dropdowns.
+- **Thumbnails.** `NoteRepository.loadStrokePreview` returns typed `StrokePreview(points,
+  colorArgb, isHighlighter)`; `ThumbnailRenderer` + the on-card `StrokeThumbnail` draw per-stroke
+  colour, wide translucent highlighter marks, and single-point dots (dotted-line segments).
+- New/updated tests: `StrokeInputSanitizerTest`, `LinePatterningTest` (arc-length cuts, boundary
+  lerp, t-rebase, dot/centreline/dash-dot shapes, cap+tail, straight-line synthesis),
+  `ToolConfigEnumsTest`, `CanvasViewModelToolConfigTest` (brush spec per tool, persistence
+  write-throughs, flow seeding, segmentation grouping + undo, live-pattern + straighten state
+  machines), `CanvasViewModelRecognitionFilterTest`, `SettingsRepositoryTest` (+5 round-trips),
+  `NoteRepositoryTest` (typed previews carry colour/family), instrumented adversarial serialization
+  fixtures.
+- **Device-pass checklist (pending):** Stage-0 gate first (reopen persistence, first stylus touch,
+  `connectedDebugAndroidTest`); then pencil texture look (fallback = grey pressure-pen constants in
+  `currentBrushSpec`), highlighter alpha compositing (tune `HighlighterColor` values), dropdown
+  anchoring under the 0.78 toolbar scale, live pattern preview fidelity/latency, straighten hold
+  tuning (600ms/8px/48px), per-dash erase + whole-line lasso move on a patterned line, coloured
+  thumbnails.
 
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
