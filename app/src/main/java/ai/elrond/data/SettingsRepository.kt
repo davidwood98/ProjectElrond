@@ -4,7 +4,11 @@ import ai.elrond.domain.AiColorMode
 import ai.elrond.domain.AiLoaderStyle
 import ai.elrond.domain.AppAccent
 import ai.elrond.domain.FingerGestureAction
+import ai.elrond.domain.HighlighterColor
+import ai.elrond.domain.HighlighterWidth
+import ai.elrond.domain.InkLineType
 import ai.elrond.domain.NoteTabsMode
+import ai.elrond.domain.PenColor
 import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.StylusHoldTool
 import ai.elrond.domain.PaperStyle
@@ -185,6 +189,48 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setToolSelectedTreatment(treatment: ToolSelectedTreatment) {
         context.settingsDataStore.edit { it[TOOL_TREATMENT_KEY] = treatment.name }
+    }
+
+    // --- Canvas tool configuration (FA-23, the toolbar's per-tool dropdown menus) ---
+
+    /** Pen ink colour (black / red / blue; default the original navy blue). */
+    val penColor: Flow<PenColor> = context.settingsDataStore.data
+        .map { PenColor.fromName(it[PEN_COLOR_KEY]) }
+
+    suspend fun setPenColor(color: PenColor) {
+        context.settingsDataStore.edit { it[PEN_COLOR_KEY] = color.name }
+    }
+
+    /** Pen line style (solid / centreline / dashed / dotted / dash-dot). */
+    val penLineType: Flow<InkLineType> = context.settingsDataStore.data
+        .map { InkLineType.fromName(it[PEN_LINE_TYPE_KEY]) }
+
+    suspend fun setPenLineType(type: InkLineType) {
+        context.settingsDataStore.edit { it[PEN_LINE_TYPE_KEY] = type.name }
+    }
+
+    /** Highlighter colour (pink / blue / green / yellow / orange). */
+    val highlighterColor: Flow<HighlighterColor> = context.settingsDataStore.data
+        .map { HighlighterColor.fromName(it[HIGHLIGHTER_COLOR_KEY]) }
+
+    suspend fun setHighlighterColor(color: HighlighterColor) {
+        context.settingsDataStore.edit { it[HIGHLIGHTER_COLOR_KEY] = color.name }
+    }
+
+    /** Highlighter tip width (fine / standard / thick). */
+    val highlighterWidth: Flow<HighlighterWidth> = context.settingsDataStore.data
+        .map { HighlighterWidth.fromName(it[HIGHLIGHTER_WIDTH_KEY]) }
+
+    suspend fun setHighlighterWidth(width: HighlighterWidth) {
+        context.settingsDataStore.edit { it[HIGHLIGHTER_WIDTH_KEY] = width.name }
+    }
+
+    /** Pencil line style — same choices as the pen. */
+    val pencilLineType: Flow<InkLineType> = context.settingsDataStore.data
+        .map { InkLineType.fromName(it[PENCIL_LINE_TYPE_KEY]) }
+
+    suspend fun setPencilLineType(type: InkLineType) {
+        context.settingsDataStore.edit { it[PENCIL_LINE_TYPE_KEY] = type.name }
     }
 
     // --- Appearance tweaks (FA-14, from the Claude Design handoff) ---
@@ -428,6 +474,11 @@ class SettingsRepository(private val context: Context) {
         private val STYLUS_HOLD_TOOL_KEY = stringPreferencesKey("stylus_hold_tool")
         private val STYLUS_DOUBLE_CLICK_KEY = stringPreferencesKey("stylus_double_click_action")
         private val STYLUS_SINGLE_CLICK_KEY = stringPreferencesKey("stylus_single_click_action")
+        private val PEN_COLOR_KEY = stringPreferencesKey("pen_color")
+        private val PEN_LINE_TYPE_KEY = stringPreferencesKey("pen_line_type")
+        private val HIGHLIGHTER_COLOR_KEY = stringPreferencesKey("highlighter_color")
+        private val HIGHLIGHTER_WIDTH_KEY = stringPreferencesKey("highlighter_width")
+        private val PENCIL_LINE_TYPE_KEY = stringPreferencesKey("pencil_line_type")
         private val TOOL_TREATMENT_KEY = stringPreferencesKey("tool_selected_treatment")
         private val PEN_ICON_STYLE_KEY = stringPreferencesKey("pen_icon_style")
         private val AI_LOADER_STYLE_KEY = stringPreferencesKey("ai_loader_style")
