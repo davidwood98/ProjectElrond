@@ -23,6 +23,7 @@ import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.MlKitHandwritingRecognizer
+import ai.elrond.data.isRecognizableInk
 import ai.elrond.domain.NotePosition
 import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.QueryTriggerDetector
@@ -144,6 +145,11 @@ class CanvasViewModel(
      * real [StrokeTransforms.simplify] for production.
      */
     private val strokeSimplifier: (Stroke, Float) -> Stroke = { stroke, _ -> stroke },
+    /**
+     * True when a stroke is handwriting the AI may read — highlighter marks are not (FA-23).
+     * Reads the ink-native brush in production, so it's a seam (JVM tests keep the default).
+     */
+    private val recognizableInk: (Stroke) -> Boolean = { true },
     triggerModeFlow: Flow<TriggerMode>? = null,
     /** Prefix-mode inactivity delay (ms) before the question fires; null keeps the default. */
     prefixTriggerDelayMsFlow: Flow<Long>? = null,
@@ -236,6 +242,7 @@ class CanvasViewModel(
         pageId = savedStateHandle.get<String>("pageId"),
         enqueueExtraction = enqueueExtraction,
         strokeSimplifier = StrokeTransforms::simplify,
+        recognizableInk = ::isRecognizableInk,
         triggerCommandFlow = settings.triggerCommand,
         triggerModeFlow = settings.triggerMode,
         prefixTriggerDelayMsFlow = settings.prefixTriggerDelayMs,
@@ -1907,9 +1914,11 @@ class CanvasViewModel(
         val recognizer = recognizer ?: return
         val sel = _selection.value ?: return
         val selected = _finishedStrokes.value.filter { it.id in sel.ids }.map { it.stroke }
-        if (selected.isEmpty()) return
+        // A lasso over highlighted text should read the text, not choke on the highlight bar.
+        val readable = selected.filter(recognizableInk)
+        if (readable.isEmpty()) return
         viewModelScope.launch {
-            val question = lineSplitter(selected)
+            val question = lineSplitter(readable)
                 .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
                 .joinToString(" ")
                 .ifBlank { null } ?: return@launch
@@ -2034,12 +2043,18 @@ class CanvasViewModel(
     private suspend fun detectAndHandleTrigger(recognizer: HandwritingRecognizer) {
         if (_finishedStrokes.value.isEmpty()) return
         val strokes = _finishedStrokes.value.map { it.stroke }
-        val lines = lineSplitter(strokes)
-        if (lines.isEmpty()) return
+        // Only readable handwriting reaches recognition — a highlighter mark can neither be the
+        // trigger line nor pollute a text line's stroke group (FA-23). The gesture path keeps the
+        // full list so the genuinely-last stroke is tested as the lasso; its content is filtered
+        // inside.
+        val readable = strokes.filter(recognizableInk)
+        val lines = if (readable.isEmpty()) emptyList() else lineSplitter(readable)
 
         when (triggerMode) {
-            TriggerMode.COMMAND -> handleCommandTrigger(recognizer, strokes, lines)
-            TriggerMode.PREFIX_COMMAND -> handlePrefixTrigger(recognizer, strokes, lines)
+            TriggerMode.COMMAND ->
+                if (lines.isNotEmpty()) handleCommandTrigger(recognizer, readable, lines)
+            TriggerMode.PREFIX_COMMAND ->
+                if (lines.isNotEmpty()) handlePrefixTrigger(recognizer, readable, lines)
             TriggerMode.GESTURE -> handleGestureTrigger(recognizer, strokes)
         }
     }
@@ -2103,6 +2118,7 @@ class CanvasViewModel(
         val content = strokes.dropLast(1)
         val enclosed = GestureTriggerDetector.enclosedIndices(polygon, content.map(centroidOf))
             .map(content::get)
+            .filter(recognizableInk)
         if (enclosed.isEmpty()) return
 
         val question = lineSplitter(enclosed)
@@ -2204,7 +2220,7 @@ class CanvasViewModel(
     private suspend fun runPrefixQuery(state: PrefixTriggerState.Listening) {
         val recognizer = recognizer ?: return
         val byId = _finishedStrokes.value.associateBy { it.id }
-        val promptStrokes = state.promptStrokeIds.mapNotNull { byId[it]?.stroke }
+        val promptStrokes = state.promptStrokeIds.mapNotNull { byId[it]?.stroke }.filter(recognizableInk)
         if (promptStrokes.isEmpty()) return
 
         val question = lineSplitter(promptStrokes)
@@ -2214,7 +2230,9 @@ class CanvasViewModel(
 
         // The command line and the question itself aside, the rest of the page goes along as context.
         val excludedIds = (state.triggerStrokeIds + state.promptStrokeIds).toSet()
-        val contextStrokes = _finishedStrokes.value.filterNot { it.id in excludedIds }.map { it.stroke }
+        val contextStrokes = _finishedStrokes.value.filterNot { it.id in excludedIds }
+            .map { it.stroke }
+            .filter(recognizableInk)
         val context = lineSplitter(contextStrokes)
             .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
             .joinToString("\n")
