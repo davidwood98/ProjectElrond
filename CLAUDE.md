@@ -1704,8 +1704,11 @@ lasso) but render the line style live while drawing; exclude highlighter from AI
   `addOrIgnore`) — after sanitising, a throw means a bug, not bad data. `StockBrushes.*Latest`
   properties became functions. Adversarial stored-point fixtures (dup/decreasing t, NaN,
   out-of-range pressure) were added to `StrokeSerializationInstrumentedTest` as the on-device merge
-  gate. **Device gate still pending:** `connectedDebugAndroidTest`, strokes survive close/reopen on
-  real data, first-touch check (`eagerInit` is retained in 1.0.0 — verified by javap).
+  gate. **Device gate PASSED (2026-07-08):** `connectedDebugAndroidTest` green on the Galaxy Tab S
+  (after the all-or-none channel-reporting fix in the device-feedback round below — the only
+  remaining failure is the pre-existing FA-10 `DeviceCalendarProviderTest` device-environment
+  issue); strokes survive close/reopen on real data and the first stylus touch registers
+  (confirmed across the 2026-07-07/08 device passes; `eagerInit` retained in 1.0.0).
 - **Tools & brushes.** `CanvasTool` gains **HIGHLIGHTER** and **PENCIL** (real tools, not
   placeholders). `CanvasViewModel.currentBrushSpec()` derives a pure `BrushSpec(familyKey, colour,
   size, epsilon)` per tool — pen = configurable colour (`PenColor` BLACK/RED/BLUE, default BLUE =
@@ -1768,12 +1771,11 @@ lasso) but render the line style live while drawing; exclude highlighter from AI
   machines), `CanvasViewModelRecognitionFilterTest`, `SettingsRepositoryTest` (+5 round-trips),
   `NoteRepositoryTest` (typed previews carry colour/family), instrumented adversarial serialization
   fixtures.
-- **Device-pass checklist (pending):** Stage-0 gate first (reopen persistence, first stylus touch,
-  `connectedDebugAndroidTest`); then pencil texture look (fallback = grey pressure-pen constants in
-  `currentBrushSpec`), highlighter alpha compositing (tune `HighlighterColor` values), dropdown
-  anchoring under the 0.78 toolbar scale, live pattern preview fidelity/latency, straighten hold
-  tuning (600ms/8px/48px), per-dash erase + whole-line lasso move on a patterned line, coloured
-  thumbnails.
+- **Device-pass checklist — DONE (2026-07-07/08).** Stage-0 gate passed (reopen persistence,
+  first stylus touch, `connectedDebugAndroidTest` green bar the pre-existing FA-10 calendar
+  failure); the tool/ink items were exercised in the device-feedback round below (which retuned
+  the highlighter widths/colours + straighten hold and fixed the four found bugs) and its fixes
+  device-confirmed 2026-07-08. **FA-23 is merge-ready.**
 
 ### FA-23 device-feedback round (2026-07-07)
 
