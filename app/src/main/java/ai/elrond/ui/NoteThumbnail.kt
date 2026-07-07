@@ -1,6 +1,7 @@
 package ai.elrond.ui
 
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.StrokePreview
 import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.presentation.NoteListViewModel
 import android.graphics.Bitmap
@@ -13,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
@@ -54,22 +56,23 @@ fun NoteThumbnail(
             modifier = modifier.testTag(THUMBNAIL_IMAGE_TAG),
         )
     } else {
-        val preview by produceState<List<List<Pair<Float, Float>>>>(emptyList(), pageId, modifiedAt) {
+        val preview by produceState<List<StrokePreview>>(emptyList(), pageId, modifiedAt) {
             value = viewModel.preview(pageId)
         }
-        StrokeThumbnail(polylines = preview, modifier = modifier.testTag(THUMBNAIL_FALLBACK_TAG))
+        StrokeThumbnail(previews = preview, modifier = modifier.testTag(THUMBNAIL_FALLBACK_TAG))
     }
 }
 
-/** Miniature of the page's ink, drawn from normalized (0..1) polylines. */
+/** Miniature of the page's ink, drawn from normalized (0..1) per-stroke previews (FA-23: each in
+ *  its own colour; highlighter marks wide + translucent). */
 @Composable
 fun StrokeThumbnail(
-    polylines: List<List<Pair<Float, Float>>>,
+    previews: List<StrokePreview>,
     modifier: Modifier = Modifier,
 ) {
     val inkColor = Color(CanvasViewModel.USER_INK_COLOR)
     Canvas(modifier = modifier) {
-        if (polylines.isEmpty()) {
+        if (previews.isEmpty()) {
             // Blank page hint: a few faint ruled lines.
             val lineColor = inkColor.copy(alpha = 0.08f)
             for (i in 1..3) {
@@ -80,15 +83,23 @@ fun StrokeThumbnail(
         }
         val scale = minOf(size.width, size.height) * 0.9f
         val pad = minOf(size.width, size.height) * 0.05f
-        polylines.forEach { line ->
-            if (line.size < 2) return@forEach
+        previews.forEach { stroke ->
+            if (stroke.points.isEmpty()) return@forEach
+            // Highlighter translucency is baked into the colour; plain ink gets the card alpha.
+            val color = Color(stroke.colorArgb).let { if (stroke.isHighlighter) it else it.copy(alpha = 0.85f) }
+            val width = if (stroke.isHighlighter) 10f else 2.5f
+            if (stroke.points.size == 1) {
+                val (x, y) = stroke.points.first()
+                drawCircle(color, radius = width / 2f, center = Offset(pad + x * scale, pad + y * scale))
+                return@forEach
+            }
             val path = Path()
-            line.forEachIndexed { i, (x, y) ->
+            stroke.points.forEachIndexed { i, (x, y) ->
                 val px = pad + x * scale
                 val py = pad + y * scale
                 if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
             }
-            drawPath(path, inkColor.copy(alpha = 0.85f), style = Stroke(width = 2.5f))
+            drawPath(path, color, style = Stroke(width = width, cap = StrokeCap.Round))
         }
     }
 }

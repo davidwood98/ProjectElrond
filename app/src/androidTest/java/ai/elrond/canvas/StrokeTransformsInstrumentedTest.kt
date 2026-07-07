@@ -86,7 +86,7 @@ class StrokeTransformsInstrumentedTest {
     private fun buildStroke(): Stroke {
         val batch = MutableStrokeInputBatch()
         POINTS.forEachIndexed { index, (x, y) ->
-            batch.addOrIgnore(
+            batch.add(
                 type = InputToolType.STYLUS,
                 x = x,
                 y = y,
@@ -97,7 +97,7 @@ class StrokeTransformsInstrumentedTest {
             )
         }
         val brush = Brush.createWithColorIntArgb(
-            family = StockBrushes.pressurePenLatest,
+            family = StockBrushes.pressurePen(),
             colorIntArgb = 0xFF1A237E.toInt(),
             size = 5f,
             epsilon = 0.1f,

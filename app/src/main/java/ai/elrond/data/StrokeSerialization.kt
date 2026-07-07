@@ -1,9 +1,11 @@
 package ai.elrond.data
 
+import ai.elrond.domain.BrushSpec
 import ai.elrond.domain.CanvasStroke
 import ai.elrond.domain.StrokeSimplifier
 import androidx.ink.brush.Brush
 import androidx.ink.brush.BrushFamily
+import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.InputToolType
 import androidx.ink.brush.StockBrushes
 import androidx.ink.strokes.MutableStrokeInputBatch
@@ -24,9 +26,10 @@ object StrokeSerialization {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    private const val FAMILY_PRESSURE_PEN = "pressure-pen"
+    private const val FAMILY_PRESSURE_PEN = BrushSpec.FAMILY_PRESSURE_PEN
     private const val FAMILY_MARKER = "marker"
-    private const val FAMILY_HIGHLIGHTER = "highlighter"
+    private const val FAMILY_HIGHLIGHTER = BrushSpec.FAMILY_HIGHLIGHTER
+    private const val FAMILY_PENCIL = BrushSpec.FAMILY_PENCIL
 
     fun toEntity(
         stroke: Stroke,
@@ -82,13 +85,24 @@ object StrokeSerialization {
             val keep = StrokeSimplifier.keptIndices(points.map { it.x to it.y }, minSpacing)
             points = keep.map { points[it] }
         }
+        val brush = Brush.createWithColorIntArgb(
+            family = familyFromKey(entity.brushFamily),
+            colorIntArgb = entity.colorArgb,
+            size = entity.brushSize,
+            epsilon = entity.brushEpsilon,
+        )
+        return Stroke(brush, inkBatchFrom(points))
+    }
+
+    /**
+     * The ONE place stored points become an ink input batch. ink 1.0.0's `add` throws on a point
+     * invalid relative to the batch (no skip-invalid variant exists), so the points are sanitized
+     * first — after [StrokeInputSanitizer] a throw means a genuine bug, not bad stored data.
+     */
+    private fun inkBatchFrom(points: List<SerializedStrokeInput>): MutableStrokeInputBatch {
         val batch = MutableStrokeInputBatch()
-        points.forEach { p ->
-            // addOrIgnore skips a point that would be invalid relative to the batch (e.g. a
-            // non-increasing timestamp) instead of throwing, so a reloaded stroke keeps every
-            // valid point. (FA-8: ink 1.0.0's add() threw on those points and collapsed reloaded
-            // strokes to a single dot — see CLAUDE.md; pinned back to 1.0.0-alpha04.)
-            batch.addOrIgnore(
+        StrokeInputSanitizer.sanitize(points).forEach { p ->
+            batch.add(
                 type = toolFromKey(p.tool),
                 x = p.x,
                 y = p.y,
@@ -98,13 +112,7 @@ object StrokeSerialization {
                 orientationRadians = p.orientation,
             )
         }
-        val brush = Brush.createWithColorIntArgb(
-            family = familyFromKey(entity.brushFamily),
-            colorIntArgb = entity.colorArgb,
-            size = entity.brushSize,
-            epsilon = entity.brushEpsilon,
-        )
-        return Stroke(brush, batch)
+        return batch
     }
 
     /** Raw (x, y) polyline from a stored stroke — for thumbnails; no ink natives. */
@@ -181,16 +189,34 @@ object StrokeSerialization {
         else -> "unknown"
     }
 
-    private fun familyKey(family: BrushFamily): String = when (family) {
-        StockBrushes.markerLatest -> FAMILY_MARKER
-        StockBrushes.highlighterLatest -> FAMILY_HIGHLIGHTER
+    /**
+     * The single family ↔ key mapping shared by persistence and brush construction ([BrushSpec]
+     * carries these keys; `InkCanvas` builds brushes through [familyFromKey]). The pencil is ink
+     * 1.0.0's texture-backed [StockBrushes.pencilUnstable] — "unstable" means the family's look
+     * may change across ink versions, which is fine: we persist only our own key string.
+     */
+    @OptIn(ExperimentalInkCustomBrushApi::class)
+    fun familyKey(family: BrushFamily): String = when (family) {
+        StockBrushes.marker() -> FAMILY_MARKER
+        StockBrushes.highlighter() -> FAMILY_HIGHLIGHTER
+        StockBrushes.pencilUnstable -> FAMILY_PENCIL
         else -> FAMILY_PRESSURE_PEN
     }
 
-    private fun familyFromKey(key: String): BrushFamily = when (key) {
-        FAMILY_MARKER -> StockBrushes.markerLatest
-        FAMILY_HIGHLIGHTER -> StockBrushes.highlighterLatest
-        else -> StockBrushes.pressurePenLatest
+    /** Builds the ink-native [Brush] a [BrushSpec] describes — the one spec → brush bridge. */
+    fun brushFor(spec: BrushSpec): Brush = Brush.createWithColorIntArgb(
+        family = familyFromKey(spec.familyKey),
+        colorIntArgb = spec.colorArgb,
+        size = spec.size,
+        epsilon = spec.epsilon,
+    )
+
+    @OptIn(ExperimentalInkCustomBrushApi::class)
+    fun familyFromKey(key: String): BrushFamily = when (key) {
+        FAMILY_MARKER -> StockBrushes.marker()
+        FAMILY_HIGHLIGHTER -> StockBrushes.highlighter()
+        FAMILY_PENCIL -> StockBrushes.pencilUnstable
+        else -> StockBrushes.pressurePen()
     }
 
     private fun toolKey(type: InputToolType): String = when (type) {

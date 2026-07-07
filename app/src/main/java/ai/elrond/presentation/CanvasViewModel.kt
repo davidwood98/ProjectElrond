@@ -8,8 +8,19 @@ import ai.elrond.domain.StrokeSelection
 import ai.elrond.domain.SelectionState
 import ai.elrond.domain.SelectionBounds
 import ai.elrond.domain.ClipboardState
+import ai.elrond.domain.BrushSpec
 import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.CanvasStroke
+import ai.elrond.domain.HighlighterColor
+import ai.elrond.domain.HighlighterWidth
+import ai.elrond.domain.InkLineType
+import ai.elrond.domain.InkPoint
+import ai.elrond.domain.LinePatterning
+import ai.elrond.domain.LivePatternStroke
+import ai.elrond.domain.StraightLinePreview
+import ai.elrond.domain.StraightLineSnap
+import ai.elrond.domain.PenColor
+import ai.elrond.domain.PencilLead
 import ai.elrond.domain.FingerGesture
 import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.StylusHoldTool
@@ -18,6 +29,8 @@ import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.MlKitHandwritingRecognizer
+import ai.elrond.data.StrokeSerialization
+import ai.elrond.data.isRecognizableInk
 import ai.elrond.domain.NotePosition
 import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.QueryTriggerDetector
@@ -58,8 +71,6 @@ import ai.elrond.data.SettingsRepository
 import ai.elrond.domain.PendingTaskExtraction
 import ai.elrond.domain.TodoPriority
 import android.content.Context
-import androidx.ink.brush.Brush
-import androidx.ink.brush.StockBrushes
 import androidx.ink.geometry.ImmutableBox
 import androidx.ink.geometry.ImmutableVec
 import androidx.ink.strokes.Stroke
@@ -141,6 +152,21 @@ class CanvasViewModel(
      * real [StrokeTransforms.simplify] for production.
      */
     private val strokeSimplifier: (Stroke, Float) -> Stroke = { stroke, _ -> stroke },
+    /**
+     * True when a stroke is handwriting the AI may read — highlighter marks are not (FA-23).
+     * Reads the ink-native brush in production, so it's a seam (JVM tests keep the default).
+     */
+    private val recognizableInk: (Stroke) -> Boolean = { true },
+    /**
+     * Cuts a finished non-solid-line stroke into its dash/dot segment strokes (FA-23). Touches ink
+     * natives, so it's a seam: identity by default; the @Inject ctor wires [StrokeTransforms.segment].
+     */
+    private val strokeSegmenter: (Stroke, InkLineType) -> List<Stroke> = { stroke, _ -> listOf(stroke) },
+    /**
+     * Bakes a live pattern stroke's buffered points into a real ink stroke (FA-23). Ink-native, so
+     * it's a seam — null in JVM tests (finish then just clears the preview).
+     */
+    private val patternStrokeBuilder: ((BrushSpec, List<InkPoint>) -> Stroke)? = null,
     triggerModeFlow: Flow<TriggerMode>? = null,
     /** Prefix-mode inactivity delay (ms) before the question fires; null keeps the default. */
     prefixTriggerDelayMsFlow: Flow<Long>? = null,
@@ -175,6 +201,20 @@ class CanvasViewModel(
     stylusDoubleClickActionFlow: Flow<FingerGestureAction>? = null,
     /** Action bound to a single S Pen button click; null keeps the default (none). */
     stylusSingleClickActionFlow: Flow<FingerGestureAction>? = null,
+    // FA-23 tool configuration (the toolbar's per-tool dropdown): each flow seeds the in-memory
+    // state; the persist writers mirror persistStylusOnly. Null in JVM tests keeps the defaults.
+    penColorFlow: Flow<PenColor>? = null,
+    penLineTypeFlow: Flow<InkLineType>? = null,
+    highlighterColorFlow: Flow<HighlighterColor>? = null,
+    highlighterWidthFlow: Flow<HighlighterWidth>? = null,
+    pencilLineTypeFlow: Flow<InkLineType>? = null,
+    pencilLeadFlow: Flow<PencilLead>? = null,
+    private val persistPenColor: (suspend (PenColor) -> Unit)? = null,
+    private val persistPenLineType: (suspend (InkLineType) -> Unit)? = null,
+    private val persistHighlighterColor: (suspend (HighlighterColor) -> Unit)? = null,
+    private val persistHighlighterWidth: (suspend (HighlighterWidth) -> Unit)? = null,
+    private val persistPencilLineType: (suspend (InkLineType) -> Unit)? = null,
+    private val persistPencilLead: (suspend (PencilLead) -> Unit)? = null,
     /** Write-through for the palm-rejection preference (null in tests). */
     private val persistStylusOnly: (suspend (Boolean) -> Unit)? = null,
     /**
@@ -221,6 +261,11 @@ class CanvasViewModel(
         pageId = savedStateHandle.get<String>("pageId"),
         enqueueExtraction = enqueueExtraction,
         strokeSimplifier = StrokeTransforms::simplify,
+        recognizableInk = ::isRecognizableInk,
+        strokeSegmenter = StrokeTransforms::segment,
+        patternStrokeBuilder = { spec, points ->
+            StrokeTransforms.buildStroke(StrokeSerialization.brushFor(spec), points)
+        },
         triggerCommandFlow = settings.triggerCommand,
         triggerModeFlow = settings.triggerMode,
         prefixTriggerDelayMsFlow = settings.prefixTriggerDelayMs,
@@ -240,6 +285,18 @@ class CanvasViewModel(
         stylusHoldToolFlow = settings.stylusHoldTool,
         stylusDoubleClickActionFlow = settings.stylusDoubleClickAction,
         stylusSingleClickActionFlow = settings.stylusSingleClickAction,
+        penColorFlow = settings.penColor,
+        penLineTypeFlow = settings.penLineType,
+        highlighterColorFlow = settings.highlighterColor,
+        highlighterWidthFlow = settings.highlighterWidth,
+        pencilLineTypeFlow = settings.pencilLineType,
+        pencilLeadFlow = settings.pencilLead,
+        persistPenColor = { settings.setPenColor(it) },
+        persistPenLineType = { settings.setPenLineType(it) },
+        persistHighlighterColor = { settings.setHighlighterColor(it) },
+        persistHighlighterWidth = { settings.setHighlighterWidth(it) },
+        persistPencilLineType = { settings.setPencilLineType(it) },
+        persistPencilLead = { settings.setPencilLead(it) },
         persistStylusOnly = { settings.setStylusOnly(it) },
         // Real generator: render the page's normalized polylines (the same data the card draws) to a
         // bitmap off-thread and cache it; an empty page drops any stale file so the card shows blank.
@@ -289,6 +346,177 @@ class CanvasViewModel(
 
     /** The tool selected before the current one — restored by the FA-19 "last tool swap" gesture. */
     private var previousTool: CanvasTool = CanvasTool.PEN
+
+    // ── Tool configuration (FA-23) ────────────────────────────────────────────────────────────
+    // Per-tool colour / width / line type, seeded from settings and persisted on change. The brush
+    // itself is derived on demand by [currentBrushSpec]; InkCanvas builds the ink-native Brush.
+
+    private val _penColor = MutableStateFlow(PenColor.DEFAULT)
+    val penColor: StateFlow<PenColor> = _penColor.asStateFlow()
+
+    private val _penLineType = MutableStateFlow(InkLineType.DEFAULT)
+    val penLineType: StateFlow<InkLineType> = _penLineType.asStateFlow()
+
+    private val _highlighterColor = MutableStateFlow(HighlighterColor.DEFAULT)
+    val highlighterColor: StateFlow<HighlighterColor> = _highlighterColor.asStateFlow()
+
+    private val _highlighterWidth = MutableStateFlow(HighlighterWidth.DEFAULT)
+    val highlighterWidth: StateFlow<HighlighterWidth> = _highlighterWidth.asStateFlow()
+
+    private val _pencilLineType = MutableStateFlow(InkLineType.DEFAULT)
+    val pencilLineType: StateFlow<InkLineType> = _pencilLineType.asStateFlow()
+
+    private val _pencilLead = MutableStateFlow(PencilLead.DEFAULT)
+    val pencilLead: StateFlow<PencilLead> = _pencilLead.asStateFlow()
+
+    fun setPenColor(color: PenColor) {
+        _penColor.value = color
+        persistPenColor?.let { write -> viewModelScope.launch { write(color) } }
+    }
+
+    fun setPenLineType(type: InkLineType) {
+        _penLineType.value = type
+        persistPenLineType?.let { write -> viewModelScope.launch { write(type) } }
+    }
+
+    fun setHighlighterColor(color: HighlighterColor) {
+        _highlighterColor.value = color
+        persistHighlighterColor?.let { write -> viewModelScope.launch { write(color) } }
+    }
+
+    fun setHighlighterWidth(width: HighlighterWidth) {
+        _highlighterWidth.value = width
+        persistHighlighterWidth?.let { write -> viewModelScope.launch { write(width) } }
+    }
+
+    fun setPencilLineType(type: InkLineType) {
+        _pencilLineType.value = type
+        persistPencilLineType?.let { write -> viewModelScope.launch { write(type) } }
+    }
+
+    fun setPencilLead(lead: PencilLead) {
+        _pencilLead.value = lead
+        persistPencilLead?.let { write -> viewModelScope.launch { write(lead) } }
+    }
+
+    /**
+     * The brush the active tool draws with. Pure data — the ink-native `Brush` is built from this
+     * at the UI boundary. The `else` branch covers PEN plus the paths that draw with pen ink
+     * (the GESTURE-mode trigger circle; LASSO never starts a wet stroke).
+     */
+    fun currentBrushSpec(): BrushSpec = when (_tool.value) {
+        CanvasTool.HIGHLIGHTER -> BrushSpec(
+            familyKey = BrushSpec.FAMILY_HIGHLIGHTER,
+            colorArgb = _highlighterColor.value.argb,
+            size = _highlighterWidth.value.size,
+            epsilon = HIGHLIGHTER_EPSILON,
+        )
+        CanvasTool.PENCIL -> BrushSpec(
+            familyKey = BrushSpec.FAMILY_PENCIL,
+            colorArgb = _pencilLead.value.argb,
+            size = PENCIL_BRUSH_SIZE,
+            epsilon = BRUSH_EPSILON,
+        )
+        else -> BrushSpec(
+            familyKey = BrushSpec.FAMILY_PRESSURE_PEN,
+            colorArgb = _penColor.value.argb,
+            size = DEFAULT_BRUSH_SIZE,
+            epsilon = BRUSH_EPSILON,
+        )
+    }
+
+    /** Line type for strokes drawn by the active tool — SOLID for everything but pen and pencil. */
+    fun currentLineType(): InkLineType = when (_tool.value) {
+        CanvasTool.PEN -> _penLineType.value
+        CanvasTool.PENCIL -> _pencilLineType.value
+        else -> InkLineType.SOLID
+    }
+
+    // ── Live pattern stroke (FA-23) ───────────────────────────────────────────────────────────
+    // A non-solid stroke bypasses the wet ink layer (it can't dash); InkCanvas feeds the points
+    // here and the Compose overlay renders the pattern live. Pen-up bakes a real ink stroke via
+    // [patternStrokeBuilder] and routes it through [onStrokesFinished] → segmentation.
+
+    private val _livePatternStroke = MutableStateFlow<LivePatternStroke?>(null)
+    val livePatternStroke: StateFlow<LivePatternStroke?> = _livePatternStroke.asStateFlow()
+
+    fun beginPatternStroke() {
+        _livePatternStroke.value = LivePatternStroke(emptyList(), currentBrushSpec(), currentLineType())
+    }
+
+    fun addPatternPoint(x: Float, y: Float, t: Long, pressure: Float) {
+        _livePatternStroke.update { live ->
+            live?.copy(points = live.points + InkPoint(x = x, y = y, t = t, pressure = pressure))
+        }
+    }
+
+    fun finishPatternStroke() {
+        val live = _livePatternStroke.value ?: return
+        _livePatternStroke.value = null
+        val builder = patternStrokeBuilder ?: return
+        if (live.points.isEmpty()) return
+        onStrokesFinished(listOf(builder(live.spec, live.points)))
+    }
+
+    fun cancelPatternStroke() {
+        _livePatternStroke.value = null
+    }
+
+    // ── Hold-to-straighten (FA-23) ────────────────────────────────────────────────────────────
+    // InkCanvas detects a stationary hold at the end of a drawn stroke, cancels the wet/pattern
+    // stroke, and drives this preview: the overlay renders a straight line in the tool's colour +
+    // line style, MOVEs adjust the endpoint, lift commits — through the same builder + finish
+    // pipeline as everything else, so a straightened dashed line is straight THEN segmented.
+
+    private val _straightLinePreview = MutableStateFlow<StraightLinePreview?>(null)
+    val straightLinePreview: StateFlow<StraightLinePreview?> = _straightLinePreview.asStateFlow()
+
+    /** The 45°-multiple the straight line is currently snapped to, or null when free (FA-23). */
+    private var straightSnappedAngle: Float? = null
+
+    fun beginStraightLine(x1: Float, y1: Float, x2: Float, y2: Float) {
+        straightSnappedAngle = null
+        _straightLinePreview.value =
+            StraightLinePreview(x1, y1, x2, y2, currentBrushSpec(), currentLineType())
+        updateStraightLine(x2, y2) // an initially near-axis line snaps immediately
+    }
+
+    fun updateStraightLine(x2: Float, y2: Float) {
+        val line = _straightLinePreview.value ?: return
+        val dx = x2 - line.x1
+        val dy = y2 - line.y1
+        // Too short to have a meaningful direction: leave the snap state alone, track the pen raw.
+        if (dx * dx + dy * dy < STRAIGHT_SNAP_MIN_LENGTH_PX * STRAIGHT_SNAP_MIN_LENGTH_PX) {
+            _straightLinePreview.value = line.copy(x2 = x2, y2 = y2)
+            return
+        }
+        val rawAngle = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
+        val snapped = StraightLineSnap.updateSnap(straightSnappedAngle, rawAngle)
+        straightSnappedAngle = snapped
+        val (ex, ey) = if (snapped != null) {
+            StraightLineSnap.projectEndpoint(line.x1, line.y1, x2, y2, snapped)
+        } else {
+            x2 to y2
+        }
+        _straightLinePreview.value = line.copy(x2 = ex, y2 = ey)
+    }
+
+    fun commitStraightLine() {
+        val line = _straightLinePreview.value ?: return
+        _straightLinePreview.value = null
+        straightSnappedAngle = null
+        val builder = patternStrokeBuilder ?: return
+        val points = LinePatterning.straightLinePoints(
+            line.x1, line.y1, line.x2, line.y2,
+            spacing = STRAIGHT_LINE_POINT_SPACING,
+        )
+        onStrokesFinished(listOf(builder(line.spec, points)))
+    }
+
+    fun cancelStraightLine() {
+        _straightLinePreview.value = null
+        straightSnappedAngle = null
+    }
 
     // ── Finger gestures (FA-19) ───────────────────────────────────────────────────────────────
     // Multi-finger taps bound to canvas actions, kept in sync with settings. [fingerGesturesEnabled]
@@ -608,6 +836,24 @@ class CanvasViewModel(
         }
         stylusSingleClickActionFlow?.let { flow ->
             viewModelScope.launch { flow.collect { _stylusSingleClickAction.value = it } }
+        }
+        penColorFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _penColor.value = it } }
+        }
+        penLineTypeFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _penLineType.value = it } }
+        }
+        highlighterColorFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _highlighterColor.value = it } }
+        }
+        highlighterWidthFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _highlighterWidth.value = it } }
+        }
+        pencilLineTypeFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _pencilLineType.value = it } }
+        }
+        pencilLeadFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _pencilLead.value = it } }
         }
         // Pre-download the handwriting model so the first /Q is fast.
         recognizer?.let { viewModelScope.launch { it.warmUp() } }
@@ -1263,15 +1509,6 @@ class CanvasViewModel(
         super.onCleared()
     }
 
-    /** Pressure-sensitive pen brush for user ink. Lazy so JVM unit tests never touch ink natives. */
-    val penBrush: Brush by lazy {
-        Brush.createWithColorIntArgb(
-            family = StockBrushes.pressurePenLatest,
-            colorIntArgb = USER_INK_COLOR,
-            size = DEFAULT_BRUSH_SIZE,
-            epsilon = BRUSH_EPSILON,
-        )
-    }
 
     fun selectTool(tool: CanvasTool) {
         // Remember the tool being left so the FA-19 "last tool swap" gesture can restore it.
@@ -1388,9 +1625,16 @@ class CanvasViewModel(
         clearSelection() // a fresh pen stroke isn't part of any lasso selection
         contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
         thumbnailDirty = true // ink changed — the note-card thumbnail is now stale
-        // Thin the new stroke's points to the standard spacing (cheaper mesh build + redraw + storage).
-        val newStrokes = strokes.map { stroke ->
-            CanvasStroke(newStrokeId(), strokeSimplifier(stroke, STROKE_SIMPLIFY_SPACING))
+        // Thin the new stroke's points to the standard spacing (cheaper mesh build + redraw + storage),
+        // then cut a non-solid line type into its dash/dot segments — grouped, so the lasso treats the
+        // whole patterned line as one object (FA-23). One undo (the snapshot above) removes it all.
+        val lineType = currentLineType()
+        val newStrokes = strokes.flatMap { stroke ->
+            val simplified = strokeSimplifier(stroke, STROKE_SIMPLIFY_SPACING)
+            val parts =
+                if (lineType == InkLineType.SOLID) listOf(simplified) else strokeSegmenter(simplified, lineType)
+            val groupId = if (parts.size > 1) newGroupId() else null
+            parts.map { CanvasStroke(newStrokeId(), it, groupId = groupId) }
         }
         _finishedStrokes.update { current -> current + newStrokes }
 
@@ -1799,9 +2043,11 @@ class CanvasViewModel(
         val recognizer = recognizer ?: return
         val sel = _selection.value ?: return
         val selected = _finishedStrokes.value.filter { it.id in sel.ids }.map { it.stroke }
-        if (selected.isEmpty()) return
+        // A lasso over highlighted text should read the text, not choke on the highlight bar.
+        val readable = selected.filter(recognizableInk)
+        if (readable.isEmpty()) return
         viewModelScope.launch {
-            val question = lineSplitter(selected)
+            val question = lineSplitter(readable)
                 .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
                 .joinToString(" ")
                 .ifBlank { null } ?: return@launch
@@ -1926,12 +2172,18 @@ class CanvasViewModel(
     private suspend fun detectAndHandleTrigger(recognizer: HandwritingRecognizer) {
         if (_finishedStrokes.value.isEmpty()) return
         val strokes = _finishedStrokes.value.map { it.stroke }
-        val lines = lineSplitter(strokes)
-        if (lines.isEmpty()) return
+        // Only readable handwriting reaches recognition — a highlighter mark can neither be the
+        // trigger line nor pollute a text line's stroke group (FA-23). The gesture path keeps the
+        // full list so the genuinely-last stroke is tested as the lasso; its content is filtered
+        // inside.
+        val readable = strokes.filter(recognizableInk)
+        val lines = if (readable.isEmpty()) emptyList() else lineSplitter(readable)
 
         when (triggerMode) {
-            TriggerMode.COMMAND -> handleCommandTrigger(recognizer, strokes, lines)
-            TriggerMode.PREFIX_COMMAND -> handlePrefixTrigger(recognizer, strokes, lines)
+            TriggerMode.COMMAND ->
+                if (lines.isNotEmpty()) handleCommandTrigger(recognizer, readable, lines)
+            TriggerMode.PREFIX_COMMAND ->
+                if (lines.isNotEmpty()) handlePrefixTrigger(recognizer, readable, lines)
             TriggerMode.GESTURE -> handleGestureTrigger(recognizer, strokes)
         }
     }
@@ -1995,6 +2247,7 @@ class CanvasViewModel(
         val content = strokes.dropLast(1)
         val enclosed = GestureTriggerDetector.enclosedIndices(polygon, content.map(centroidOf))
             .map(content::get)
+            .filter(recognizableInk)
         if (enclosed.isEmpty()) return
 
         val question = lineSplitter(enclosed)
@@ -2096,7 +2349,7 @@ class CanvasViewModel(
     private suspend fun runPrefixQuery(state: PrefixTriggerState.Listening) {
         val recognizer = recognizer ?: return
         val byId = _finishedStrokes.value.associateBy { it.id }
-        val promptStrokes = state.promptStrokeIds.mapNotNull { byId[it]?.stroke }
+        val promptStrokes = state.promptStrokeIds.mapNotNull { byId[it]?.stroke }.filter(recognizableInk)
         if (promptStrokes.isEmpty()) return
 
         val question = lineSplitter(promptStrokes)
@@ -2106,7 +2359,9 @@ class CanvasViewModel(
 
         // The command line and the question itself aside, the rest of the page goes along as context.
         val excludedIds = (state.triggerStrokeIds + state.promptStrokeIds).toSet()
-        val contextStrokes = _finishedStrokes.value.filterNot { it.id in excludedIds }.map { it.stroke }
+        val contextStrokes = _finishedStrokes.value.filterNot { it.id in excludedIds }
+            .map { it.stroke }
+            .filter(recognizableInk)
         val context = lineSplitter(contextStrokes)
             .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
             .joinToString("\n")
@@ -2465,6 +2720,18 @@ class CanvasViewModel(
         const val USER_INK_COLOR: Int = 0xFF1A237E.toInt()
         const val DEFAULT_BRUSH_SIZE: Float = 4f
         const val BRUSH_EPSILON: Float = 0.1f
+
+        // FA-23 highlighter/pencil brushes. The wide flat highlighter tolerates a coarser mesh
+        // epsilon; the pencil approximates graphite with ink's textured pencil family — its colour
+        // (per selected [PencilLead]) carries translucency so overlapping lines darken like graphite.
+        const val HIGHLIGHTER_EPSILON: Float = 0.5f
+        const val PENCIL_BRUSH_SIZE: Float = 3.5f
+
+        /** Point spacing of a committed hold-to-straighten line (page units). */
+        const val STRAIGHT_LINE_POINT_SPACING: Float = 2f
+
+        /** Below this line length (page units) the endpoint direction is too noisy to angle-snap. */
+        const val STRAIGHT_SNAP_MIN_LENGTH_PX: Float = 24f
         const val ERASER_RADIUS: Float = 16f
         const val TRIGGER_DEBOUNCE_MILLIS: Long = 900L
 

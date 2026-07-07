@@ -5,6 +5,7 @@ import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.domain.Corner
 import ai.elrond.domain.LiveTransform
 import ai.elrond.domain.PageTransform
+import ai.elrond.domain.SelectionBounds
 import ai.elrond.domain.SelectionState
 import ai.elrond.domain.StrokeSelection
 import ai.elrond.domain.StrokeTransforms
@@ -289,11 +290,23 @@ private fun SelectionBox(
     val density = LocalDensity.current
     val accent = LeapTheme.tokens.accent
     val box = sel.displayBounds
-    // Map BOTH corners page → screen so the box is correctly sized at any zoom (FA-21).
-    val leftPx = transform.pageToScreenX(box.left)
-    val topPx = transform.pageToScreenY(box.top)
-    val widthPx = (transform.pageToScreenX(box.right) - leftPx).coerceAtLeast(1f)
-    val heightPx = (transform.pageToScreenY(box.bottom) - topPx).coerceAtLeast(1f)
+    // Map BOTH corners page → screen so the box is correctly sized at any zoom (FA-21), then
+    // inflate a thin axis to a grabbable minimum (FA-23: a straight line's box was near-zero
+    // thick). InkCanvas's chrome hit-test applies the same inflation, so DOWNs inside the drawn
+    // box always reach the drag, never start a stroke.
+    val screenBox = StrokeSelection.inflatedToMinimum(
+        SelectionBounds(
+            left = transform.pageToScreenX(box.left),
+            top = transform.pageToScreenY(box.top),
+            right = transform.pageToScreenX(box.right),
+            bottom = transform.pageToScreenY(box.bottom),
+        ),
+        minSize = with(density) { MIN_SELECTION_BOX_DIMENSION.dp.toPx() },
+    )
+    val leftPx = screenBox.left
+    val topPx = screenBox.top
+    val widthPx = screenBox.width.coerceAtLeast(1f)
+    val heightPx = screenBox.height.coerceAtLeast(1f)
     val half = HANDLE_SIZE / 2f
     val aiId = sel.aiNoteIds.firstOrNull()
 
@@ -550,6 +563,13 @@ private fun ClipboardBar(count: Int, onClear: () -> Unit, modifier: Modifier = M
 
 private const val HANDLE_SIZE = 18
 
+/**
+ * Minimum on-screen selection-box dimension (dp) — a thin axis (a straight line's box) inflates to
+ * this so the body and corner handles stay grabbable (FA-23). Shared with InkCanvas's chrome
+ * hit-test so the drawn box and the stroke-vs-drag decision agree.
+ */
+internal const val MIN_SELECTION_BOX_DIMENSION = 44
+
 /** Left/right edge reflow handle dimensions (FA-21), dp. */
 private const val EDGE_THICKNESS = 14
 private const val EDGE_LENGTH = 44
@@ -590,7 +610,8 @@ internal fun SelectionStrokes(
     transform: LiveTransform,
     page: PageTransform = PageTransform(scale = 1f, offsetX = 0f, offsetY = 0f),
 ) {
-    val renderer = remember { CanvasStrokeRenderer.create() }
+    val resources = androidx.compose.ui.platform.LocalContext.current.resources
+    val renderer = remember { CanvasStrokeRenderer.create(InkTextures.store(resources)) }
     // Strokes are drawn at IDENTITY (page coordinates); the page → screen mapping (centring offset +
     // scroll + scale) is applied as a GPU graphicsLayer — the SAME mechanism the dry-ink layer uses
     // (InkCanvas.DryStrokesView translates a page-space view), so the live selection lands exactly

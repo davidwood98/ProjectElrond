@@ -1,0 +1,27 @@
+<!-- Leap note tool · Mechanical pencil TIP (sleeve + lead), FA-23. 1.2 weight to match the family. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- barrel end -->
+    <path
+        android:pathData="M8.8 22V16.5h6.4V22Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.2"
+        android:strokeLineJoin="round" />
+    <!-- metal sleeve cone -->
+    <path
+        android:pathData="M8.8 16.5L11 10.5h2L15.2 16.5Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.2"
+        android:strokeLineJoin="round" />
+    <!-- lead -->
+    <path
+        android:pathData="M12 10.5V6.5"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round" />
+</vector>

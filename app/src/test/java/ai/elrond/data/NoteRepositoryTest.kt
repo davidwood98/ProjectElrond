@@ -251,7 +251,7 @@ class NoteRepositoryTest {
             id = "s1",
             pageId = "page-1",
             brushFamily = "pressure-pen",
-            colorArgb = 0,
+            colorArgb = 0xFFC62828.toInt(),
             brushSize = 4f,
             brushEpsilon = 0.1f,
             inputs = StrokeSerialization.encodeInputs(
@@ -262,12 +262,23 @@ class NoteRepositoryTest {
             ),
             createdAt = 1L,
         )
-        coEvery { strokeDao.getForPage("page-1") } returns listOf(entity)
+        val highlight = entity.copy(
+            id = "s2",
+            brushFamily = "highlighter",
+            colorArgb = 0x59FFEB3B,
+        )
+        coEvery { strokeDao.getForPage("page-1") } returns listOf(entity, highlight)
 
         val preview = repository.loadStrokePreview("page-1")
 
-        // 200-unit-wide horizontal stroke → normalized to 0..1 on x, 0 on y.
-        assertEquals(listOf(listOf(0f to 0f, 1f to 0f)), preview)
+        // 200-unit-wide horizontal strokes → normalized to 0..1 on x, 0 on y — and each preview
+        // carries its stroke's colour + highlighter flag (FA-23).
+        assertEquals(2, preview.size)
+        assertEquals(listOf(0f to 0f, 1f to 0f), preview[0].points)
+        assertEquals(0xFFC62828.toInt(), preview[0].colorArgb)
+        assertEquals(false, preview[0].isHighlighter)
+        assertEquals(0x59FFEB3B, preview[1].colorArgb)
+        assertEquals(true, preview[1].isHighlighter)
     }
 
     @Test

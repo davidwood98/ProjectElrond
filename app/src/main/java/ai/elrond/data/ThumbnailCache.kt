@@ -1,6 +1,6 @@
 package ai.elrond.data
 
-import ai.elrond.presentation.CanvasViewModel
+import ai.elrond.domain.StrokePreview
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -65,15 +65,17 @@ class ThumbnailCache(cacheDir: File) {
 }
 
 /**
- * Renders normalized (0..1, aspect-preserved) stroke [polylines] — the exact data the on-card
+ * Renders normalized (0..1, aspect-preserved) stroke previews — the exact data the on-card
  * `StrokeThumbnail` draws — into a bitmap for [ThumbnailCache]. Software canvas only: `drawPath` is
  * supported on a software `Bitmap` canvas (unlike the ink renderer's hardware-only `drawMesh`), so
- * this can run fully off the main thread without a live View.
+ * this can run fully off the main thread without a live View. Each stroke draws in its own colour
+ * (FA-23); highlighter marks keep their baked translucency and render wide, in stored order, so
+ * the card reads like the page.
  */
 object ThumbnailRenderer {
 
     fun render(
-        polylines: List<List<Pair<Float, Float>>>,
+        previews: List<StrokePreview>,
         widthPx: Int = THUMBNAIL_WIDTH_PX,
         heightPx: Int = THUMBNAIL_HEIGHT_PX,
     ): Bitmap {
@@ -83,7 +85,7 @@ object ThumbnailRenderer {
         val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
         val canvas = Canvas(bitmap)
         canvas.drawColor(BACKGROUND_COLOR)
-        if (polylines.isEmpty()) return bitmap
+        if (previews.isEmpty()) return bitmap
 
         // Mirror StrokeThumbnail's layout: a single scale preserves the handwriting aspect ratio.
         val box = minOf(w, h).toFloat()
@@ -91,17 +93,23 @@ object ThumbnailRenderer {
         val pad = box * 0.05f
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = STROKE_WIDTH
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
-            color = CanvasViewModel.USER_INK_COLOR
-            alpha = INK_ALPHA
         }
         val path = Path()
-        polylines.forEach { line ->
-            if (line.size < 2) return@forEach
+        previews.forEach { stroke ->
+            if (stroke.points.isEmpty()) return@forEach
+            paint.strokeWidth = if (stroke.isHighlighter) HIGHLIGHTER_WIDTH else STROKE_WIDTH
+            paint.color = stroke.colorArgb
+            // A highlighter's translucency is baked into its colour; plain ink gets the card alpha.
+            if (!stroke.isHighlighter) paint.alpha = INK_ALPHA
+            if (stroke.points.size == 1) {
+                val (x, y) = stroke.points.first()
+                canvas.drawPoint(pad + x * scale, pad + y * scale, paint)
+                return@forEach
+            }
             path.reset()
-            line.forEachIndexed { i, (x, y) ->
+            stroke.points.forEachIndexed { i, (x, y) ->
                 val px = pad + x * scale
                 val py = pad + y * scale
                 if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
@@ -117,5 +125,6 @@ object ThumbnailRenderer {
 
     private const val BACKGROUND_COLOR = Color.WHITE
     private const val STROKE_WIDTH = 2.5f
+    private const val HIGHLIGHTER_WIDTH = 10f
     private const val INK_ALPHA = 217 // ~0.85 * 255, matching StrokeThumbnail
 }

@@ -20,6 +20,10 @@ object ElrondIcons {
     @DrawableRes val HighlighterTip = R.drawable.ic_highlighter_tip
     @DrawableRes val Pencil = R.drawable.ic_pencil
     @DrawableRes val PencilTip = R.drawable.ic_pencil_tip
+
+    /** Mechanical pencil (FA-23) — the wired PENCIL tool's glyph; classic-pencil art kept above. */
+    @DrawableRes val PencilMech = R.drawable.ic_pencil_mech
+    @DrawableRes val PencilMechTip = R.drawable.ic_pencil_mech_tip
     @DrawableRes val Eraser = R.drawable.ic_eraser
     @DrawableRes val EraserPencil = R.drawable.ic_eraser_pencil
     @DrawableRes val Text = R.drawable.ic_text

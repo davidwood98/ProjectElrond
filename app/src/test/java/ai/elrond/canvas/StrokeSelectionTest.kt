@@ -219,4 +219,21 @@ class StrokeSelectionTest {
             SelectionState(ids = setOf("a", "b"), bounds = box, aiNoteIds = setOf("n")).canGroup,
         ) // an AI box is present
     }
+
+    @Test
+    fun `inflatedToMinimum expands a thin axis about its centre and leaves the wide axis alone`() {
+        // A horizontal straight line: wide but ~zero-thick (the FA-23 grab-ability bug).
+        val thin = SelectionBounds(left = 100f, top = 50f, right = 300f, bottom = 51f)
+        val inflated = StrokeSelection.inflatedToMinimum(thin, minSize = 44f)
+        assertEquals(100f, inflated.left, 0f) // width 200 >= 44: untouched
+        assertEquals(300f, inflated.right, 0f)
+        assertEquals(44f, inflated.height, 0.001f)
+        assertEquals(thin.centerY, inflated.centerY, 0.001f) // centred on the original
+    }
+
+    @Test
+    fun `inflatedToMinimum leaves a large box unchanged`() {
+        val big = SelectionBounds(0f, 0f, 200f, 100f)
+        assertEquals(big, StrokeSelection.inflatedToMinimum(big, minSize = 44f))
+    }
 }

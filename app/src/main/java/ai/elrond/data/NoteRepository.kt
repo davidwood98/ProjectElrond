@@ -2,7 +2,9 @@ package ai.elrond.data
 
 import ai.elrond.BuildConfig
 import ai.elrond.domain.AiInkNote
+import ai.elrond.domain.BrushSpec
 import ai.elrond.domain.CanvasStroke
+import ai.elrond.domain.StrokePreview
 import android.util.Log
 import ai.elrond.domain.NoteEditDay
 import ai.elrond.domain.Notebook
@@ -339,16 +341,25 @@ class NoteRepository(
         )
 
     /**
-     * Lightweight stroke polylines for note-card thumbnails, normalized to 0..1.
-     * Decodes stored points directly — no ink natives, cheap enough for lists.
+     * Lightweight per-stroke previews (normalized 0..1 polyline + colour/highlighter style) for
+     * note-card thumbnails. Decodes stored points directly — no ink natives, cheap enough for lists.
      */
-    suspend fun loadStrokePreview(pageId: String, maxStrokes: Int = PREVIEW_MAX_STROKES): List<List<Pair<Float, Float>>> {
+    suspend fun loadStrokePreview(pageId: String, maxStrokes: Int = PREVIEW_MAX_STROKES): List<StrokePreview> {
         val rows = strokeDao.getForPage(pageId)
         // Decode + normalize off the caller's thread — the note browser fetches previews from a
         // Compose produceState (Main) for every card; keep that work off the main thread.
         return withContext(Dispatchers.Default) {
-            val polylines = rows.take(maxStrokes).map { StrokeSerialization.decodePoints(it.inputs) }
-            StrokePreviewNormalizer.normalize(polylines)
+            val decoded = rows.take(maxStrokes)
+                .map { it to StrokeSerialization.decodePoints(it.inputs) }
+                .filter { (_, points) -> points.isNotEmpty() }
+            val normalized = StrokePreviewNormalizer.normalize(decoded.map { it.second })
+            decoded.mapIndexed { i, (row, _) ->
+                StrokePreview(
+                    points = normalized[i],
+                    colorArgb = row.colorArgb,
+                    isHighlighter = row.brushFamily == BrushSpec.FAMILY_HIGHLIGHTER,
+                )
+            }
         }
     }
 
