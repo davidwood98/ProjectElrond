@@ -1779,9 +1779,10 @@ lasso) but render the line style live while drawing; exclude highlighter from AI
 
 First on-device pass over the FA-23 batch (Galaxy Tab S, Android 16) — four bugs fixed, two
 features added, two tunings applied, on branch **FA-23**. **No schema change — DB stays v16**
-(the one new pref is DataStore). The Compose/touch fixes (menu pass-through, tray-reopen
-re-bake, min selection box, straighten feel, lead/width/colour looks) are **device-verify
-pending** like the other ink flows.
+(the one new pref is DataStore). **All items device-confirmed on the Galaxy Tab S
+(2026-07-08)** — the patterned-curve crash, the config-menu first-stroke drop, the tray-reopen
+stroke visibility, the thin selection box, the 400ms straighten + angle snap, the pencil leads,
+and the highlighter width/colour retune all passed.
 
 - **Dashed/patterned curve crash — FIXED.** A curved stroke with any non-solid line type crashed
   on pen-up (`logcat_…185902`): `MutableStrokeInputBatch.add` threw `INVALID_ARGUMENT: Inputs
