@@ -9,6 +9,7 @@ import ai.elrond.domain.HighlighterWidth
 import ai.elrond.domain.InkLineType
 import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PenColor
+import ai.elrond.domain.PencilLead
 import ai.elrond.domain.StylusHoldTool
 import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PaperStyle
@@ -169,18 +170,21 @@ class SettingsRepositoryTest {
         assertEquals(HighlighterColor.YELLOW, repo.highlighterColor.first())
         assertEquals(HighlighterWidth.STANDARD, repo.highlighterWidth.first())
         assertEquals(InkLineType.SOLID, repo.pencilLineType.first())
+        assertEquals(PencilLead.HB, repo.pencilLead.first())
 
         repo.setPenColor(PenColor.RED)
         repo.setPenLineType(InkLineType.DASHED)
         repo.setHighlighterColor(HighlighterColor.GREEN)
         repo.setHighlighterWidth(HighlighterWidth.THICK)
         repo.setPencilLineType(InkLineType.DASH_DOT)
+        repo.setPencilLead(PencilLead.TWO_H)
 
         assertEquals(PenColor.RED, repo.penColor.first())
         assertEquals(InkLineType.DASHED, repo.penLineType.first())
         assertEquals(HighlighterColor.GREEN, repo.highlighterColor.first())
         assertEquals(HighlighterWidth.THICK, repo.highlighterWidth.first())
         assertEquals(InkLineType.DASH_DOT, repo.pencilLineType.first())
+        assertEquals(PencilLead.TWO_H, repo.pencilLead.first())
 
         // FA-14 appearance tweaks: defaults, then round-trip.
         assertEquals(PenIconStyle.BODY, repo.penIconStyle.first())

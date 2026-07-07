@@ -77,6 +77,24 @@ object StrokeSelection {
     ): Set<String> =
         GestureTriggerDetector.enclosedIndices(polygon, centroids).map { ids[it] }.toSet()
 
+    /**
+     * Expands [bounds] to at least [minSize] per dimension, centred on the original box (FA-23).
+     * A straight-line selection has a near-zero thin axis, making its box impossible to grab or
+     * drag with the S Pen — the rendered box AND the canvas's chrome hit-test both inflate through
+     * this one helper (screen-space px) so they can't drift. An already-large box is unchanged.
+     */
+    fun inflatedToMinimum(bounds: SelectionBounds, minSize: Float): SelectionBounds {
+        val padX = ((minSize - bounds.width) / 2f).coerceAtLeast(0f)
+        val padY = ((minSize - bounds.height) / 2f).coerceAtLeast(0f)
+        if (padX == 0f && padY == 0f) return bounds
+        return SelectionBounds(
+            left = bounds.left - padX,
+            top = bounds.top - padY,
+            right = bounds.right + padX,
+            bottom = bounds.bottom + padY,
+        )
+    }
+
     /** Union of per-stroke bounds; null when [boxes] is empty. */
     fun union(boxes: List<SelectionBounds>): SelectionBounds? =
         boxes.reduceOrNull { a, b ->

@@ -9,6 +9,7 @@ import ai.elrond.domain.HighlighterWidth
 import ai.elrond.domain.InkLineType
 import ai.elrond.domain.NoteTabsMode
 import ai.elrond.domain.PenColor
+import ai.elrond.domain.PencilLead
 import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.StylusHoldTool
 import ai.elrond.domain.PaperStyle
@@ -231,6 +232,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setPencilLineType(type: InkLineType) {
         context.settingsDataStore.edit { it[PENCIL_LINE_TYPE_KEY] = type.name }
+    }
+
+    /** Pencil lead grade (2H…2B), light → dark; default HB. */
+    val pencilLead: Flow<PencilLead> = context.settingsDataStore.data
+        .map { PencilLead.fromName(it[PENCIL_LEAD_KEY]) }
+
+    suspend fun setPencilLead(lead: PencilLead) {
+        context.settingsDataStore.edit { it[PENCIL_LEAD_KEY] = lead.name }
     }
 
     // --- Appearance tweaks (FA-14, from the Claude Design handoff) ---
@@ -479,6 +488,7 @@ class SettingsRepository(private val context: Context) {
         private val HIGHLIGHTER_COLOR_KEY = stringPreferencesKey("highlighter_color")
         private val HIGHLIGHTER_WIDTH_KEY = stringPreferencesKey("highlighter_width")
         private val PENCIL_LINE_TYPE_KEY = stringPreferencesKey("pencil_line_type")
+        private val PENCIL_LEAD_KEY = stringPreferencesKey("pencil_lead")
         private val TOOL_TREATMENT_KEY = stringPreferencesKey("tool_selected_treatment")
         private val PEN_ICON_STYLE_KEY = stringPreferencesKey("pen_icon_style")
         private val AI_LOADER_STYLE_KEY = stringPreferencesKey("ai_loader_style")

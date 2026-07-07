@@ -139,4 +139,55 @@ class LinePatterningTest {
         assertEquals(0f, points.first().x, 0f)
         assertEquals(4f, points.last().x, 0f)
     }
+
+    // ── sanitizeForInk (the FA-23 dashed-stroke crash: raw capture repeats the DOWN point) ──
+
+    @Test
+    fun `sanitize drops a repeated down point`() {
+        // The exact crash shape: the DOWN coordinates arrive again as the first historical MOVE
+        // sample with the same eventTime — a duplicate (position, elapsed_time) pair.
+        val points = listOf(
+            InkPoint(746.289f, 1223.95f, 0L),
+            InkPoint(746.289f, 1223.95f, 0L),
+            InkPoint(750f, 1226f, 8L),
+        )
+        val clean = LinePatterning.sanitizeForInk(points)
+        assertEquals(2, clean.size)
+        assertEquals(746.289f, clean[0].x, 0f)
+        assertEquals(750f, clean[1].x, 0f)
+    }
+
+    @Test
+    fun `sanitize forces strictly increasing timestamps`() {
+        val points = listOf(
+            InkPoint(0f, 0f, 5L),
+            InkPoint(1f, 0f, 5L), // same eventTime batch
+            InkPoint(2f, 0f, 4L), // out of order
+            InkPoint(3f, 0f, 20L),
+        )
+        val clean = LinePatterning.sanitizeForInk(points)
+        assertEquals(4, clean.size)
+        clean.zipWithNext().forEach { (a, b) -> assertTrue("t must strictly increase", b.t > a.t) }
+        assertEquals(20L, clean.last().t)
+    }
+
+    @Test
+    fun `sanitize drops non-finite coordinates and coincident followers`() {
+        val points = listOf(
+            InkPoint(0f, 0f, 0L),
+            InkPoint(Float.NaN, 1f, 1L),
+            InkPoint(0f, 0f, 2L), // coincident with the first accepted point
+            InkPoint(5f, 5f, 3L),
+        )
+        val clean = LinePatterning.sanitizeForInk(points)
+        assertEquals(2, clean.size)
+        assertEquals(5f, clean.last().x, 0f)
+    }
+
+    @Test
+    fun `sanitize clamps a negative first timestamp to zero`() {
+        val clean = LinePatterning.sanitizeForInk(listOf(InkPoint(0f, 0f, -3L), InkPoint(1f, 1f, -2L)))
+        assertEquals(0L, clean.first().t)
+        assertTrue(clean[1].t > clean[0].t)
+    }
 }

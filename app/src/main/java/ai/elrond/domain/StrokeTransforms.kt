@@ -151,11 +151,13 @@ object StrokeTransforms {
 
     /**
      * Builds an ink stroke from pure [InkPoint]s with the given brush (FA-23) — the committed form
-     * of a live-preview pattern stroke or a hold-to-straighten line.
+     * of a live-preview pattern stroke or a hold-to-straighten line. The points are live-captured
+     * (raw MotionEvent samples), so they pass through [LinePatterning.sanitizeForInk] first —
+     * `add` throws on a duplicate (position, time) pair, which raw capture can produce.
      */
     fun buildStroke(brush: Brush, points: List<InkPoint>): Stroke {
         val batch = MutableStrokeInputBatch()
-        points.forEach { p ->
+        LinePatterning.sanitizeForInk(points).forEach { p ->
             batch.add(
                 type = androidx.ink.brush.InputToolType.STYLUS,
                 x = p.x,

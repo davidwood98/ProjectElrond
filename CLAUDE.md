@@ -1775,6 +1775,68 @@ lasso) but render the line style live while drawing; exclude highlighter from AI
   tuning (600ms/8px/48px), per-dash erase + whole-line lasso move on a patterned line, coloured
   thumbnails.
 
+### FA-23 device-feedback round (2026-07-07)
+
+First on-device pass over the FA-23 batch (Galaxy Tab S, Android 16) — four bugs fixed, two
+features added, two tunings applied, on branch **FA-23**. **No schema change — DB stays v16**
+(the one new pref is DataStore). The Compose/touch fixes (menu pass-through, tray-reopen
+re-bake, min selection box, straighten feel, lead/width/colour looks) are **device-verify
+pending** like the other ink flows.
+
+- **Dashed/patterned curve crash — FIXED.** A curved stroke with any non-solid line type crashed
+  on pen-up (`logcat_…185902`): `MutableStrokeInputBatch.add` threw `INVALID_ARGUMENT: Inputs
+  must not have duplicate position and elapsed_time` in `StrokeTransforms.buildStroke` — raw
+  live-captured MotionEvent points can repeat the DOWN point (the first historical MOVE sample
+  carries the same coordinates + eventTime). The stored-points path was guarded
+  (`StrokeInputSanitizer`) but the FA-23 **live-capture** path (pattern strokes + straighten)
+  fed `add` raw. New pure `LinePatterning.sanitizeForInk` (drop non-finite/coincident, force
+  strictly-increasing t — JVM-tested incl. the exact crash fixture) applied inside `buildStroke`,
+  the one live-points→ink boundary. `segmentPolyline` was already safe (its `rebase` forces
+  strictly-increasing t).
+- **First stroke after a config-menu interaction not registering — FIXED.** The tool config
+  `DropdownMenu`s are Compose popups, and a focusable popup is **touch-modal**: the first pen DOWN
+  after picking an option was consumed dismissing the still-open popup (confirmed in
+  `logcat_…192440` — the DOWN was delivered to "Pop-up window", then the window was removed). The
+  three config menus now use shared `ToolConfigMenuProperties = PopupProperties(focusable =
+  false)` — the outside DOWN both dismisses the menu and passes through to the canvas, so it
+  draws. (Trade-off: hardware back won't dismiss the menu; tap-off does.)
+- **Strokes invisible after a tray reopen — FIXED.** `DryStrokesView`'s baked `RenderNode` chain
+  replays blank after the app is backgrounded (the renderer's hardware resources are freed), but
+  `extendsBaked` still passed (same stroke list) so nothing re-recorded — saved strokes stayed
+  invisible until a page-flip/tab-switch forced a flatten (exactly the reported workaround). New
+  `onWindowVisibilityChanged(VISIBLE)` override invalidates the bake (`bakedValid = false` +
+  `invalidate()`) — one O(N) flatten on resume restores the page.
+- **Thin selection box on a straight line — FIXED (minimum-box option).** Selecting a straightened
+  line produced a near-zero-thick box that couldn't be grabbed. New pure
+  `StrokeSelection.inflatedToMinimum` expands a sub-minimum screen-space axis about its centre;
+  applied in **both** `SelectionLayer.SelectionBox` (drawn box + handles) and InkCanvas's
+  chrome-vs-stroke DOWN hit-test via the shared `MIN_SELECTION_BOX_DIMENSION` (44dp), so the
+  visible box and the input decision can't drift. (The user's alternative — node-controlled
+  "defined strokes" with endpoint handles — was noted but deferred; the min box is the smaller,
+  uniform fix.)
+- **Straighten tuning + angle snap.** Hold timer **600 → 400ms** (`STRAIGHTEN_HOLD_MS`). While
+  adjusting, the line now **snaps to 0°/45°/90° multiples** when the raw pen angle is within
+  **±2°** (`StraightLineSnap.SNAP_IN_DEG`), and stays snapped until it deviates **≥5°**
+  (`SNAP_OUT_DEG`, hysteresis). Pure `domain/StraightLineSnap` (updateSnap + dot-projection
+  `projectEndpoint`, JVM-tested incl. the ±180° seam); `CanvasViewModel.updateStraightLine`
+  holds the snapped angle across moves (reset on begin/commit/cancel) and skips snapping below
+  `STRAIGHT_SNAP_MIN_LENGTH_PX` (24 page-px) where direction is noise.
+- **Pencil lead selector.** New `domain/PencilLead` — **2H / H / HB / B / 2B**, light → dark,
+  each a graphite ARGB whose alpha rises with softness; **HB = the former `PENCIL_COLOR`**
+  (default, pixel-identical to pre-lead strokes; the constant was removed). New DataStore pref
+  `pencilLead`; VM flow + setter + persist write-through (the established seams);
+  `currentBrushSpec()` PENCIL branch uses the lead colour. `PencilConfigMenu` gains a `LeadRow`
+  (5 labelled swatches in the true translucent lead colours) above the line-type section.
+- **Highlighter width retune.** `HighlighterWidth` **FINE 12 / STANDARD 32 / THICK 52** (was
+  12/20/32): the default rose to the old widest, the widest keeps the same step above it.
+- **Highlighter colours → fluorescent.** `HighlighterColor` re-hued from the Material pastels to
+  marker-like fluorescents (PINK `FF2D95`, BLUE `00B2FF`, GREEN `39FF14`, YELLOW `FDFF00`,
+  ORANGE `FF9500`), alpha unchanged (0x59) — still the device-tune knob.
+- New/updated tests: `LinePatterningTest` (+4 sanitize), `StraightLineSnapTest` (new),
+  `StrokeSelectionTest` (+2 inflate), `ToolConfigEnumsTest` (+lead defaults/ordering/parsing),
+  `CanvasViewModelToolConfigTest` (+lead spec/persist/seed, +straighten snap-and-break-out),
+  `SettingsRepositoryTest` (+pencilLead round-trip).
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):

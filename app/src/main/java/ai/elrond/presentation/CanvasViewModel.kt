@@ -18,7 +18,9 @@ import ai.elrond.domain.InkPoint
 import ai.elrond.domain.LinePatterning
 import ai.elrond.domain.LivePatternStroke
 import ai.elrond.domain.StraightLinePreview
+import ai.elrond.domain.StraightLineSnap
 import ai.elrond.domain.PenColor
+import ai.elrond.domain.PencilLead
 import ai.elrond.domain.FingerGesture
 import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.StylusHoldTool
@@ -206,11 +208,13 @@ class CanvasViewModel(
     highlighterColorFlow: Flow<HighlighterColor>? = null,
     highlighterWidthFlow: Flow<HighlighterWidth>? = null,
     pencilLineTypeFlow: Flow<InkLineType>? = null,
+    pencilLeadFlow: Flow<PencilLead>? = null,
     private val persistPenColor: (suspend (PenColor) -> Unit)? = null,
     private val persistPenLineType: (suspend (InkLineType) -> Unit)? = null,
     private val persistHighlighterColor: (suspend (HighlighterColor) -> Unit)? = null,
     private val persistHighlighterWidth: (suspend (HighlighterWidth) -> Unit)? = null,
     private val persistPencilLineType: (suspend (InkLineType) -> Unit)? = null,
+    private val persistPencilLead: (suspend (PencilLead) -> Unit)? = null,
     /** Write-through for the palm-rejection preference (null in tests). */
     private val persistStylusOnly: (suspend (Boolean) -> Unit)? = null,
     /**
@@ -286,11 +290,13 @@ class CanvasViewModel(
         highlighterColorFlow = settings.highlighterColor,
         highlighterWidthFlow = settings.highlighterWidth,
         pencilLineTypeFlow = settings.pencilLineType,
+        pencilLeadFlow = settings.pencilLead,
         persistPenColor = { settings.setPenColor(it) },
         persistPenLineType = { settings.setPenLineType(it) },
         persistHighlighterColor = { settings.setHighlighterColor(it) },
         persistHighlighterWidth = { settings.setHighlighterWidth(it) },
         persistPencilLineType = { settings.setPencilLineType(it) },
+        persistPencilLead = { settings.setPencilLead(it) },
         persistStylusOnly = { settings.setStylusOnly(it) },
         // Real generator: render the page's normalized polylines (the same data the card draws) to a
         // bitmap off-thread and cache it; an empty page drops any stale file so the card shows blank.
@@ -360,6 +366,9 @@ class CanvasViewModel(
     private val _pencilLineType = MutableStateFlow(InkLineType.DEFAULT)
     val pencilLineType: StateFlow<InkLineType> = _pencilLineType.asStateFlow()
 
+    private val _pencilLead = MutableStateFlow(PencilLead.DEFAULT)
+    val pencilLead: StateFlow<PencilLead> = _pencilLead.asStateFlow()
+
     fun setPenColor(color: PenColor) {
         _penColor.value = color
         persistPenColor?.let { write -> viewModelScope.launch { write(color) } }
@@ -385,6 +394,11 @@ class CanvasViewModel(
         persistPencilLineType?.let { write -> viewModelScope.launch { write(type) } }
     }
 
+    fun setPencilLead(lead: PencilLead) {
+        _pencilLead.value = lead
+        persistPencilLead?.let { write -> viewModelScope.launch { write(lead) } }
+    }
+
     /**
      * The brush the active tool draws with. Pure data — the ink-native `Brush` is built from this
      * at the UI boundary. The `else` branch covers PEN plus the paths that draw with pen ink
@@ -399,7 +413,7 @@ class CanvasViewModel(
         )
         CanvasTool.PENCIL -> BrushSpec(
             familyKey = BrushSpec.FAMILY_PENCIL,
-            colorArgb = PENCIL_COLOR,
+            colorArgb = _pencilLead.value.argb,
             size = PENCIL_BRUSH_SIZE,
             epsilon = BRUSH_EPSILON,
         )
@@ -457,18 +471,40 @@ class CanvasViewModel(
     private val _straightLinePreview = MutableStateFlow<StraightLinePreview?>(null)
     val straightLinePreview: StateFlow<StraightLinePreview?> = _straightLinePreview.asStateFlow()
 
+    /** The 45°-multiple the straight line is currently snapped to, or null when free (FA-23). */
+    private var straightSnappedAngle: Float? = null
+
     fun beginStraightLine(x1: Float, y1: Float, x2: Float, y2: Float) {
+        straightSnappedAngle = null
         _straightLinePreview.value =
             StraightLinePreview(x1, y1, x2, y2, currentBrushSpec(), currentLineType())
+        updateStraightLine(x2, y2) // an initially near-axis line snaps immediately
     }
 
     fun updateStraightLine(x2: Float, y2: Float) {
-        _straightLinePreview.update { it?.copy(x2 = x2, y2 = y2) }
+        val line = _straightLinePreview.value ?: return
+        val dx = x2 - line.x1
+        val dy = y2 - line.y1
+        // Too short to have a meaningful direction: leave the snap state alone, track the pen raw.
+        if (dx * dx + dy * dy < STRAIGHT_SNAP_MIN_LENGTH_PX * STRAIGHT_SNAP_MIN_LENGTH_PX) {
+            _straightLinePreview.value = line.copy(x2 = x2, y2 = y2)
+            return
+        }
+        val rawAngle = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
+        val snapped = StraightLineSnap.updateSnap(straightSnappedAngle, rawAngle)
+        straightSnappedAngle = snapped
+        val (ex, ey) = if (snapped != null) {
+            StraightLineSnap.projectEndpoint(line.x1, line.y1, x2, y2, snapped)
+        } else {
+            x2 to y2
+        }
+        _straightLinePreview.value = line.copy(x2 = ex, y2 = ey)
     }
 
     fun commitStraightLine() {
         val line = _straightLinePreview.value ?: return
         _straightLinePreview.value = null
+        straightSnappedAngle = null
         val builder = patternStrokeBuilder ?: return
         val points = LinePatterning.straightLinePoints(
             line.x1, line.y1, line.x2, line.y2,
@@ -479,6 +515,7 @@ class CanvasViewModel(
 
     fun cancelStraightLine() {
         _straightLinePreview.value = null
+        straightSnappedAngle = null
     }
 
     // ── Finger gestures (FA-19) ───────────────────────────────────────────────────────────────
@@ -814,6 +851,9 @@ class CanvasViewModel(
         }
         pencilLineTypeFlow?.let { flow ->
             viewModelScope.launch { flow.collect { _pencilLineType.value = it } }
+        }
+        pencilLeadFlow?.let { flow ->
+            viewModelScope.launch { flow.collect { _pencilLead.value = it } }
         }
         // Pre-download the handwriting model so the first /Q is fast.
         recognizer?.let { viewModelScope.launch { it.warmUp() } }
@@ -2683,13 +2723,15 @@ class CanvasViewModel(
 
         // FA-23 highlighter/pencil brushes. The wide flat highlighter tolerates a coarser mesh
         // epsilon; the pencil approximates graphite with ink's textured pencil family — its colour
-        // carries a slight translucency so overlapping pencil lines darken like real graphite.
+        // (per selected [PencilLead]) carries translucency so overlapping lines darken like graphite.
         const val HIGHLIGHTER_EPSILON: Float = 0.5f
-        const val PENCIL_COLOR: Int = 0xE043484E.toInt()
         const val PENCIL_BRUSH_SIZE: Float = 3.5f
 
         /** Point spacing of a committed hold-to-straighten line (page units). */
         const val STRAIGHT_LINE_POINT_SPACING: Float = 2f
+
+        /** Below this line length (page units) the endpoint direction is too noisy to angle-snap. */
+        const val STRAIGHT_SNAP_MIN_LENGTH_PX: Float = 24f
         const val ERASER_RADIUS: Float = 16f
         const val TRIGGER_DEBOUNCE_MILLIS: Long = 900L
 

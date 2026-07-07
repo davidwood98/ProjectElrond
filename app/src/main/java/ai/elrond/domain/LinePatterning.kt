@@ -161,6 +161,31 @@ object LinePatterning {
     }
 
     /**
+     * Makes live-captured points valid for ink 1.0.0's throwing `add`: drops non-finite and
+     * consecutive-coincident positions and forces strictly-increasing timestamps. Raw MotionEvent
+     * capture can repeat a point — the DOWN coordinates arrive again as the first historical MOVE
+     * sample with the same eventTime — and `MutableStrokeInputBatch.add` rejects a duplicate
+     * (position, elapsed_time) pair outright (the FA-23 dashed-stroke crash). The stored-points
+     * path has its own guard (`StrokeInputSanitizer`); this is the live-capture equivalent, applied
+     * in `StrokeTransforms.buildStroke`.
+     */
+    fun sanitizeForInk(points: List<InkPoint>): List<InkPoint> {
+        if (points.isEmpty()) return points
+        val out = ArrayList<InkPoint>(points.size)
+        var prev: InkPoint? = null
+        for (p in points) {
+            if (!p.x.isFinite() || !p.y.isFinite()) continue
+            val last = prev
+            if (last != null && p.x == last.x && p.y == last.y) continue // coincident: adds nothing
+            val t = if (last == null) maxOf(p.t, 0L) else maxOf(p.t, last.t + 1)
+            val q = if (t == p.t) p else p.copy(t = t)
+            out.add(q)
+            prev = q
+        }
+        return out
+    }
+
+    /**
      * Evenly-spaced points along the straight line (x1,y1)→(x2,y2) — the committed form of a
      * hold-to-straighten stroke (FA-23). Constant [pressure], timestamps spaced 1ms so the ink
      * batch is always valid. At least the two endpoints are returned.

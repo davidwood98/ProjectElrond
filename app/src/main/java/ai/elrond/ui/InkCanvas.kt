@@ -9,6 +9,8 @@ import ai.elrond.domain.PageTransform
 import ai.elrond.domain.CanvasTool
 import ai.elrond.domain.CanvasStroke
 import ai.elrond.domain.FingerGesture
+import ai.elrond.domain.SelectionBounds
+import ai.elrond.domain.StrokeSelection
 import ai.elrond.presentation.CanvasViewModel
 import android.annotation.SuppressLint
 import android.content.Context
@@ -256,6 +258,21 @@ private class DryStrokesView(context: Context) : View(context) {
         Trace.endSection()
     }
 
+    /**
+     * Re-bake when the window becomes visible again. Backgrounding the app frees the renderer's
+     * hardware resources; the baked node chain's recorded ink-mesh ops then replay blank on
+     * return, while [extendsBaked] still passes (same stroke list) so nothing re-records — the
+     * page's saved strokes stayed invisible after a tray reopen until some layer change forced a
+     * flatten (device bug, 2026-07-07). One O(N) flatten on resume restores them.
+     */
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility == VISIBLE && bakedValid) {
+            bakedValid = false
+            invalidate()
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (viewWidthPx <= 0 || viewHeightPx <= 0) return
@@ -437,7 +454,7 @@ private const val HOLD_MOVE_SLOP_PX = 24f
  * Hold-to-straighten (FA-23): a stroke at least [STRAIGHTEN_MIN_LENGTH_PX] of displacement whose
  * pen then rests within [STRAIGHTEN_SLOP_PX] for [STRAIGHTEN_HOLD_MS] snaps to a straight line.
  */
-private const val STRAIGHTEN_HOLD_MS = 600L
+private const val STRAIGHTEN_HOLD_MS = 400L // device-tuned down from 600ms (2026-07-07 feedback)
 private const val STRAIGHTEN_SLOP_PX = 8f
 private const val STRAIGHTEN_MIN_LENGTH_PX = 48f
 
@@ -639,11 +656,22 @@ private fun createTouchListener(
                     // erase ink that lies under the selection box.
                     viewModel.selection.value?.let { sel ->
                         val b = sel.displayBounds
+                        // Same minimum-size inflation as the drawn SelectionBox (FA-23), so a DOWN
+                        // anywhere inside the visible box is declined to its drag, never a stroke.
+                        val screenBox = StrokeSelection.inflatedToMinimum(
+                            SelectionBounds(
+                                left = t.pageToScreenX(b.left),
+                                top = t.pageToScreenY(b.top),
+                                right = t.pageToScreenX(b.right),
+                                bottom = t.pageToScreenY(b.bottom),
+                            ),
+                            minSize = MIN_SELECTION_BOX_DIMENSION * view.resources.displayMetrics.density,
+                        )
                         val m = SELECTION_TOUCH_MARGIN_PX
-                        val onChrome = downX >= t.pageToScreenX(b.left) - m &&
-                            downX <= t.pageToScreenX(b.right) + m &&
-                            downY >= t.pageToScreenY(b.top) - m &&
-                            downY <= t.pageToScreenY(b.bottom) + m
+                        val onChrome = downX >= screenBox.left - m &&
+                            downX <= screenBox.right + m &&
+                            downY >= screenBox.top - m &&
+                            downY <= screenBox.bottom + m
                         if (!erase && onChrome) return@OnTouchListener false
                         viewModel.clearSelection()
                     }

@@ -4,6 +4,7 @@ import ai.elrond.domain.HighlighterColor
 import ai.elrond.domain.HighlighterWidth
 import ai.elrond.domain.InkLineType
 import ai.elrond.domain.PenColor
+import ai.elrond.domain.PencilLead
 import ai.elrond.ui.theme.LeapTheme
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,6 +36,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.PopupProperties
 
 /**
  * FA-23 per-tool configuration menus, shown by tapping the toolbar icon of the ALREADY-selected
@@ -41,6 +44,15 @@ import androidx.compose.ui.unit.dp
  * small: a swatch row, and for pen/pencil an expandable line-type list whose glyphs are drawn
  * from the same [InkLineType] pattern spec the baked segments use, so they can't drift.
  */
+
+/**
+ * Popup properties for the tool config menus: **non-focusable**, so the popup is not touch-modal —
+ * a pen DOWN outside the menu dismisses it AND still reaches the canvas underneath. The default
+ * focusable popup consumed that outside DOWN, which silently swallowed the first stroke drawn
+ * after every config change (device bug, 2026-07-07). Trade-off: the hardware back button won't
+ * dismiss the menu (tap-off or re-tapping the tool icon does), which fits a transient tool popup.
+ */
+internal val ToolConfigMenuProperties = PopupProperties(focusable = false)
 
 @Composable
 internal fun PenConfigMenu(
@@ -79,11 +91,53 @@ internal fun HighlighterConfigMenu(
 
 @Composable
 internal fun PencilConfigMenu(
+    selectedLead: PencilLead,
+    onLead: (PencilLead) -> Unit,
     selectedLineType: InkLineType,
     onLineType: (InkLineType) -> Unit,
 ) {
     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        LeadRow(selectedLead, onLead)
         LineTypeSection(selectedLineType, onLineType, startExpanded = true)
+    }
+}
+
+/**
+ * Five lead grades light → dark, each a swatch in the lead's actual translucent graphite colour
+ * (the menu's white surface makes the darkness read true) with its grade label beneath.
+ */
+@Composable
+private fun LeadRow(selected: PencilLead, onSelect: (PencilLead) -> Unit) {
+    val accent = LeapTheme.tokens.accent
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        PencilLead.entries.forEach { lead ->
+            val isSelected = lead == selected
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .clickable { onSelect(lead) }
+                    .semantics { contentDescription = "${lead.label} lead" },
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .then(
+                            if (isSelected) {
+                                Modifier.border(2.dp, accent, CircleShape)
+                            } else {
+                                Modifier.border(1.dp, Color(0xFFE4E5E6), CircleShape)
+                            },
+                        )
+                        .padding(3.dp)
+                        .background(Color(lead.argb), CircleShape),
+                )
+                Text(
+                    text = lead.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
     }
 }
 

@@ -184,6 +184,7 @@ fun NoteCanvasScreen(
     val highlighterColor by viewModel.highlighterColor.collectAsStateWithLifecycle()
     val highlighterWidth by viewModel.highlighterWidth.collectAsStateWithLifecycle()
     val pencilLineType by viewModel.pencilLineType.collectAsStateWithLifecycle()
+    val pencilLead by viewModel.pencilLead.collectAsStateWithLifecycle()
     var showPenMenu by remember { mutableStateOf(false) }
     var showHighlighterMenu by remember { mutableStateOf(false) }
     var showPencilMenu by remember { mutableStateOf(false) }
@@ -457,7 +458,14 @@ fun NoteCanvasScreen(
                     selected = tool == CanvasTool.PEN,
                     treatment = toolTreatment,
                 )
-                DropdownMenu(expanded = showPenMenu, onDismissRequest = { showPenMenu = false }) {
+                DropdownMenu(
+                    expanded = showPenMenu,
+                    onDismissRequest = { showPenMenu = false },
+                    // Non-focusable so a pen DOWN outside still dismisses the menu but is NOT
+                    // consumed — it reaches the canvas and draws. A focusable (touch-modal) popup
+                    // silently ate the first stroke after a config change (device bug, 2026-07-07).
+                    properties = ToolConfigMenuProperties,
+                ) {
                     PenConfigMenu(
                         selectedColor = penColor,
                         onColor = viewModel::setPenColor,
@@ -486,6 +494,7 @@ fun NoteCanvasScreen(
                 DropdownMenu(
                     expanded = showHighlighterMenu,
                     onDismissRequest = { showHighlighterMenu = false },
+                    properties = ToolConfigMenuProperties,
                 ) {
                     HighlighterConfigMenu(
                         selectedColor = highlighterColor,
@@ -512,8 +521,14 @@ fun NoteCanvasScreen(
                     selected = tool == CanvasTool.PENCIL,
                     treatment = toolTreatment,
                 )
-                DropdownMenu(expanded = showPencilMenu, onDismissRequest = { showPencilMenu = false }) {
+                DropdownMenu(
+                    expanded = showPencilMenu,
+                    onDismissRequest = { showPencilMenu = false },
+                    properties = ToolConfigMenuProperties,
+                ) {
                     PencilConfigMenu(
+                        selectedLead = pencilLead,
+                        onLead = viewModel::setPencilLead,
                         selectedLineType = pencilLineType,
                         onLineType = viewModel::setPencilLineType,
                     )

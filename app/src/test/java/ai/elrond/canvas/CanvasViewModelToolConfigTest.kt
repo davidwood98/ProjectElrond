@@ -6,6 +6,7 @@ import ai.elrond.domain.HighlighterColor
 import ai.elrond.domain.HighlighterWidth
 import ai.elrond.domain.InkLineType
 import ai.elrond.domain.PenColor
+import ai.elrond.domain.PencilLead
 import ai.elrond.presentation.CanvasViewModel
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
@@ -64,15 +65,18 @@ class CanvasViewModelToolConfigTest {
     }
 
     @Test
-    fun `pencil spec uses the graphite constants`() {
+    fun `pencil spec uses the selected lead colour, defaulting to HB`() {
         val vm = CanvasViewModel()
         vm.selectTool(CanvasTool.PENCIL)
 
         val spec = vm.currentBrushSpec()
 
         assertEquals(BrushSpec.FAMILY_PENCIL, spec.familyKey)
-        assertEquals(CanvasViewModel.PENCIL_COLOR, spec.colorArgb)
+        assertEquals(PencilLead.HB.argb, spec.colorArgb) // default lead = the pre-selector colour
         assertEquals(CanvasViewModel.PENCIL_BRUSH_SIZE, spec.size)
+
+        vm.setPencilLead(PencilLead.TWO_B)
+        assertEquals(PencilLead.TWO_B.argb, vm.currentBrushSpec().colorArgb)
     }
 
     @Test
@@ -215,6 +219,25 @@ class CanvasViewModelToolConfigTest {
     }
 
     @Test
+    fun `straight line snaps to the horizontal within two degrees and breaks out at five`() {
+        val vm = CanvasViewModel(patternStrokeBuilder = { _, _ -> mockk() })
+        vm.beginStraightLine(0f, 0f, 40f, 0f)
+
+        // ~1.4° above horizontal: snapped flat, endpoint projected onto y = 0.
+        vm.updateStraightLine(200f, 5f)
+        assertEquals(0f, vm.straightLinePreview.value?.y2)
+        assertEquals(200f, vm.straightLinePreview.value?.x2)
+
+        // ~2.9°: inside the 5° hysteresis, still held flat.
+        vm.updateStraightLine(200f, 10f)
+        assertEquals(0f, vm.straightLinePreview.value?.y2)
+
+        // ~11°: clearly broken out — the endpoint tracks the pen again.
+        vm.updateStraightLine(200f, 40f)
+        assertEquals(40f, vm.straightLinePreview.value?.y2)
+    }
+
+    @Test
     fun `cancelling a straight line leaves no ink`() {
         val vm = CanvasViewModel(patternStrokeBuilder = { _, _ -> mockk() })
         vm.beginStraightLine(0f, 0f, 40f, 0f)
@@ -247,6 +270,7 @@ class CanvasViewModelToolConfigTest {
             persistHighlighterColor = { persisted.add(it) },
             persistHighlighterWidth = { persisted.add(it) },
             persistPencilLineType = { persisted.add(it) },
+            persistPencilLead = { persisted.add(it) },
         )
 
         vm.setPenColor(PenColor.BLACK)
@@ -254,6 +278,7 @@ class CanvasViewModelToolConfigTest {
         vm.setHighlighterColor(HighlighterColor.ORANGE)
         vm.setHighlighterWidth(HighlighterWidth.FINE)
         vm.setPencilLineType(InkLineType.DASH_DOT)
+        vm.setPencilLead(PencilLead.B)
         advanceUntilIdle()
 
         assertEquals(
@@ -263,6 +288,7 @@ class CanvasViewModelToolConfigTest {
                 HighlighterColor.ORANGE,
                 HighlighterWidth.FINE,
                 InkLineType.DASH_DOT,
+                PencilLead.B,
             ),
             persisted,
         )
@@ -276,6 +302,7 @@ class CanvasViewModelToolConfigTest {
             highlighterColorFlow = MutableStateFlow(HighlighterColor.GREEN),
             highlighterWidthFlow = MutableStateFlow(HighlighterWidth.FINE),
             pencilLineTypeFlow = MutableStateFlow(InkLineType.DASHED),
+            pencilLeadFlow = MutableStateFlow(PencilLead.TWO_H),
         )
         advanceUntilIdle()
 
@@ -284,5 +311,6 @@ class CanvasViewModelToolConfigTest {
         assertEquals(HighlighterColor.GREEN, vm.highlighterColor.value)
         assertEquals(HighlighterWidth.FINE, vm.highlighterWidth.value)
         assertEquals(InkLineType.DASHED, vm.pencilLineType.value)
+        assertEquals(PencilLead.TWO_H, vm.pencilLead.value)
     }
 }
