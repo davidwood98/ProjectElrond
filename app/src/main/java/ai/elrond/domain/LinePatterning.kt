@@ -178,7 +178,10 @@ object LinePatterning {
             val last = prev
             if (last != null && p.x == last.x && p.y == last.y) continue // coincident: adds nothing
             val t = if (last == null) maxOf(p.t, 0L) else maxOf(p.t, last.t + 1)
-            val q = if (t == p.t) p else p.copy(t = t)
+            // Some devices report MotionEvent pressure > 1; clamp so it stays a REPORTED value
+            // (pressure is kept through serialisation for future use, never dropped).
+            val pressure = if (p.pressure.isFinite()) p.pressure.coerceIn(0f, 1f) else 1f
+            val q = if (t == p.t && pressure == p.pressure) p else p.copy(t = t, pressure = pressure)
             out.add(q)
             prev = q
         }

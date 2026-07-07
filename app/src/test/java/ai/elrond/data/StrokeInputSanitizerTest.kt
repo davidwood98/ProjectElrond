@@ -68,13 +68,14 @@ class StrokeInputSanitizerTest {
     }
 
     @Test
-    fun `out-of-range pressure tilt orientation become the unreported sentinel`() {
+    fun `out-of-range channel values clamp into range and stay reported`() {
+        // Pressure is retained for future use — drift clamps rather than dropping the channel.
         val out = StrokeInputSanitizer.sanitize(
             listOf(point(pressure = 1.7f, tilt = 9f, orientation = -3f, x = 1f)),
         )
-        assertEquals(-1f, out[0].pressure)
-        assertEquals(-1f, out[0].tilt)
-        assertEquals(-1f, out[0].orientation)
+        assertEquals(1f, out[0].pressure)
+        assertEquals((Math.PI / 2).toFloat(), out[0].tilt)
+        assertEquals(0f, out[0].orientation)
     }
 
     @Test
@@ -82,6 +83,25 @@ class StrokeInputSanitizerTest {
         val real = point(x = 1f, pressure = 0.8f, tilt = 0.4f, orientation = 3.1f)
         val out = StrokeInputSanitizer.sanitize(listOf(real))
         assertEquals(real, out[0])
+        // A channel unreported on EVERY point stays unreported (already batch-consistent).
+        val bare = listOf(point(x = 1f, pressure = -1f), point(x = 2f, t = 8, pressure = -1f))
+        assertTrue(StrokeInputSanitizer.sanitize(bare).all { it.pressure == -1f })
+    }
+
+    @Test
+    fun `a mixed batch repairs gaps so the channel stays reported on every point`() {
+        // Ink 1.0.0: "all or none of the inputs in a batch must report pressure" (FA-23 device
+        // gate). A NaN/sentinel gap is filled from the nearest reported neighbour, not dropped.
+        val out = StrokeInputSanitizer.sanitize(
+            listOf(
+                point(x = 1f, t = 0, pressure = -1f), // leading gap: back-filled from the next
+                point(x = 2f, t = 8, pressure = 0.6f),
+                point(x = 3f, t = 16, pressure = Float.NaN), // forward-filled from the previous
+                point(x = 4f, t = 24, pressure = 0.9f),
+            ),
+        )
+        assertEquals(listOf(0.6f, 0.6f, 0.6f, 0.9f), out.map { it.pressure })
+        assertTrue(out.none { it.pressure == -1f })
     }
 
     @Test

@@ -190,4 +190,17 @@ class LinePatterningTest {
         assertEquals(0L, clean.first().t)
         assertTrue(clean[1].t > clean[0].t)
     }
+
+    @Test
+    fun `sanitize clamps device pressure into range but keeps it reported`() {
+        // Some devices report MotionEvent pressure > 1; pressure must survive, clamped not dropped.
+        val clean = LinePatterning.sanitizeForInk(
+            listOf(
+                InkPoint(0f, 0f, 0L, pressure = 1.4f),
+                InkPoint(1f, 0f, 8L, pressure = Float.NaN),
+                InkPoint(2f, 0f, 16L, pressure = -0.2f),
+            ),
+        )
+        assertEquals(listOf(1f, 1f, 0f), clean.map { it.pressure })
+    }
 }

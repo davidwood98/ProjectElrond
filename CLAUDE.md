@@ -1837,6 +1837,20 @@ and the highlighter width/colour retune all passed.
   `StrokeSelectionTest` (+2 inflate), `ToolConfigEnumsTest` (+lead defaults/ordering/parsing),
   `CanvasViewModelToolConfigTest` (+lead spec/persist/seed, +straighten snap-and-break-out),
   `SettingsRepositoryTest` (+pencilLead round-trip).
+- **Stage-0 gate catch — ink batches must report channels all-or-none (2026-07-08).** The first
+  on-device `connectedDebugAndroidTest` run failed `adversarialStoredPoints_reconstructSanitized`:
+  ink 1.0.0 also validates *"Either all or none of the inputs in a batch must report `pressure`"*
+  (likewise tilt/orientation), and `StrokeInputSanitizer`'s out-of-range→sentinel rule produced a
+  mixed batch. Fixed **without ever dropping the pressure channel** (user directive: pressure must
+  survive serialisation for future use): a drifted finite value now **clamps** into range (still
+  reported); only non-finite values / the stored -1 sentinel stay unreported; and a mixed channel
+  is repaired by **filling gaps from the nearest reported neighbour** (forward- then back-fill) —
+  a channel goes unreported only when NO point reports it. The live-capture path
+  (`LinePatterning.sanitizeForInk`) also clamps device pressure (>1 happens) into [0,1], kept
+  reported. JVM tests updated (+mixed-batch fill, +live clamp); the instrumented fixture gained a
+  NaN-pressure point so the all-or-none rule is exercised on-device. The other failure in that run
+  — `DeviceCalendarProviderTest.create_read_update_delete_event` — is the **pre-existing** FA-10
+  device-environment failure (deleted event still returned by the follow-up query), not FA-23.
 
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 

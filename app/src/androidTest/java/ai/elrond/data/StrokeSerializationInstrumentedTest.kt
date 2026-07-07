@@ -121,7 +121,9 @@ class StrokeSerializationInstrumentedTest {
             SerializedStrokeInput(x = 20f, y = 18f, t = 0L, pressure = 0.5f, tilt = 0.1f, orientation = 0.2f), // dup t
             SerializedStrokeInput(x = 35f, y = 30f, t = -5L, pressure = 1.7f, tilt = 0.1f, orientation = 0.2f), // decreasing t, bad pressure
             SerializedStrokeInput(x = Float.NaN, y = 40f, t = 30L, pressure = 0.5f, tilt = 0.1f, orientation = 0.2f), // NaN x — dropped
-            SerializedStrokeInput(x = 52f, y = 41f, t = 30L, pressure = -0.5f, tilt = 9f, orientation = -3f),
+            // NaN pressure: a mixed reported/unreported batch throws in ink 1.0.0 unless the gap
+            // is filled (all-or-none rule) — plus out-of-range tilt/orientation that must clamp.
+            SerializedStrokeInput(x = 52f, y = 41f, t = 30L, pressure = Float.NaN, tilt = 9f, orientation = -3f),
             SerializedStrokeInput(x = 70f, y = 49f, t = 40L, pressure = 0.9f, tilt = 0.1f, orientation = 0.2f),
         )
         val entity = StrokeEntity(

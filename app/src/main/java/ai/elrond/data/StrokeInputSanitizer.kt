@@ -28,13 +28,59 @@ object StrokeInputSanitizer {
             val t = if (prev == null) maxOf(p.t, 0L) else maxOf(p.t, prev.t + 1)
             val clean = p.copy(
                 t = t,
-                pressure = if (p.pressure in 0f..1f) p.pressure else UNREPORTED,
-                tilt = if (p.tilt in 0f..MAX_TILT) p.tilt else UNREPORTED,
-                orientation = if (p.orientation in 0f..MAX_ORIENTATION) p.orientation else UNREPORTED,
+                pressure = clampChannel(p.pressure, 1f),
+                tilt = clampChannel(p.tilt, MAX_TILT),
+                orientation = clampChannel(p.orientation, MAX_ORIENTATION),
             )
             out.add(clean)
             prev = clean
         }
-        return out
+        return unifyChannelReporting(out)
+    }
+
+    /**
+     * A drifted finite value clamps into [0, max] (still reported — pressure data is kept for
+     * future use, never discarded over range drift); only non-finite values and the stored -1
+     * sentinel itself stay [UNREPORTED].
+     */
+    private fun clampChannel(value: Float, max: Float): Float = when {
+        !value.isFinite() || value == UNREPORTED -> UNREPORTED
+        else -> value.coerceIn(0f, max)
+    }
+
+    /**
+     * Ink 1.0.0 also validates the batch as a whole: "Either all or none of the inputs in a batch
+     * must report `pressure`" (likewise tilt/orientation) — caught on-device by the FA-23 merge
+     * gate. Per-point sanitising can leave a channel reported on some points and unreported on
+     * others; rather than dropping the channel (pressure must survive serialisation for future
+     * use), the gaps are FILLED from the nearest reported neighbour. A channel no point reports
+     * stays unreported everywhere — already consistent.
+     */
+    private fun unifyChannelReporting(points: List<SerializedStrokeInput>): List<SerializedStrokeInput> {
+        if (points.isEmpty()) return points
+        val pressure = repairChannel(FloatArray(points.size) { points[it].pressure })
+        val tilt = repairChannel(FloatArray(points.size) { points[it].tilt })
+        val orientation = repairChannel(FloatArray(points.size) { points[it].orientation })
+        return points.mapIndexed { i, p ->
+            if (p.pressure == pressure[i] && p.tilt == tilt[i] && p.orientation == orientation[i]) {
+                p
+            } else {
+                p.copy(pressure = pressure[i], tilt = tilt[i], orientation = orientation[i])
+            }
+        }
+    }
+
+    /** Fills unreported gaps in a mixed channel: forward-fill from the last reported value, then
+     *  back-fill any leading gap from the first reported value. All-unreported stays as-is. */
+    private fun repairChannel(values: FloatArray): FloatArray {
+        if (values.none { it != UNREPORTED }) return values
+        var last = UNREPORTED
+        for (i in values.indices) {
+            if (values[i] != UNREPORTED) last = values[i] else if (last != UNREPORTED) values[i] = last
+        }
+        for (i in values.indices.reversed()) {
+            if (values[i] != UNREPORTED) last = values[i] else values[i] = last
+        }
+        return values
     }
 }
