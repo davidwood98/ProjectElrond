@@ -221,6 +221,43 @@ class StrokeSelectionTest {
     }
 
     @Test
+    fun `hasLink, isSingleLink and count cover link boxes (FA-24)`() {
+        val mixed = SelectionState(ids = setOf("a"), bounds = box, linkIds = setOf("l1"))
+        assertTrue(mixed.hasLink)
+        assertFalse(mixed.isSingleLink) // has a stroke too
+        assertEquals(2, mixed.count)
+
+        val lone = SelectionState(ids = emptySet(), bounds = box, linkIds = setOf("l1"))
+        assertTrue(lone.isSingleLink)
+        assertEquals(1, lone.count)
+
+        val all = SelectionState(
+            ids = setOf("a"),
+            bounds = box,
+            aiNoteIds = setOf("n1"),
+            linkIds = setOf("l1", "l2"),
+        )
+        assertEquals(4, all.count)
+        assertFalse(all.isSingleLink)
+    }
+
+    @Test
+    fun `a link box excludes isSingleAiNote and canGroup (FA-24)`() {
+        val noteAndLink = SelectionState(
+            ids = emptySet(),
+            bounds = box,
+            aiNoteIds = setOf("n1"),
+            linkIds = setOf("l1"),
+        )
+        assertFalse(noteAndLink.isSingleAiNote) // a link is present
+        assertFalse(noteAndLink.isSingleLink) // an AI box is present
+
+        assertFalse(
+            SelectionState(ids = setOf("a", "b"), bounds = box, linkIds = setOf("l1")).canGroup,
+        ) // a link box is present
+    }
+
+    @Test
     fun `inflatedToMinimum expands a thin axis about its centre and leaves the wide axis alone`() {
         // A horizontal straight line: wide but ~zero-thick (the FA-23 grab-ability bug).
         val thin = SelectionBounds(left = 100f, top = 50f, right = 300f, bottom = 51f)

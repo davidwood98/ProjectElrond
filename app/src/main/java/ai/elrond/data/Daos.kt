@@ -88,6 +88,17 @@ interface NotePageDao {
     /** Strokes cascade-delete via the pageId foreign key. */
     @Query("DELETE FROM note_pages WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    /**
+     * The page a notebook should open on (FA-24 link tap) — most recently viewed, falling back
+     * to the cover page (lowest pageNumber) when nothing was opened yet. Null only when the
+     * notebook has no pages. Same tie-break as observeNotebookSummaries' in-memory logic.
+     */
+    @Query(
+        "SELECT id FROM note_pages WHERE notebookId = :notebookId " +
+            "ORDER BY lastOpenedAt DESC, pageNumber LIMIT 1",
+    )
+    suspend fun mostRecentlyViewedPageId(notebookId: String): String?
 }
 
 @Dao
@@ -161,6 +172,42 @@ interface AiNoteDao {
         deleteForPage(pageId)
         insertAll(notes)
     }
+}
+
+/** One backlink row: a link on [sourcePageId] (in notebook [sourceNotebookId]) pointing here. */
+data class BacklinkRow(
+    val id: String,
+    val sourcePageId: String,
+    val sourceNotebookId: String,
+    val createdAt: Long,
+)
+
+@Dao
+interface NotebookLinkDao {
+    @Insert
+    suspend fun insertAll(links: List<NotebookLinkEntity>)
+
+    @Query("SELECT * FROM notebook_links WHERE sourcePageId = :pageId ORDER BY createdAt")
+    suspend fun getForPage(pageId: String): List<NotebookLinkEntity>
+
+    @Query("DELETE FROM notebook_links WHERE sourcePageId = :pageId")
+    suspend fun deleteForPage(pageId: String)
+
+    /** Atomic full-page rewrite — mirrors ai_notes auto-save. */
+    @Transaction
+    suspend fun replaceForPage(pageId: String, links: List<NotebookLinkEntity>) {
+        deleteForPage(pageId)
+        insertAll(links)
+    }
+
+    /** Every link targeting [notebookId] — the "referenced by" list (FA-24 Backlinks). */
+    @Query(
+        "SELECT nl.id AS id, nl.sourcePageId AS sourcePageId, " +
+            "np.notebookId AS sourceNotebookId, nl.createdAt AS createdAt " +
+            "FROM notebook_links nl JOIN note_pages np ON np.id = nl.sourcePageId " +
+            "WHERE nl.targetNotebookId = :notebookId ORDER BY nl.createdAt DESC",
+    )
+    fun observeBacklinks(notebookId: String): Flow<List<BacklinkRow>>
 }
 
 @Dao

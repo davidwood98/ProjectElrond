@@ -7,6 +7,7 @@ import ai.elrond.domain.PageTransform
 import ai.elrond.domain.PageViewOrientation
 import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
+import ai.elrond.domain.QuickNavSearch
 import ai.elrond.domain.SubjectNode
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.ui.icons.ElrondIcons
@@ -65,6 +66,7 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MyLocation
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -927,6 +929,10 @@ private fun AddPageTile(onClick: () -> Unit) {
  * The canvas **Quick Nav** drawer (left, FA-16). The subject tree is **read-only** here — expand /
  * collapse only, no editing — per the spec; the **Unfiled** list below shows notes with no subject
  * and navigates to them. (Full subject CRUD + filing live in the home Library.)
+ *
+ * FA-24 additions: a **search field** (filters notebooks by title or owning subject name — typing
+ * swaps the tree for a flat result list), and a **link-picking mode** ([pickMode]) where choosing a
+ * notebook calls [onPickNotebook] (creating/redefining an on-canvas link box) instead of navigating.
  */
 @Composable
 fun LibraryOverlay(
@@ -938,11 +944,24 @@ fun LibraryOverlay(
     onLocateCurrent: () -> Unit,
     onOpenNote: (String) -> Unit,
     onDismiss: () -> Unit,
+    pickMode: Boolean = false,
+    onPickNotebook: ((NotebookSummary) -> Unit)? = null,
 ) {
     // Which notebook to flash as "you are here" — set when the locate button reveals the open notebook.
     var highlighted by remember { mutableStateOf<String?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
     val unfiled = notebooksBySubject[null].orEmpty()
     val isEmpty = subjectTree.isEmpty() && notebooksBySubject.values.all { it.isEmpty() }
+    // One click handler for every notebook row: pick mode creates/redefines a link, else navigate.
+    val onOpenNotebook: (NotebookSummary) -> Unit = { notebook ->
+        if (pickMode) onPickNotebook?.invoke(notebook) else onOpenNote(notebook.lastViewedPageId)
+    }
+    val searching = searchQuery.isNotBlank()
+    val searchResults = if (searching) {
+        QuickNavSearch.filterNotebooks(searchQuery, subjectTree, notebooksBySubject)
+    } else {
+        emptyList()
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
@@ -964,7 +983,7 @@ fun LibraryOverlay(
                     Icon(Icons.Outlined.Folder, contentDescription = null, tint = LeapTheme.tokens.accentStrong)
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        "Quick Nav",
+                        if (pickMode) "Link a notebook" else "Quick Nav",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold,
                         color = LeapGrey,
@@ -977,29 +996,38 @@ fun LibraryOverlay(
                         modifier = Modifier.size(20.dp).clickable(onClick = onDismiss),
                     )
                 }
+                QuickNavSearchField(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 20.dp, bottom = 6.dp),
+                )
                 // "Subjects" header with a right-aligned "current note" locator (expands the path to,
-                // and highlights, the open note).
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "SUBJECTS",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = Neutral500,
-                        modifier = Modifier.weight(1f),
-                    )
-                    IconButton(
-                        onClick = { onLocateCurrent(); highlighted = currentNotebookId },
-                        modifier = Modifier.size(30.dp),
+                // and highlights, the open note). Hidden while searching (results are a flat list).
+                if (!searching) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(
-                            Icons.Outlined.MyLocation,
-                            contentDescription = "Current note",
-                            tint = LeapTheme.tokens.accentStrong,
-                            modifier = Modifier.size(20.dp),
+                        Text(
+                            "SUBJECTS",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Neutral500,
+                            modifier = Modifier.weight(1f),
                         )
+                        IconButton(
+                            onClick = { onLocateCurrent(); highlighted = currentNotebookId },
+                            modifier = Modifier.size(30.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.MyLocation,
+                                contentDescription = "Current note",
+                                tint = LeapTheme.tokens.accentStrong,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     }
                 }
                 Column(
@@ -1008,40 +1036,110 @@ fun LibraryOverlay(
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 12.dp, vertical = 4.dp),
                 ) {
-                    if (isEmpty) {
-                        Text(
-                            "No notes yet. Create notes and subjects from the home library.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Neutral400,
-                            modifier = Modifier.padding(start = 12.dp, top = 2.dp, bottom = 8.dp),
-                        )
-                    }
-                    // The subject tree, with each subject's notebooks nested inside it (file-explorer style).
-                    subjectTree.forEach { node ->
-                        QuickNavSubject(
-                            node = node,
-                            notebooksBySubject = notebooksBySubject,
-                            expandedIds = expandedIds,
-                            highlightedNotebookId = highlighted,
-                            depth = 0,
-                            onToggle = onToggleSubject,
-                            onOpenNote = onOpenNote,
-                        )
-                    }
-                    // Notebooks that aren't filed into any subject sit at the root, under "Unfiled".
-                    if (unfiled.isNotEmpty()) {
-                        SectionLabel("Unfiled")
-                        unfiled.forEach { notebook ->
-                            QuickNavNotebook(
-                                notebook = notebook,
-                                depth = 0,
-                                highlighted = notebook.notebookId == highlighted,
-                                onOpenNote = onOpenNote,
-                            )
+                    when {
+                        searching -> {
+                            if (searchResults.isEmpty()) {
+                                Text(
+                                    "No notebooks match \"${searchQuery.trim()}\".",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Neutral400,
+                                    modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+                                )
+                            }
+                            searchResults.forEach { notebook ->
+                                QuickNavNotebook(
+                                    notebook = notebook,
+                                    depth = 0,
+                                    highlighted = notebook.notebookId == highlighted,
+                                    onOpenNotebook = onOpenNotebook,
+                                )
+                            }
+                        }
+                        else -> {
+                            if (isEmpty) {
+                                Text(
+                                    "No notes yet. Create notes and subjects from the home library.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Neutral400,
+                                    modifier = Modifier.padding(start = 12.dp, top = 2.dp, bottom = 8.dp),
+                                )
+                            }
+                            // The subject tree, with each subject's notebooks nested inside it.
+                            subjectTree.forEach { node ->
+                                QuickNavSubject(
+                                    node = node,
+                                    notebooksBySubject = notebooksBySubject,
+                                    expandedIds = expandedIds,
+                                    highlightedNotebookId = highlighted,
+                                    depth = 0,
+                                    onToggle = onToggleSubject,
+                                    onOpenNotebook = onOpenNotebook,
+                                )
+                            }
+                            // Notebooks that aren't filed into any subject sit at the root, under "Unfiled".
+                            if (unfiled.isNotEmpty()) {
+                                SectionLabel("Unfiled")
+                                unfiled.forEach { notebook ->
+                                    QuickNavNotebook(
+                                        notebook = notebook,
+                                        depth = 0,
+                                        highlighted = notebook.notebookId == highlighted,
+                                        onOpenNotebook = onOpenNotebook,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/** Compact Quick Nav search box (FA-24) — filters notebooks by title or subject name. */
+@Composable
+private fun QuickNavSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(Neutral100)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        Icon(
+            Icons.Outlined.Search,
+            contentDescription = null,
+            tint = Neutral500,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(modifier = Modifier.weight(1f)) {
+            if (query.isEmpty()) {
+                Text(
+                    "Search notebooks",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Neutral400,
+                )
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = LeapGrey),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (query.isNotEmpty()) {
+            Icon(
+                painterResource(ElrondIcons.Close),
+                contentDescription = "Clear search",
+                tint = Neutral500,
+                modifier = Modifier.size(16.dp).clickable { onQueryChange("") },
+            )
         }
     }
 }
@@ -1055,7 +1153,7 @@ private fun QuickNavSubject(
     highlightedNotebookId: String?,
     depth: Int,
     onToggle: (String) -> Unit,
-    onOpenNote: (String) -> Unit,
+    onOpenNotebook: (NotebookSummary) -> Unit,
 ) {
     val subject = node.subject
     val notebooks = notebooksBySubject[subject.id].orEmpty()
@@ -1100,7 +1198,7 @@ private fun QuickNavSubject(
                 highlightedNotebookId = highlightedNotebookId,
                 depth = depth + 1,
                 onToggle = onToggle,
-                onOpenNote = onOpenNote,
+                onOpenNotebook = onOpenNotebook,
             )
         }
         notebooks.forEach { notebook ->
@@ -1108,7 +1206,7 @@ private fun QuickNavSubject(
                 notebook = notebook,
                 depth = depth + 1,
                 highlighted = notebook.notebookId == highlightedNotebookId,
-                onOpenNote = onOpenNote,
+                onOpenNotebook = onOpenNotebook,
             )
         }
     }
@@ -1123,14 +1221,14 @@ private fun QuickNavNotebook(
     notebook: NotebookSummary,
     depth: Int,
     highlighted: Boolean,
-    onOpenNote: (String) -> Unit,
+    onOpenNotebook: (NotebookSummary) -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(9.dp))
             .background(if (highlighted) LeapTheme.tokens.accentSoft else Color.Transparent)
-            .clickable { onOpenNote(notebook.lastViewedPageId) }
+            .clickable { onOpenNotebook(notebook) }
             // Align the notebook text with subject names one level shallower (chevron + dot ≈ 27dp).
             .padding(start = (8 + depth * 16 + 27).dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically,

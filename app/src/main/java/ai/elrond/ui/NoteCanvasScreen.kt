@@ -64,6 +64,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import android.view.View
@@ -143,6 +144,8 @@ fun NoteCanvasScreen(
     val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
     val aiState by viewModel.aiState.collectAsStateWithLifecycle()
     val aiNotes by viewModel.aiNotes.collectAsStateWithLifecycle()
+    // Notebook link boxes on this page (FA-24) — passive chips; tap opens the target notebook.
+    val links by viewModel.links.collectAsStateWithLifecycle()
     // Unified selection (FA-21): strokes + AI boxes. Drives both the lasso chrome and which AI box
     // shows as selected (a box can be selected by a 1.5s press-and-hold or a lasso).
     val selection by viewModel.selection.collectAsStateWithLifecycle()
@@ -170,6 +173,14 @@ fun NoteCanvasScreen(
     val toolTreatment by settingsViewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
     var showMoreMenu by remember { mutableStateOf(false) }
     var showPageStyle by remember { mutableStateOf(false) }
+    // FA-24 notebook links: the Add(+) menu, the target picker (Quick Nav in pick mode — creating
+    // a new link, or redefining a broken one when redefineLinkId is set), the broken-link menu,
+    // and the Backlinks dialog.
+    var showAddMenu by remember { mutableStateOf(false) }
+    var linkPickingMode by remember { mutableStateOf(false) }
+    var redefineLinkId by remember { mutableStateOf<String?>(null) }
+    var brokenLinkMenuTargetId by remember { mutableStateOf<String?>(null) }
+    var showBacklinks by remember { mutableStateOf(false) }
     // FA-20: page style is per-notebook (paper / grid density / colour / orientation), resolved by
     // the CanvasViewModel (per-notebook override else the global default).
     val paperStyle by viewModel.paperStyle.collectAsStateWithLifecycle()
@@ -227,6 +238,15 @@ fun NoteCanvasScreen(
     // re-opens on that page; a fresh page when swiping past the last with content on the current one).
     LaunchedEffect(viewModel) {
         viewModel.pageTurnEvents.collect { id -> onOpenNote(id) }
+    }
+    // FA-24: tapping a healthy link box opens the target notebook's page. A dedicated event — NOT
+    // pageTurnEvents, which is intra-notebook page navigation.
+    LaunchedEffect(viewModel) {
+        viewModel.openLinkEvents.collect { id -> if (id != pageId) onOpenNote(id) }
+    }
+    // FA-24: press-and-hold on a broken link surfaces its Redefine/Delete menu.
+    LaunchedEffect(viewModel) {
+        viewModel.brokenLinkMenuEvents.collect { id -> brokenLinkMenuTargetId = id }
     }
 
     // Pinch-zoom indicator (FA-20): a pill on the left showing the zoom %, accent-styled when on a
@@ -320,6 +340,22 @@ fun NoteCanvasScreen(
                         onMeasured = { w, h -> viewModel.reportAiNoteMeasuredSize(note.id, w, h) },
                     )
                 }
+            }
+        }
+
+        // Notebook link boxes (FA-24) — rendered AFTER the AI notes (so links sit visually on top;
+        // CanvasViewModel.linkAt is hit-tested before aiNoteAt to match) and, like them, BELOW the
+        // ink canvas: passive chips the pen writes over. Tap-to-open and hold-to-select are handled
+        // by InkCanvas → the ViewModel.
+        links.forEach { link ->
+            key(link.id) {
+                val live = selection?.takeIf { link.id in it.linkIds }?.transform
+                NotebookLinkView(
+                    link = link,
+                    transform = pageTransform,
+                    liveTransform = live ?: LiveTransform.IDENTITY,
+                    onMeasured = { w, h -> viewModel.reportLinkMeasuredSize(link.id, w, h) },
+                )
             }
         }
 
@@ -566,12 +602,34 @@ fun NoteCanvasScreen(
                 onClick = viewModel::redo,
                 enabled = canRedo,
             )
-            // Import + Record: visual placeholders (no backend yet); no-op on tap.
-            ToolbarButton(
-                painter = painterResource(ElrondIcons.Add),
-                contentDescription = "Import (coming soon)",
-                onClick = {},
-            )
+            // Add(+): a general "add-in" menu (FA-24) — Link notebook is live; Add page reserved.
+            Box {
+                ToolbarButton(
+                    painter = painterResource(ElrondIcons.Add),
+                    contentDescription = "Add",
+                    onClick = { showAddMenu = true },
+                )
+                DropdownMenu(
+                    expanded = showAddMenu,
+                    onDismissRequest = { showAddMenu = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Link notebook") },
+                        onClick = {
+                            showAddMenu = false
+                            redefineLinkId = null
+                            linkPickingMode = true
+                            showLibrary = true
+                        },
+                    )
+                    // Reserved menu slot (mirrors the Import/Record placeholders) — no backend yet.
+                    DropdownMenuItem(
+                        text = { Text("Add page") },
+                        enabled = false,
+                        onClick = {},
+                    )
+                }
+            }
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Record),
                 contentDescription = "Record (coming soon)",
@@ -648,6 +706,13 @@ fun NoteCanvasScreen(
                             showPageStyle = true
                         },
                     )
+                    DropdownMenuItem(
+                        text = { Text("Backlinks") },
+                        onClick = {
+                            showMoreMenu = false
+                            showBacklinks = true
+                        },
+                    )
                     // Handoff menu items not yet wired to a backend — shown disabled.
                     DropdownMenuItem(
                         text = { Text("Export") },
@@ -707,7 +772,56 @@ fun NoteCanvasScreen(
                     showLibrary = false
                     if (id != pageId) onOpenNote(id)
                 },
-                onDismiss = { showLibrary = false },
+                onDismiss = {
+                    showLibrary = false
+                    linkPickingMode = false
+                    redefineLinkId = null
+                },
+                // FA-24 link picking: selecting a notebook creates (or redefines) a link box
+                // instead of navigating.
+                pickMode = linkPickingMode,
+                onPickNotebook = { summary ->
+                    showLibrary = false
+                    linkPickingMode = false
+                    val redefine = redefineLinkId
+                    redefineLinkId = null
+                    if (redefine != null) viewModel.redefineLink(redefine, summary)
+                    else viewModel.createLink(summary)
+                },
+            )
+        }
+        // FA-24: a held broken link offers exactly Redefine (re-run the target picker) and Delete.
+        // A screen-centred dialog by design — never anchored to a canvas point, so it can't render
+        // off-screen (the FA-7 precedent).
+        brokenLinkMenuTargetId?.let { linkId ->
+            AlertDialog(
+                onDismissRequest = { brokenLinkMenuTargetId = null },
+                title = { Text("Reference not found") },
+                text = { Text("The notebook this link pointed to was deleted.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        brokenLinkMenuTargetId = null
+                        redefineLinkId = linkId
+                        linkPickingMode = true
+                        showLibrary = true
+                    }) { Text("Redefine") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        viewModel.deleteLink(linkId)
+                        brokenLinkMenuTargetId = null
+                    }) { Text("Delete") }
+                },
+            )
+        }
+        if (showBacklinks) {
+            BacklinksDialog(
+                backlinksFlow = viewModel.observeBacklinks(),
+                onOpenNote = { id ->
+                    showBacklinks = false
+                    if (id != pageId) onOpenNote(id)
+                },
+                onDismiss = { showBacklinks = false },
             )
         }
 

@@ -36,7 +36,10 @@ import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.QueryTriggerDetector
 import ai.elrond.domain.TriggerMode
 import ai.elrond.domain.UnitSystem
+import ai.elrond.domain.Backlink
 import ai.elrond.domain.Notebook
+import ai.elrond.domain.NotebookLink
+import ai.elrond.domain.NotebookSummary
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.PageLayer
 import ai.elrond.domain.PageNavigationMode
@@ -45,6 +48,7 @@ import ai.elrond.domain.PageViewOrientation
 import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.defaultAiNotePosition
+import ai.elrond.domain.defaultLinkPosition
 import ai.elrond.domain.groupStrokesIntoLines
 import ai.elrond.domain.notebookTitle
 import ai.elrond.domain.selectQuestionLines
@@ -60,6 +64,7 @@ import ai.elrond.aibackend.anthropic.AnthropicConfig
 import ai.elrond.aibackend.anthropic.AnthropicProvider
 import ai.elrond.data.CalendarEvent
 import ai.elrond.data.CalendarRepository
+import ai.elrond.data.NotebookLinkRepository
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SessionNotesTracker
 import ai.elrond.data.SuggestionRepository
@@ -100,7 +105,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -128,6 +135,8 @@ class CanvasViewModel(
     private val lineSplitter: (List<Stroke>) -> List<List<Stroke>> = ::groupStrokesIntoLines,
     private val notePlacer: (List<Stroke>) -> NotePosition = ::defaultAiNotePosition,
     private val repository: NoteRepository? = null,
+    /** Notebook link boxes on this page (FA-24); null in tests that don't exercise links. */
+    private val linkRepository: NotebookLinkRepository? = null,
     private val taskExtractor: TaskExtractor? = null,
     private val todoRepository: TodoRepository? = null,
     private val calendarRepository: CalendarRepository? = null,
@@ -242,6 +251,7 @@ class CanvasViewModel(
         recognizer: HandwritingRecognizer,
         aiProvider: AIProvider?,
         repository: NoteRepository,
+        linkRepository: NotebookLinkRepository,
         taskExtractor: TaskExtractor?,
         todoRepository: TodoRepository,
         calendarRepository: CalendarRepository,
@@ -254,6 +264,7 @@ class CanvasViewModel(
         recognizer = recognizer,
         aiProvider = aiProvider,
         repository = repository,
+        linkRepository = linkRepository,
         taskExtractor = taskExtractor,
         todoRepository = todoRepository,
         calendarRepository = calendarRepository,
@@ -328,6 +339,8 @@ class CanvasViewModel(
     private var clipboardStrokes: List<CanvasStroke> = emptyList()
     /** AI response boxes held for paste alongside [clipboardStrokes] (FA-21). */
     private var clipboardAiNotes: List<AiInkNote> = emptyList()
+    /** Notebook link boxes held for paste alongside [clipboardStrokes] (FA-24). */
+    private var clipboardLinks: List<NotebookLink> = emptyList()
     private var clipboardBounds: SelectionBounds? = null
 
     /**
@@ -336,6 +349,9 @@ class CanvasViewModel(
      * selection bounds (the box that hugs an AI note) and lasso/hold hit-testing.
      */
     private val aiNoteMeasured = mutableMapOf<String, Pair<Float, Float>>()
+
+    /** Same role as [aiNoteMeasured] for notebook link boxes (FA-24). */
+    private val linkMeasured = mutableMapOf<String, Pair<Float, Float>>()
 
     private val _tool = MutableStateFlow(CanvasTool.PEN)
     val tool: StateFlow<CanvasTool> = _tool.asStateFlow()
@@ -560,6 +576,22 @@ class CanvasViewModel(
     private val _createdNoteEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val createdNoteEvents: SharedFlow<String> = _createdNoteEvents.asSharedFlow()
 
+    /** Notebook link boxes on this page's canvas (FA-24). */
+    private val _links = MutableStateFlow<List<NotebookLink>>(emptyList())
+    val links: StateFlow<List<NotebookLink>> = _links.asStateFlow()
+
+    /**
+     * Emits the page id to open when a healthy link box is tapped (FA-24). Deliberately NOT
+     * [pageTurnEvents] — that flow is FA-20's intra-notebook page navigation; a link tap jumps
+     * to a different notebook.
+     */
+    private val _openLinkEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val openLinkEvents: SharedFlow<String> = _openLinkEvents.asSharedFlow()
+
+    /** Emits a broken link's id when it is press-and-held — the UI shows Redefine/Delete (FA-24). */
+    private val _brokenLinkMenuEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val brokenLinkMenuEvents: SharedFlow<String> = _brokenLinkMenuEvents.asSharedFlow()
+
     /** The open page's notebook id (set once the page loads); drives the multi-page pager (FA-20). */
     private var notebookId: String? = null
 
@@ -647,6 +679,9 @@ class CanvasViewModel(
 
     /** AI notes as last persisted — same role for the ai_notes table. */
     private var lastPersistedAiNotes: List<AiInkNote> = emptyList()
+
+    /** Link boxes as last persisted — same role for the notebook_links table (FA-24). */
+    private var lastPersistedLinks: List<NotebookLink> = emptyList()
 
     /** Latest canvas width in px, reported by the UI; sizes new full-line AI boxes. */
     private var canvasWidthPx: Float = 0f
@@ -896,6 +931,10 @@ class CanvasViewModel(
                 }
                 runCatching { repository.loadAiNotes(pageId) }
                     .onSuccess { loaded -> _aiNotes.value = loaded }
+                linkRepository?.let { linkRepo ->
+                    runCatching { linkRepo.loadForPage(pageId) }
+                        .onSuccess { loaded -> _links.value = loaded }
+                }
                 runCatching { repository.getPage(pageId) }.getOrNull()?.let { page ->
                     notebookId = page.notebookId
                     // Track the notebook's ordered pages for the page indicator + swipe page-turns.
@@ -923,6 +962,7 @@ class CanvasViewModel(
                 // Also record it in this foreground session — the editor tabs show session notes (FA-16).
                 sessionNotesTracker?.recordOpened(pageId)
                 lastPersistedAiNotes = _aiNotes.value.filterNot { it.isError }
+                lastPersistedLinks = _links.value
                 startAutoSave(repository, pageId)
             }
         }
@@ -1469,6 +1509,16 @@ class CanvasViewModel(
                 }
             }
         }
+        linkRepository?.let { linkRepo ->
+            viewModelScope.launch {
+                _links.debounce(autoSaveDebounceMillis).collect { links ->
+                    if (links != lastPersistedLinks) {
+                        runCatching { linkRepo.replaceForPage(pageId, links) }
+                            .onSuccess { lastPersistedLinks = links }
+                    }
+                }
+            }
+        }
     }
 
     /** (Re)generates + caches the page thumbnail, clearing [thumbnailDirty]. No-op without a generator. */
@@ -1503,6 +1553,11 @@ class CanvasViewModel(
             if (aiNotes != lastPersistedAiNotes) {
                 flushScope.launch { runCatching { repository.replaceAiNotes(pageId, aiNotes) } }
             }
+        }
+        val linkRepo = linkRepository
+        val links = _links.value
+        if (linkRepo != null && pageId != null && links != lastPersistedLinks) {
+            flushScope.launch { runCatching { linkRepo.replaceForPage(pageId, links) } }
         }
         // Release the native handwriting recognizer held for this screen.
         runCatching { recognizer?.close() }
@@ -1715,12 +1770,15 @@ class CanvasViewModel(
     fun clearPage() {
         triggerDetectionJob?.cancel()
         cancelPrefixListening()
-        // Undoable when there's anything to clear — strokes OR AI boxes (FA-21).
-        if (_finishedStrokes.value.isNotEmpty() || _aiNotes.value.any { !it.isError }) {
+        // Undoable when there's anything to clear — strokes, AI boxes (FA-21) or links (FA-24).
+        if (_finishedStrokes.value.isNotEmpty() || _aiNotes.value.any { !it.isError } ||
+            _links.value.isNotEmpty()
+        ) {
             pushUndoSnapshot()
         }
         _finishedStrokes.value = emptyList()
         _aiNotes.value = emptyList()
+        _links.value = emptyList()
         _aiState.value = AiUiState.Idle
         lastHandledPrompt = null
         clearSelection()
@@ -1809,6 +1867,142 @@ class CanvasViewModel(
             }
         }?.id
 
+    // --- Notebook link boxes (FA-24) ---
+
+    /**
+     * The topmost link box containing the page-space point, or null. Link boxes render above AI
+     * boxes, so InkCanvas checks this BEFORE [aiNoteAt] — a simple ordering rule, not a z-order
+     * system; revisit if a third overlapping box type ever appears.
+     */
+    fun linkAt(pageX: Float, pageY: Float): String? =
+        _links.value.lastOrNull { link ->
+            linkRect(link).let { pageX in it.left..it.right && pageY in it.top..it.bottom }
+        }?.id
+
+    /** Page-space bounds of a link box, using its last measured size when known. */
+    private fun linkRect(link: NotebookLink): SelectionBounds {
+        val measured = linkMeasured[link.id]
+        val w = measured?.first ?: link.widthPx
+        val h = measured?.second ?: link.heightPx ?: NotebookLink.MIN_HEIGHT_PX
+        return SelectionBounds(link.x, link.y, link.x + w, link.y + h)
+    }
+
+    /** The view reports a link box's measured size (page-space px) — mirrors [reportAiNoteMeasuredSize]. */
+    fun reportLinkMeasuredSize(id: String, widthPx: Float, heightPx: Float) {
+        if (widthPx <= 0f || heightPx <= 0f) return
+        val prev = linkMeasured[id]
+        if (prev != null && prev.first == widthPx && prev.second == heightPx) return
+        linkMeasured[id] = widthPx to heightPx
+        val sel = _selection.value ?: return
+        if (sel.isSingleLink && id in sel.linkIds && sel.transform.isIdentity) {
+            val link = _links.value.firstOrNull { it.id == id } ?: return
+            _selection.value = sel.copy(bounds = linkRect(link))
+        }
+    }
+
+    /**
+     * Press-and-hold on a link box: a healthy link enters the unified selection (like an AI box);
+     * a broken one instead surfaces the Redefine/Delete menu via [brokenLinkMenuEvents].
+     */
+    fun holdLink(id: String) {
+        val link = _links.value.firstOrNull { it.id == id } ?: return
+        if (link.isBroken) {
+            _brokenLinkMenuEvents.tryEmit(id)
+        } else {
+            setSelection(emptySet(), emptySet(), setOf(id))
+        }
+    }
+
+    /**
+     * Plain tap on a link box: opens the target notebook (its most recently viewed page) via
+     * [openLinkEvents]. No-op for a broken link (the FA-5 dead-link rule: never a tappable-looking
+     * dead control) or an already-selected one (a tap there belongs to the selection chrome).
+     * An empty target notebook (no pages) shows a transient message instead of silently failing.
+     */
+    fun tapLink(id: String) {
+        val link = _links.value.firstOrNull { it.id == id } ?: return
+        if (link.isBroken) return
+        if (_selection.value?.linkIds?.contains(id) == true) return
+        val target = link.targetNotebookId ?: return
+        val repository = repository ?: return
+        viewModelScope.launch {
+            val openId = runCatching { repository.lastViewedPageId(target) }.getOrNull()
+            if (openId == null) {
+                showTransientMessage("Notebook has no pages")
+            } else {
+                _openLinkEvents.emit(openId)
+            }
+        }
+    }
+
+    /** Creates a link box to [target] at the viewport centre and selects it. One undoable step. */
+    fun createLink(target: NotebookSummary) {
+        val position = defaultLinkPosition(pageTransform.value, canvasWidthPx, canvasHeightPx)
+        val link = NotebookLink(
+            id = linkRepository?.newLinkId() ?: UUID.randomUUID().toString(),
+            targetNotebookId = target.notebookId,
+            x = position.x,
+            y = position.y,
+            widthPx = NotebookLink.DEFAULT_WIDTH_PX,
+            linkText = target.title,
+            createdAt = linkRepository?.now() ?: System.currentTimeMillis(),
+        )
+        pushUndoSnapshot()
+        _links.update { it + link }
+        setSelection(emptySet(), emptySet(), setOf(link.id))
+    }
+
+    /** Re-points a (typically broken) link at [target], updating its cached label. Undoable. */
+    fun redefineLink(id: String, target: NotebookSummary) {
+        if (_links.value.none { it.id == id }) return
+        pushUndoSnapshot()
+        _links.update { links ->
+            links.map {
+                if (it.id == id) it.copy(targetNotebookId = target.notebookId, linkText = target.title)
+                else it
+            }
+        }
+    }
+
+    /** Deletes a single link box (the broken-link menu's Delete). Undoable. */
+    fun deleteLink(id: String) {
+        if (_links.value.none { it.id == id }) return
+        pushUndoSnapshot()
+        linkMeasured.remove(id)
+        _links.update { links -> links.filterNot { it.id == id } }
+        _selection.update { sel ->
+            if (sel != null && id in sel.linkIds) {
+                if (sel.count == 1) null else sel.copy(linkIds = sel.linkIds - id)
+            } else {
+                sel
+            }
+        }
+    }
+
+    /**
+     * Every notebook linking TO this page's notebook ("referenced by"), with source titles
+     * resolved through [NoteRepository.observeNotebookSummaries] so the title-fallback rule
+     * isn't duplicated here.
+     */
+    fun observeBacklinks(): Flow<List<Backlink>> {
+        val notebook = notebookId ?: return emptyFlow()
+        val linkRepo = linkRepository ?: return emptyFlow()
+        val repository = repository ?: return emptyFlow()
+        return combine(
+            linkRepo.observeBacklinks(notebook),
+            repository.observeNotebookSummaries(),
+        ) { rows, summaries ->
+            val titleById = summaries.associateBy { it.notebookId }
+            rows.map { row ->
+                Backlink(
+                    linkId = row.id,
+                    sourcePageId = row.sourcePageId,
+                    sourceTitle = titleById[row.sourceNotebookId]?.title ?: "Untitled",
+                )
+            }
+        }
+    }
+
     /** Page-space bounds of an AI note, using its last measured size when known (FA-21). */
     private fun aiNoteRect(note: AiInkNote): SelectionBounds {
         val measured = aiNoteMeasured[note.id]
@@ -1847,11 +2041,20 @@ class CanvasViewModel(
             val centres = notes.map { aiNoteRect(it).let { r -> GestureTriggerDetector.Point(r.centerX, r.centerY) } }
             StrokeSelection.enclosedIds(polygon, noteIds, centres)
         }
-        if (enclosedStrokes.isEmpty() && enclosedNotes.isEmpty()) {
+        // Link boxes are selectable the same way (FA-24), by their centre point.
+        val allLinks = _links.value
+        val enclosedLinks = if (allLinks.isEmpty()) {
+            emptySet()
+        } else {
+            val linkIds = allLinks.map { it.id }
+            val centres = allLinks.map { linkRect(it).let { r -> GestureTriggerDetector.Point(r.centerX, r.centerY) } }
+            StrokeSelection.enclosedIds(polygon, linkIds, centres)
+        }
+        if (enclosedStrokes.isEmpty() && enclosedNotes.isEmpty() && enclosedLinks.isEmpty()) {
             clearSelection()
             return
         }
-        setSelection(enclosedStrokes, enclosedNotes)
+        setSelection(enclosedStrokes, enclosedNotes, enclosedLinks)
     }
 
     fun clearSelection() {
@@ -1879,13 +2082,13 @@ class CanvasViewModel(
         // mis-judge the travel at zoom != 1. AI boxes never snap — a small deliberate reposition of
         // an answer must stick. Unknown canvas size (unit tests) and scales always commit.
         val zoom = pageTransform.value.scale.takeIf { it > 0f } ?: 1f
-        if (lassoSnapBackEnabled && sel.aiNoteIds.isEmpty() &&
+        if (lassoSnapBackEnabled && sel.aiNoteIds.isEmpty() && sel.linkIds.isEmpty() &&
             StrokeSelection.shouldSnapBack(t, canvasWidthPx / zoom, canvasHeightPx / zoom, lassoSnapBackThreshold)
         ) {
             _selection.update { it?.copy(transform = LiveTransform.IDENTITY) }
             return
         }
-        // One undoable step covering BOTH strokes and AI boxes (captured pre-change).
+        // One undoable step covering strokes, AI boxes AND link boxes (captured pre-change).
         pushUndoSnapshot()
         if (sel.ids.isNotEmpty()) {
             _finishedStrokes.update { current ->
@@ -1901,9 +2104,14 @@ class CanvasViewModel(
                 notes.map { if (it.id in sel.aiNoteIds) transformAiNote(it, t) else it }
             }
         }
+        if (sel.linkIds.isNotEmpty()) {
+            _links.update { links ->
+                links.map { if (it.id in sel.linkIds) transformLink(it, t) else it }
+            }
+        }
         _selection.value = sel.copy(
             transform = LiveTransform.IDENTITY,
-            bounds = recomputeSelectionBounds(sel.ids, sel.aiNoteIds) ?: sel.displayBounds,
+            bounds = recomputeSelectionBounds(sel.ids, sel.aiNoteIds, sel.linkIds) ?: sel.displayBounds,
         )
     }
 
@@ -1926,6 +2134,22 @@ class CanvasViewModel(
         return note.copy(x = newX, y = newY, widthPx = newWidth, heightPx = newHeight, fontScale = newFont)
     }
 
+    /**
+     * Applies a baked move/scale to a link box (FA-24) — [transformAiNote] minus the font branch:
+     * a pure move keeps the size; a scale grows width/height (there is no font concept, the label
+     * scales with the box in the view's graphicsLayer).
+     */
+    private fun transformLink(link: NotebookLink, t: LiveTransform): NotebookLink {
+        val newX = t.applyX(link.x).coerceAtLeast(0f)
+        val newY = t.applyY(link.y).coerceAtLeast(0f)
+        if (t.scaleX == 1f && t.scaleY == 1f) {
+            return link.copy(x = newX, y = newY)
+        }
+        val newWidth = (link.widthPx * t.scaleX).coerceAtLeast(NotebookLink.MIN_WIDTH_PX)
+        val newHeight = link.heightPx?.let { (it * t.scaleY).coerceAtLeast(NotebookLink.MIN_HEIGHT_PX) }
+        return link.copy(x = newX, y = newY, widthPx = newWidth, heightPx = newHeight)
+    }
+
     /** Duplicate: clones the selection in place (offset), preserving grouping; selects the copy. */
     fun duplicateSelection() {
         val sel = _selection.value ?: return
@@ -1939,11 +2163,21 @@ class CanvasViewModel(
             DUPLICATE_OFFSET_PX,
             DUPLICATE_OFFSET_PX,
         )
-        if (strokeCopies.isEmpty() && noteCopies.isEmpty()) return
+        val linkCopies = cloneLinks(
+            _links.value.filter { it.id in sel.linkIds },
+            DUPLICATE_OFFSET_PX,
+            DUPLICATE_OFFSET_PX,
+        )
+        if (strokeCopies.isEmpty() && noteCopies.isEmpty() && linkCopies.isEmpty()) return
         pushUndoSnapshot()
         if (strokeCopies.isNotEmpty()) _finishedStrokes.update { it + strokeCopies }
         if (noteCopies.isNotEmpty()) _aiNotes.update { it + noteCopies }
-        setSelection(strokeCopies.map { it.id }.toSet(), noteCopies.map { it.id }.toSet())
+        if (linkCopies.isNotEmpty()) _links.update { it + linkCopies }
+        setSelection(
+            strokeCopies.map { it.id }.toSet(),
+            noteCopies.map { it.id }.toSet(),
+            linkCopies.map { it.id }.toSet(),
+        )
     }
 
     /** Bin: removes the selected strokes and AI boxes. */
@@ -1953,15 +2187,19 @@ class CanvasViewModel(
         clearSelection()
     }
 
-    /** Removes the selection's strokes and AI boxes from the page in one undoable step (FA-21). */
+    /** Removes the selection's strokes, AI boxes and link boxes in one undoable step (FA-21/24). */
     private fun removeSelected(sel: SelectionState) {
-        pushUndoSnapshot() // covers strokes AND AI boxes, so a mixed delete fully undoes
+        pushUndoSnapshot() // covers all three kinds, so a mixed delete fully undoes
         if (sel.ids.isNotEmpty()) {
             _finishedStrokes.update { current -> current.filterNot { it.id in sel.ids } }
         }
         if (sel.aiNoteIds.isNotEmpty()) {
             sel.aiNoteIds.forEach { aiNoteMeasured.remove(it) }
             _aiNotes.update { current -> current.filterNot { it.id in sel.aiNoteIds } }
+        }
+        if (sel.linkIds.isNotEmpty()) {
+            sel.linkIds.forEach { linkMeasured.remove(it) }
+            _links.update { current -> current.filterNot { it.id in sel.linkIds } }
         }
     }
 
@@ -1973,13 +2211,13 @@ class CanvasViewModel(
     /** Copy: holds deep copies of the selection on the clipboard; the selection stays put. */
     fun copySelection() {
         val sel = _selection.value ?: return
-        captureClipboard(sel.ids, sel.aiNoteIds)
+        captureClipboard(sel.ids, sel.aiNoteIds, sel.linkIds)
     }
 
     /** Cut: copies the selection to the clipboard, then removes it from the page. */
     fun cutSelection() {
         val sel = _selection.value ?: return
-        captureClipboard(sel.ids, sel.aiNoteIds)
+        captureClipboard(sel.ids, sel.aiNoteIds, sel.linkIds)
         removeSelected(sel)
         clearSelection()
     }
@@ -1992,22 +2230,29 @@ class CanvasViewModel(
      */
     fun pasteAt(x: Float, y: Float) {
         val bounds = clipboardBounds ?: return
-        if (clipboardStrokes.isEmpty() && clipboardAiNotes.isEmpty()) return
+        if (clipboardStrokes.isEmpty() && clipboardAiNotes.isEmpty() && clipboardLinks.isEmpty()) return
         val dx = x - bounds.left
         val dy = y - bounds.top
         val pastedStrokes = cloneStrokes(clipboardStrokes, dx, dy)
         val pastedNotes = cloneAiNotes(clipboardAiNotes, dx, dy)
-        if (pastedStrokes.isEmpty() && pastedNotes.isEmpty()) return
+        val pastedLinks = cloneLinks(clipboardLinks, dx, dy)
+        if (pastedStrokes.isEmpty() && pastedNotes.isEmpty() && pastedLinks.isEmpty()) return
         pushUndoSnapshot()
         if (pastedStrokes.isNotEmpty()) _finishedStrokes.update { it + pastedStrokes }
         if (pastedNotes.isNotEmpty()) _aiNotes.update { it + pastedNotes }
-        setSelection(pastedStrokes.map { it.id }.toSet(), pastedNotes.map { it.id }.toSet())
+        if (pastedLinks.isNotEmpty()) _links.update { it + pastedLinks }
+        setSelection(
+            pastedStrokes.map { it.id }.toSet(),
+            pastedNotes.map { it.id }.toSet(),
+            pastedLinks.map { it.id }.toSet(),
+        )
     }
 
     /** Clears the clipboard, deselects, and resets the lasso tool to its idle select state. */
     fun clearClipboard() {
         clipboardStrokes = emptyList()
         clipboardAiNotes = emptyList()
+        clipboardLinks = emptyList()
         clipboardBounds = null
         if (_clipboard.value.active) _clipboard.value = ClipboardState.EMPTY
         clearSelection()
@@ -2057,50 +2302,82 @@ class CanvasViewModel(
 
     // --- Selection internals ---
 
-    /** Builds [SelectionState] for [ids] + [aiNoteIds]: union bounds + whether it's one stroke group. */
-    private fun setSelection(ids: Set<String>, aiNoteIds: Set<String> = emptySet()) {
+    /** Builds [SelectionState] for [ids] + [aiNoteIds] + [linkIds]: union bounds + group flag. */
+    private fun setSelection(
+        ids: Set<String>,
+        aiNoteIds: Set<String> = emptySet(),
+        linkIds: Set<String> = emptySet(),
+    ) {
         val strokes = _finishedStrokes.value.filter { it.id in ids }
         val notes = _aiNotes.value.filter { it.id in aiNoteIds && !it.isError }
-        val bounds = recomputeSelectionBounds(ids, notes.map { it.id }.toSet())
+        val selectedLinks = _links.value.filter { it.id in linkIds }
+        val bounds = recomputeSelectionBounds(
+            ids,
+            notes.map { it.id }.toSet(),
+            selectedLinks.map { it.id }.toSet(),
+        )
         if (bounds == null) {
             clearSelection()
             return
         }
         val groupIds = strokes.map { it.groupId }.toSet()
-        // Grouping is a stroke-only concept; a selection containing an AI box is never "grouped".
-        val grouped = notes.isEmpty() && groupIds.size == 1 && groupIds.single() != null
+        // Grouping is a stroke-only concept; a selection containing an AI/link box is never "grouped".
+        val grouped = notes.isEmpty() && selectedLinks.isEmpty() &&
+            groupIds.size == 1 && groupIds.single() != null
         _selection.value = SelectionState(
             ids = strokes.map { it.id }.toSet(),
             aiNoteIds = notes.map { it.id }.toSet(),
+            linkIds = selectedLinks.map { it.id }.toSet(),
             bounds = bounds,
             lockRatio = _selection.value?.lockRatio ?: true, // keep the user's lock preference (FA-21: default on)
             grouped = grouped,
         )
     }
 
-    private fun captureClipboard(ids: Set<String>, aiNoteIds: Set<String>) {
+    private fun captureClipboard(ids: Set<String>, aiNoteIds: Set<String>, linkIds: Set<String> = emptySet()) {
         val strokes = _finishedStrokes.value.filter { it.id in ids }
         val notes = _aiNotes.value.filter { it.id in aiNoteIds && !it.isError }
-        if (strokes.isEmpty() && notes.isEmpty()) return
+        val heldLinks = _links.value.filter { it.id in linkIds }
+        if (strokes.isEmpty() && notes.isEmpty() && heldLinks.isEmpty()) return
         clipboardStrokes = strokes
         clipboardAiNotes = notes
-        clipboardBounds = recomputeSelectionBounds(ids, notes.map { it.id }.toSet())
-        _clipboard.value = ClipboardState(count = strokes.size + notes.size)
+        clipboardLinks = heldLinks
+        clipboardBounds = recomputeSelectionBounds(
+            ids,
+            notes.map { it.id }.toSet(),
+            heldLinks.map { it.id }.toSet(),
+        )
+        _clipboard.value = ClipboardState(count = strokes.size + notes.size + heldLinks.size)
     }
 
-    /** Union of the selected strokes' + AI notes' current page-space bounds; null when both empty. */
-    private fun recomputeSelectionBounds(ids: Set<String>, aiNoteIds: Set<String>): SelectionBounds? {
+    /** Union of the selected strokes' + AI notes' + link boxes' page-space bounds; null when all empty. */
+    private fun recomputeSelectionBounds(
+        ids: Set<String>,
+        aiNoteIds: Set<String>,
+        linkIds: Set<String> = emptySet(),
+    ): SelectionBounds? {
         val strokeBoxes = if (ids.isEmpty()) emptyList() else {
             _finishedStrokes.value.filter { it.id in ids }.map { strokeBoundsOf(it.stroke) }
         }
         val noteBoxes = if (aiNoteIds.isEmpty()) emptyList() else {
             _aiNotes.value.filter { it.id in aiNoteIds }.map { aiNoteRect(it) }
         }
-        return StrokeSelection.union(strokeBoxes + noteBoxes)
+        val linkBoxes = if (linkIds.isEmpty()) emptyList() else {
+            _links.value.filter { it.id in linkIds }.map { linkRect(it) }
+        }
+        return StrokeSelection.union(strokeBoxes + noteBoxes + linkBoxes)
     }
 
     /** Deep-copies [source] AI notes shifted by ([dx], [dy]), each with a fresh id (FA-21). */
     private fun cloneAiNotes(source: List<AiInkNote>, dx: Float, dy: Float): List<AiInkNote> =
+        source.map { it.copy(id = newStrokeId(), x = it.x + dx, y = it.y + dy) }
+
+    /**
+     * Deep-copies [source] link boxes shifted by ([dx], [dy]), each with a fresh id (FA-24).
+     * createdAt is preserved verbatim — a duplicate keeps its original's creation stamp, like an
+     * AI-note duplicate keeps its text.
+     */
+    private fun cloneLinks(source: List<NotebookLink>, dx: Float, dy: Float): List<NotebookLink> =
         source.map { it.copy(id = newStrokeId(), x = it.x + dx, y = it.y + dy) }
 
     /**
@@ -2125,29 +2402,33 @@ class CanvasViewModel(
 
     // --- History internals ---
 
-    /** One undo step: the strokes and (persistable) AI boxes at the time of the snapshot (FA-21). */
+    /** One undo step: strokes, (persistable) AI boxes and link boxes at snapshot time (FA-21/24). */
     private data class HistorySnapshot(
         val strokes: List<CanvasStroke>,
         val aiNotes: List<AiInkNote>,
+        val links: List<NotebookLink>,
     )
 
     private fun currentSnapshot(): HistorySnapshot =
-        HistorySnapshot(_finishedStrokes.value, _aiNotes.value.filterNot { it.isError })
+        HistorySnapshot(_finishedStrokes.value, _aiNotes.value.filterNot { it.isError }, _links.value)
 
     /** Restores a snapshot, keeping any live (transient) error note that isn't part of history. */
     private fun restoreSnapshot(snapshot: HistorySnapshot) {
         _finishedStrokes.value = snapshot.strokes
         _aiNotes.update { current -> snapshot.aiNotes + current.filter { it.isError } }
+        _links.value = snapshot.links
     }
 
     /**
-     * Pushes one undo step capturing BOTH strokes and AI boxes (FA-21), so a lasso edit that moves /
-     * scales / deletes / pastes AI boxes — alone or mixed with strokes — is fully undoable. [strokes]
-     * defaults to the current strokes; pass an explicit value when the caller holds a pre-gesture
-     * snapshot (e.g. the per-eraser-gesture step).
+     * Pushes one undo step capturing strokes, AI boxes AND link boxes (FA-21/24), so a lasso edit
+     * that moves / scales / deletes / pastes any of them — alone or mixed — is fully undoable.
+     * [strokes] defaults to the current strokes; pass an explicit value when the caller holds a
+     * pre-gesture snapshot (e.g. the per-eraser-gesture step).
      */
     private fun pushUndoSnapshot(strokes: List<CanvasStroke> = _finishedStrokes.value) {
-        undoStack.addLast(HistorySnapshot(strokes, _aiNotes.value.filterNot { it.isError }))
+        undoStack.addLast(
+            HistorySnapshot(strokes, _aiNotes.value.filterNot { it.isError }, _links.value),
+        )
         if (undoStack.size > MAX_HISTORY) undoStack.removeFirst()
         redoStack.clear()
         updateHistoryFlags()

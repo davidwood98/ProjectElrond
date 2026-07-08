@@ -20,8 +20,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingSuggestionEntity::class,
         SubjectEntity::class,
         NoteSubjectEntity::class,
+        NotebookLinkEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -36,6 +37,7 @@ abstract class ElrondDatabase : RoomDatabase() {
     abstract fun pendingSuggestionDao(): PendingSuggestionDao
     abstract fun subjectDao(): SubjectDao
     abstract fun noteSubjectDao(): NoteSubjectDao
+    abstract fun notebookLinkDao(): NotebookLinkDao
 
     companion object {
         private const val DB_NAME = "elrond.db"
@@ -389,6 +391,42 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v17 (FA-24 Phase 1) adds notebook_links: on-canvas link boxes referencing another
+         * notebook. sourcePageId cascades with its page; targetNotebookId is SET NULL on
+         * target deletion (broken-link state, never a crash).
+         */
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS notebook_links (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        sourcePageId TEXT NOT NULL,
+                        targetNotebookId TEXT,
+                        targetPageId TEXT,
+                        x REAL NOT NULL,
+                        y REAL NOT NULL,
+                        widthPx REAL NOT NULL,
+                        heightPx REAL,
+                        linkText TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(sourcePageId) REFERENCES note_pages(id) ON DELETE CASCADE,
+                        FOREIGN KEY(targetNotebookId) REFERENCES notebooks(id) ON DELETE SET NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_notebook_links_sourcePageId " +
+                        "ON notebook_links(sourcePageId)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_notebook_links_targetNotebookId " +
+                        "ON notebook_links(targetNotebookId)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -402,6 +440,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
                     MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                     MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
+                    MIGRATION_16_17,
                 ).build().also { instance = it }
             }
     }

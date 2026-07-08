@@ -505,6 +505,9 @@ private fun createTouchListener(
     // box under it (or deselect on empty page) — resolved on UP when no axis locked. Holds the box
     // hit-tested under the scroll-finger DOWN, or null if it landed on empty page.
     var scrollDownNoteId: String? = null
+    // FA-24: link box hit-tested under the scroll-finger DOWN — a clean tap OPENS it (vs an AI box,
+    // which a tap selects). Checked before the AI box, matching the render order (links on top).
+    var scrollDownLinkId: String? = null
     // Two-finger pinch zoom (FA-20): tracks the previous finger spread + centroid between frames.
     var pinching = false
     var pinchPrevSpread = 0f
@@ -520,6 +523,11 @@ private fun createTouchListener(
     var holdDownX = 0f
     var holdDownY = 0f
     var holdConsumed = false // a hold fired: cancel (don't finish) this stroke so it leaves no mark
+    // FA-24: pen DOWN landed on a link box. A clean UP (no hold fired, no movement past the slop)
+    // is a TAP that opens the target — there is no other tap-to-open gesture in the canvas, so this
+    // is deliberately conservative: any real stroke over the box disqualifies it (write-over wins).
+    var downLinkId: String? = null
+    var linkTapEligible = false
     fun cancelPendingHold() {
         pendingHold?.let { holdHandler.removeCallbacks(it) }
         pendingHold = null
@@ -617,6 +625,8 @@ private fun createTouchListener(
                         currentStrokeId = null
                         currentIsFinger = false
                         erasing = false
+                        downLinkId = null
+                        linkTapEligible = false
                         return@OnTouchListener true
                     }
                     // Swallow a rejected finger pointer; a lone finger drag scrolls/turns pages (FA-20).
@@ -630,14 +640,19 @@ private fun createTouchListener(
                             lastScrollY = scrollStartY
                             lastScrollX = scrollStartX
                             scrollAxis = 0
-                            // A finger doesn't draw in scroll mode, so a clean tap can select the AI
-                            // box under it (resolved on UP). A drag past the slop locks an axis and
-                            // scrolls instead, leaving any selection alone.
+                            // A finger doesn't draw in scroll mode, so a clean tap can act on the
+                            // box under it (resolved on UP): a link box opens, an AI box selects.
+                            // A drag past the slop locks an axis and scrolls instead, leaving any
+                            // selection alone. Links are checked first (they render on top).
                             val t = viewModel.pageTransform.value
-                            scrollDownNoteId = viewModel.aiNoteAt(
-                                t.screenToPageX(scrollStartX),
-                                t.screenToPageY(scrollStartY),
-                            )
+                            val downPageX = t.screenToPageX(scrollStartX)
+                            val downPageY = t.screenToPageY(scrollStartY)
+                            scrollDownLinkId = viewModel.linkAt(downPageX, downPageY)
+                            scrollDownNoteId = if (scrollDownLinkId == null) {
+                                viewModel.aiNoteAt(downPageX, downPageY)
+                            } else {
+                                null
+                            }
                         }
                         return@OnTouchListener true
                     }
@@ -680,6 +695,8 @@ private fun createTouchListener(
                     currentPointerId = pointerId
                     currentIsFinger = isFinger
                     holdConsumed = false
+                    downLinkId = null
+                    linkTapEligible = false
                     if (erase) {
                         erasing = true
                         viewModel.beginEraseGesture() // one undo step per gesture
@@ -721,19 +738,38 @@ private fun createTouchListener(
                                 Matrix(),
                             )
                         }
-                        // Over an AI box? Arm the 1.5s hold-to-select. Movement (a real stroke) cancels
-                        // it below, so writing over the box still works (FA-21).
-                        val noteId = viewModel.aiNoteAt(pageX, pageY)
-                        if (noteId != null) {
+                        // Over a link box (checked first — links render on top of AI boxes)? Arm the
+                        // same hold (select, or the broken-link menu) and mark the DOWN tap-eligible:
+                        // a clean UP with no hold and no movement opens the target (FA-24). Over an
+                        // AI box? Arm the hold-to-select. Movement (a real stroke) cancels either
+                        // below, so writing over the box still works (FA-21).
+                        val linkId = viewModel.linkAt(pageX, pageY)
+                        if (linkId != null) {
+                            downLinkId = linkId
+                            linkTapEligible = true
                             holdDownX = downX
                             holdDownY = downY
                             val runnable = Runnable {
                                 pendingHold = null
                                 holdConsumed = true
-                                viewModel.selectAiNote(noteId)
+                                linkTapEligible = false
+                                viewModel.holdLink(linkId)
                             }
                             pendingHold = runnable
                             holdHandler.postDelayed(runnable, AI_NOTE_HOLD_MS)
+                        } else {
+                            val noteId = viewModel.aiNoteAt(pageX, pageY)
+                            if (noteId != null) {
+                                holdDownX = downX
+                                holdDownY = downY
+                                val runnable = Runnable {
+                                    pendingHold = null
+                                    holdConsumed = true
+                                    viewModel.selectAiNote(noteId)
+                                }
+                                pendingHold = runnable
+                                holdHandler.postDelayed(runnable, AI_NOTE_HOLD_MS)
+                            }
                         }
                     }
                     true
@@ -806,6 +842,7 @@ private fun createTouchListener(
                         HOLD_MOVE_SLOP_PX
                     ) {
                         cancelPendingHold()
+                        linkTapEligible = false // a real stroke over the link — write-over, not a tap
                     }
                     if (holdConsumed) return@OnTouchListener true
                     // FA-23 hold-to-straighten. Once snapped, MOVEs only adjust the line endpoint;
@@ -904,15 +941,21 @@ private fun createTouchListener(
                         // page-turn or spring back in vertical mode). A pan just ends. (FA-20)
                         if (scrollAxis == 2 && !horizontalIsPan) viewModel.releaseSwipe()
                         if (scrollAxis == 1) viewModel.releaseScroll()
-                        // A clean tap (no axis ever locked): select the tapped AI box, else deselect.
+                        // A clean tap (no axis ever locked): open a tapped link box, else select the
+                        // tapped AI box, else deselect.
                         if (scrollAxis == 0) {
+                            val tappedLink = scrollDownLinkId
                             val tapped = scrollDownNoteId
-                            if (tapped != null) viewModel.selectAiNote(tapped)
-                            else viewModel.clearSelection()
+                            when {
+                                tappedLink != null -> viewModel.tapLink(tappedLink)
+                                tapped != null -> viewModel.selectAiNote(tapped)
+                                else -> viewModel.clearSelection()
+                            }
                         }
                         scrollPointerId = null
                         scrollAxis = 0
                         scrollDownNoteId = null
+                        scrollDownLinkId = null
                     }
                     if (pointerId == currentPointerId) {
                         cancelPendingHold()
@@ -921,18 +964,29 @@ private fun createTouchListener(
                             viewModel.commitStraightLine()
                             straightening = false
                         }
+                        // FA-24: a clean pen UP on a link box (no hold fired, no movement past the
+                        // slop) is a TAP — cancel the nascent stroke (no dot) and open the target.
+                        val wasLinkTap = downLinkId != null && !holdConsumed && linkTapEligible
                         currentStrokeId?.let { strokeId ->
-                            // A fired hold-to-select cancels the stroke so it leaves no dot (FA-21).
-                            if (holdConsumed) {
+                            // A fired hold-to-select (or a link tap) cancels the stroke so it leaves
+                            // no dot (FA-21/24).
+                            if (holdConsumed || wasLinkTap) {
                                 inProgressStrokesView.cancelStroke(strokeId, event)
                             } else {
                                 inProgressStrokesView.finishStroke(event, pointerId, strokeId)
                             }
                         }
                         if (patternActive) {
-                            if (holdConsumed) viewModel.cancelPatternStroke() else viewModel.finishPatternStroke()
+                            if (holdConsumed || wasLinkTap) {
+                                viewModel.cancelPatternStroke()
+                            } else {
+                                viewModel.finishPatternStroke()
+                            }
                             patternActive = false
                         }
+                        if (wasLinkTap) downLinkId?.let { viewModel.tapLink(it) }
+                        downLinkId = null
+                        linkTapEligible = false
                         holdConsumed = false
                         currentPointerId = null
                         currentStrokeId = null
@@ -951,6 +1005,8 @@ private fun createTouchListener(
                         straightening = false
                     }
                     holdConsumed = false
+                    downLinkId = null
+                    linkTapEligible = false
                     currentStrokeId?.let { inProgressStrokesView.cancelStroke(it, event) }
                     if (patternActive) {
                         viewModel.cancelPatternStroke()
@@ -966,6 +1022,7 @@ private fun createTouchListener(
                     scrollPointerId = null
                     scrollAxis = 0
                     scrollDownNoteId = null
+                    scrollDownLinkId = null
                     true
                 }
 

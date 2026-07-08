@@ -183,6 +183,13 @@ class NoteRepository(
         pageDao.markOpened(pageId, clock())
     }
 
+    /**
+     * The page a notebook should open on (FA-24 link tap): most recently viewed, falling back
+     * to the cover page. Null only when the notebook has no pages.
+     */
+    suspend fun lastViewedPageId(notebookId: String): String? =
+        pageDao.mostRecentlyViewedPageId(notebookId)
+
     suspend fun renamePage(pageId: String, title: String?) {
         val now = clock()
         pageDao.rename(pageId, title, now)

@@ -129,6 +129,47 @@ data class AiNoteEntity(
 )
 
 /**
+ * An on-canvas link box referencing another notebook (FA-24 Phase 1). Lives on one page's
+ * canvas ([sourcePageId], cascades with it) and points at a whole notebook —
+ * [targetNotebookId] is nulled by the FK when the target is deleted (a "broken" link,
+ * rendered as "Reference not found"). [targetPageId] is reserved for future page-level
+ * links and unused. [linkText] caches the target's title at link time so the label
+ * survives a later rename. [createdAt] round-trips verbatim (never re-stamped on save) —
+ * it drives the Backlinks ordering.
+ */
+@Entity(
+    tableName = "notebook_links",
+    foreignKeys = [
+        ForeignKey(
+            entity = NotePageEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sourcePageId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = NotebookEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["targetNotebookId"],
+            onDelete = ForeignKey.SET_NULL,
+        ),
+    ],
+    indices = [Index("sourcePageId"), Index("targetNotebookId")],
+)
+data class NotebookLinkEntity(
+    @PrimaryKey val id: String,
+    val sourcePageId: String,
+    val targetNotebookId: String?,
+    val targetPageId: String? = null,
+    val x: Float,
+    val y: Float,
+    val widthPx: Float,
+    /** Null = wrap content height, same convention as [AiNoteEntity.heightPx]. */
+    val heightPx: Float? = null,
+    val linkText: String,
+    val createdAt: Long,
+)
+
+/**
  * A calendar event — either an unconfirmed AI suggestion ([isAiSuggested] = true,
  * [isConfirmed] = false) or one the user has confirmed. Confirmed events may also
  * have been written to a backing calendar; [externalEventId] holds that id.

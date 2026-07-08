@@ -2,6 +2,7 @@ package ai.elrond.data
 
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.Notebook
+import ai.elrond.domain.NotebookLink
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PageViewOrientation
@@ -100,6 +101,36 @@ fun AiInkNote.toEntity(pageId: String, createdAt: Long): AiNoteEntity = AiNoteEn
     widthPx = widthPx,
     heightPx = heightPx,
     fontScale = fontScale,
+    createdAt = createdAt,
+)
+
+fun NotebookLinkEntity.toDomain(): NotebookLink = NotebookLink(
+    id = id,
+    targetNotebookId = targetNotebookId,
+    targetPageId = targetPageId,
+    x = x,
+    y = y,
+    widthPx = widthPx,
+    heightPx = heightPx,
+    linkText = linkText,
+    createdAt = createdAt,
+)
+
+/**
+ * Unlike [AiInkNote.toEntity], [NotebookLink.createdAt] comes from the domain object — never a
+ * repository "now" — because it drives the user-visible Backlinks ordering and must survive
+ * unrelated autosaves of the same page. Do not "fix" this for consistency.
+ */
+fun NotebookLink.toEntity(sourcePageId: String): NotebookLinkEntity = NotebookLinkEntity(
+    id = id,
+    sourcePageId = sourcePageId,
+    targetNotebookId = targetNotebookId,
+    targetPageId = targetPageId,
+    x = x,
+    y = y,
+    widthPx = widthPx,
+    heightPx = heightPx,
+    linkText = linkText,
     createdAt = createdAt,
 )
 

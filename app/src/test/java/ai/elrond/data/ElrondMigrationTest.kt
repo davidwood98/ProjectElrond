@@ -43,6 +43,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_13_14,
         ElrondDatabase.MIGRATION_14_15,
         ElrondDatabase.MIGRATION_15_16,
+        ElrondDatabase.MIGRATION_16_17,
     )
 
     /**
@@ -66,11 +67,28 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v16_and_validates_final_schema() {
+    fun migrates_v1_to_v17_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v16 schema (FA-22 rebuilds
-        // strokes with the binary inputs BLOB on top of FA-21's ai_notes.fontScale).
-        helper.runMigrationsAndValidate(TEST_DB, 16, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v17 schema (FA-24 adds
+        // notebook_links on top of FA-22's binary strokes rebuild).
+        helper.runMigrationsAndValidate(TEST_DB, 17, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_16_to_17_creates_the_notebook_links_table_with_its_indices() {
+        helper.createDatabase(TEST_DB, 16).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 17, true, *allMigrations)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notebook_links'",
+        ).use { assertTrue(it.moveToFirst()) }
+        // Both query-path indices exist: per-page load/replace + the backlinks lookup.
+        db.query("PRAGMA index_list('notebook_links')").use { cursor ->
+            val names = generateSequence { if (cursor.moveToNext()) cursor.getString(1) else null }.toSet()
+            assertTrue("index_notebook_links_sourcePageId" in names)
+            assertTrue("index_notebook_links_targetNotebookId" in names)
+        }
+        db.close()
     }
 
     @Test

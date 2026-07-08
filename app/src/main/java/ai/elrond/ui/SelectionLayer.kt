@@ -441,8 +441,8 @@ private fun EdgeHandle(
  * + container sizes ([layerSize]) for an exact clamp.
  *
  * Two variants (FA-21): a **stroke** selection shows Duplicate / Delete / AI + a ⋮ kebab (Copy / Cut
- * / lock / Group); a selection that **includes an AI box** drops the AI button and promotes Copy to
- * the top row (Copy / Delete + a kebab of Duplicate / Cut / lock).
+ * / lock / Group); a selection that **includes an AI box or a link box** (FA-24) drops the AI button
+ * and promotes Copy to the top row (Copy / Delete + a kebab of Duplicate / Cut).
  */
 @Composable
 private fun SelectionToolbar(
@@ -454,7 +454,9 @@ private fun SelectionToolbar(
     val box = sel.displayBounds
     var menuOpen by remember { mutableStateOf(false) }
     var toolbarSize by remember { mutableStateOf(IntSize.Zero) }
-    val hasAi = sel.hasAiNote
+    // Non-stroke boxes (AI answers + notebook links) share the same menu variant: no AI prompt,
+    // no aspect toggle, no grouping.
+    val hasAi = sel.hasAiNote || sel.hasLink
 
     Surface(
         modifier = Modifier

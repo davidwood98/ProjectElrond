@@ -197,18 +197,25 @@ data class SelectionState(
     val lockRatio: Boolean = true,
     val grouped: Boolean = false,
     val aiNoteIds: Set<String> = emptySet(),
+    val linkIds: Set<String> = emptySet(),
 ) {
-    val count: Int get() = ids.size + aiNoteIds.size
+    val count: Int get() = ids.size + aiNoteIds.size + linkIds.size
 
     /** Whether any AI response box is part of the selection (drives the AI-box menu variant). */
     val hasAiNote: Boolean get() = aiNoteIds.isNotEmpty()
+
+    /** Whether any notebook link box is part of the selection (FA-24). */
+    val hasLink: Boolean get() = linkIds.isNotEmpty()
 
     /**
      * A lone AI box — exactly one AI note and no strokes. Only this case gets the text-aware resize
      * (corner handles scale the font ratio-locked; left/right edge handles reflow the width at a
      * constant font size). Mixed / multi selections fall back to plain group scaling.
      */
-    val isSingleAiNote: Boolean get() = ids.isEmpty() && aiNoteIds.size == 1
+    val isSingleAiNote: Boolean get() = ids.isEmpty() && linkIds.isEmpty() && aiNoteIds.size == 1
+
+    /** A lone notebook link box — exactly one link, no strokes or AI notes (FA-24). */
+    val isSingleLink: Boolean get() = ids.isEmpty() && aiNoteIds.isEmpty() && linkIds.size == 1
 
     /** The box as currently shown — baseline [bounds] with the live [transform] applied. */
     val displayBounds: SelectionBounds
@@ -219,8 +226,8 @@ data class SelectionState(
             bottom = transform.applyY(bounds.bottom),
         )
 
-    /** Grouping is offered only for ≥2 strokes (no AI box) that aren't already a single group. */
-    val canGroup: Boolean get() = ids.size >= 2 && aiNoteIds.isEmpty() && !grouped
+    /** Grouping is offered only for ≥2 strokes (no AI/link box) that aren't already a single group. */
+    val canGroup: Boolean get() = ids.size >= 2 && aiNoteIds.isEmpty() && linkIds.isEmpty() && !grouped
 }
 
 /** Clipboard banner state for the UI: how many strokes are held, and whether paste is armed. */

@@ -3,6 +3,7 @@ package ai.elrond.di
 import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.CalendarRepository
 import ai.elrond.data.ElrondDatabase
+import ai.elrond.data.NotebookLinkRepository
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SessionNotesTracker
 import ai.elrond.data.SubjectRepository
@@ -51,6 +52,11 @@ object AppModule {
     @Singleton
     fun provideSubjectRepository(db: ElrondDatabase): SubjectRepository =
         SubjectRepository(subjectDao = db.subjectDao(), noteSubjectDao = db.noteSubjectDao())
+
+    @Provides
+    @Singleton
+    fun provideNotebookLinkRepository(db: ElrondDatabase): NotebookLinkRepository =
+        NotebookLinkRepository(linkDao = db.notebookLinkDao())
 
     /** Process-wide in-memory session-notes holder (FA-16); cleared on background by MainActivity. */
     @Provides
