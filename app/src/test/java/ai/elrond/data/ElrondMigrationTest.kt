@@ -44,6 +44,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_14_15,
         ElrondDatabase.MIGRATION_15_16,
         ElrondDatabase.MIGRATION_16_17,
+        ElrondDatabase.MIGRATION_17_18,
     )
 
     /**
@@ -67,11 +68,45 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v17_and_validates_final_schema() {
+    fun migrates_v1_to_v18_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v17 schema (FA-24 adds
-        // notebook_links on top of FA-22's binary strokes rebuild).
-        helper.runMigrationsAndValidate(TEST_DB, 17, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v18 schema (FA-24 adds
+        // notebook_links then tags/notebook_tags on top of FA-22's binary strokes rebuild).
+        helper.runMigrationsAndValidate(TEST_DB, 18, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_17_to_18_creates_the_tags_tables_with_working_cascades() {
+        helper.createDatabase(TEST_DB, 17).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 18, true, *allMigrations)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('tags', 'notebook_tags')",
+        ).use { cursor ->
+            val names = generateSequence { if (cursor.moveToNext()) cursor.getString(0) else null }.toSet()
+            assertEquals(setOf("tags", "notebook_tags"), names)
+        }
+        // The unique name index + the tagId lookup index exist.
+        db.query("PRAGMA index_list('tags')").use { cursor ->
+            val names = generateSequence { if (cursor.moveToNext()) cursor.getString(1) else null }.toSet()
+            assertTrue("index_tags_name" in names)
+        }
+        db.query("PRAGMA index_list('notebook_tags')").use { cursor ->
+            val names = generateSequence { if (cursor.moveToNext()) cursor.getString(1) else null }.toSet()
+            assertTrue("index_notebook_tags_tagId" in names)
+        }
+        // Cascade sanity on the migrated (not Room-built) schema: deleting the notebook clears
+        // its membership row.
+        db.execSQL("PRAGMA foreign_keys = ON")
+        db.execSQL("INSERT INTO notebooks (id, name, createdAt, modifiedAt) VALUES ('nb1', 'N', 1, 1)")
+        db.execSQL("INSERT INTO tags (id, name, colorArgb) VALUES ('t1', 'physics', 123)")
+        db.execSQL("INSERT INTO notebook_tags (notebookId, tagId) VALUES ('nb1', 't1')")
+        db.execSQL("DELETE FROM notebooks WHERE id = 'nb1'")
+        db.query("SELECT COUNT(*) FROM notebook_tags").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
+        }
+        db.close()
     }
 
     @Test

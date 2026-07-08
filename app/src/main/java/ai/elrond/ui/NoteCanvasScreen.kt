@@ -14,6 +14,7 @@ import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.SuggestionType
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.SubjectViewModel
+import ai.elrond.presentation.TagViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.loaders.OrganicLoader
@@ -101,6 +102,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
 /** How long the unobtrusive page-count pill / orientation prompt stay before fading away (FA-20). */
@@ -139,6 +141,7 @@ fun NoteCanvasScreen(
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     noteListViewModel: NoteListViewModel = hiltViewModel(),
     subjectViewModel: SubjectViewModel = hiltViewModel(),
+    tagViewModel: TagViewModel = hiltViewModel(),
 ) {
     val tool by viewModel.tool.collectAsStateWithLifecycle()
     val stylusOnly by viewModel.stylusOnly.collectAsStateWithLifecycle()
@@ -201,6 +204,17 @@ fun NoteCanvasScreen(
     var showPencilMenu by remember { mutableStateOf(false) }
     val pageTitle by viewModel.pageTitle.collectAsStateWithLifecycle()
     val pageDateLabel by viewModel.pageDateLabel.collectAsStateWithLifecycle()
+    // Notebook tags in the header band (FA-24). The tag data flows through the shared
+    // TagRepository, so the Library picker and this row can never drift.
+    val headerNotebookId by viewModel.notebookIdFlow.collectAsStateWithLifecycle()
+    val headerTags by remember(headerNotebookId) {
+        headerNotebookId?.let { tagViewModel.tagsFor(it) } ?: flowOf(emptyList())
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val pendingRemovalTagIds by remember(headerNotebookId) {
+        headerNotebookId?.let { tagViewModel.pendingRemovalTagIdsFor(it) } ?: flowOf(emptySet())
+    }.collectAsStateWithLifecycle(initialValue = emptySet())
+    val allTags by tagViewModel.tags.collectAsStateWithLifecycle()
+    var tagPickerOpen by remember { mutableStateOf(false) }
     // Quick Nav lists NOTEBOOKS (one per notebook, titled by the notebook name so renames show), never
     // individual pages (FA-20).
     val libraryNotebooks by noteListViewModel.notebooks.collectAsStateWithLifecycle()
@@ -420,6 +434,19 @@ fun NoteCanvasScreen(
             title = pageTitle,
             dateLabel = pageDateLabel,
             onRename = viewModel::renamePage,
+            tags = headerTags,
+            pendingRemovalTagIds = pendingRemovalTagIds,
+            onBeginUntag = { tag ->
+                headerNotebookId?.let { tagViewModel.beginUntag(it, tag.id) }
+            },
+            onCancelUntag = { tag ->
+                headerNotebookId?.let { tagViewModel.cancelUntag(it, tag.id) }
+            },
+            onAddTag = if (headerNotebookId != null) {
+                { tagPickerOpen = true }
+            } else {
+                null
+            },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
@@ -427,6 +454,23 @@ fun NoteCanvasScreen(
                 .onSizeChanged { titleBandHeightPx = it.height }
                 .padding(start = sideStart, end = sideEnd),
         )
+        // FA-24: the shared tag picker (same dialog + repository methods as the Library ⋮ menu).
+        val pickerNotebookId = headerNotebookId
+        if (tagPickerOpen && pickerNotebookId != null) {
+            TagPickerDialog(
+                allTags = allTags,
+                assignedTagIds = headerTags.map { it.id }.toSet(),
+                onToggle = { tag ->
+                    if (tag.id in headerTags.map { it.id }.toSet()) {
+                        tagViewModel.removeTag(pickerNotebookId, tag.id)
+                    } else {
+                        tagViewModel.assignTag(pickerNotebookId, tag.id)
+                    }
+                },
+                onCreateAndAssign = { tagViewModel.createAndAssignTag(pickerNotebookId, it) },
+                onDismiss = { tagPickerOpen = false },
+            )
+        }
 
         // Pinned note-tabs band: composed AFTER the title block (opaque, so it occludes the title as
         // it slides up behind it) and never takes a scroll offset — so the tabs stay put (FA-20).

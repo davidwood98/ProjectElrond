@@ -9,6 +9,7 @@ import ai.elrond.domain.PageViewOrientation
 import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.Subject
+import ai.elrond.domain.Tag
 import ai.elrond.domain.TodoItem
 import ai.elrond.domain.TodoPriority
 import ai.elrond.domain.TodoStatus
@@ -103,6 +104,10 @@ fun AiInkNote.toEntity(pageId: String, createdAt: Long): AiNoteEntity = AiNoteEn
     fontScale = fontScale,
     createdAt = createdAt,
 )
+
+fun TagEntity.toDomain(): Tag = Tag(id = id, name = name, colorArgb = colorArgb)
+
+fun NotebookTagRow.toTag(): Tag = Tag(id = tagId, name = name, colorArgb = colorArgb)
 
 fun NotebookLinkEntity.toDomain(): NotebookLink = NotebookLink(
     id = id,

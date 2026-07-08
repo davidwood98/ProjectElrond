@@ -595,6 +595,10 @@ class CanvasViewModel(
     /** The open page's notebook id (set once the page loads); drives the multi-page pager (FA-20). */
     private var notebookId: String? = null
 
+    /** The notebook id as observable state (FA-24) — drives the editor header's tag row. */
+    private val _notebookIdFlow = MutableStateFlow<String?>(null)
+    val notebookIdFlow: StateFlow<String?> = _notebookIdFlow.asStateFlow()
+
     /** The notebook's pages ordered by page number — backs the page indicator + page turns (FA-20). */
     private val _notebookPages = MutableStateFlow<List<NotePage>>(emptyList())
     val notebookPages: StateFlow<List<NotePage>> = _notebookPages.asStateFlow()
@@ -937,6 +941,7 @@ class CanvasViewModel(
                 }
                 runCatching { repository.getPage(pageId) }.getOrNull()?.let { page ->
                     notebookId = page.notebookId
+                    _notebookIdFlow.value = page.notebookId
                     // Track the notebook's ordered pages for the page indicator + swipe page-turns.
                     // The date comes from the cover (page 1); the TITLE is a notebook property
                     // (see refreshTitle) so it survives page reorders (FA-20).

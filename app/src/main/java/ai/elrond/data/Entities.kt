@@ -129,6 +129,47 @@ data class AiNoteEntity(
 )
 
 /**
+ * A flat notebook label (FA-24 Phase 2). Name is unique (case-sensitive, SQLite BINARY collation
+ * — consistent with the rest of the schema; a known limitation, not a bug). [colorArgb] is the
+ * colour resolved once at creation from the name — stored, never recomputed.
+ */
+@Entity(tableName = "tags", indices = [Index(value = ["name"], unique = true)])
+data class TagEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val colorArgb: Int,
+)
+
+/**
+ * Notebook↔tag membership (FA-24 Phase 2) — genuinely many-to-many on both sides (unlike
+ * `note_subjects`, whose single-column PK deliberately enforces one subject per notebook).
+ * Both FKs cascade: deleting a notebook or a tag clears its memberships.
+ */
+@Entity(
+    tableName = "notebook_tags",
+    primaryKeys = ["notebookId", "tagId"],
+    foreignKeys = [
+        ForeignKey(
+            entity = NotebookEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["notebookId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = TagEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["tagId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("tagId")],
+)
+data class NotebookTagEntity(
+    val notebookId: String,
+    val tagId: String,
+)
+
+/**
  * An on-canvas link box referencing another notebook (FA-24 Phase 1). Lives on one page's
  * canvas ([sourcePageId], cascades with it) and points at a whole notebook —
  * [targetNotebookId] is nulled by the FK when the target is deleted (a "broken" link,

@@ -21,8 +21,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SubjectEntity::class,
         NoteSubjectEntity::class,
         NotebookLinkEntity::class,
+        TagEntity::class,
+        NotebookTagEntity::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -38,6 +40,8 @@ abstract class ElrondDatabase : RoomDatabase() {
     abstract fun subjectDao(): SubjectDao
     abstract fun noteSubjectDao(): NoteSubjectDao
     abstract fun notebookLinkDao(): NotebookLinkDao
+    abstract fun tagDao(): TagDao
+    abstract fun notebookTagDao(): NotebookTagDao
 
     companion object {
         private const val DB_NAME = "elrond.db"
@@ -427,6 +431,41 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v18 (FA-24 Phase 2) adds notebook tagging: `tags` (flat, name-unique, colour resolved
+         * once at creation) and `notebook_tags` (many-to-many junction, both FKs CASCADE).
+         * Independent of `subjects`/`note_subjects` — no auto-tag-on-subject behaviour. Additive
+         * only; no backfill (every notebook starts untagged).
+         */
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS tags (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        colorArgb INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_tags_name ON tags(name)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS notebook_tags (
+                        notebookId TEXT NOT NULL,
+                        tagId TEXT NOT NULL,
+                        PRIMARY KEY(notebookId, tagId),
+                        FOREIGN KEY(notebookId) REFERENCES notebooks(id) ON DELETE CASCADE,
+                        FOREIGN KEY(tagId) REFERENCES tags(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_notebook_tags_tagId ON notebook_tags(tagId)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -440,7 +479,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
                     MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                     MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-                    MIGRATION_16_17,
+                    MIGRATION_16_17, MIGRATION_17_18,
                 ).build().also { instance = it }
             }
     }

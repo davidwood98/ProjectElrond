@@ -11,6 +11,7 @@ import ai.elrond.presentation.EventsViewModel
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.SubjectViewModel
+import ai.elrond.presentation.TagViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGreen
@@ -199,6 +200,8 @@ private class NoteCardCallbacks(
     /** Long-press the card OR the ⋮ Delete item — both open the delete confirmation. */
     val onDelete: (NotebookSummary) -> Unit,
     val onTapSubject: (String) -> Unit,
+    /** Opens the shared tag picker for this notebook (FA-24). */
+    val onTags: (NotebookSummary) -> Unit,
 )
 
 @Composable
@@ -210,6 +213,7 @@ fun NotesSection(
     calendarViewModel: CalendarViewModel,
     eventsViewModel: EventsViewModel,
     subjectViewModel: SubjectViewModel,
+    tagViewModel: TagViewModel,
 ) {
     val notebooks by noteListViewModel.notebooks.collectAsStateWithLifecycle()
     val recents by noteListViewModel.recentNotebooks.collectAsStateWithLifecycle()
@@ -226,6 +230,10 @@ fun NotesSection(
     var deleteCandidate by remember { mutableStateOf<NotebookSummary?>(null) }
     var renameCandidate by remember { mutableStateOf<NotebookSummary?>(null) }
     var assignCandidate by remember { mutableStateOf<NotebookSummary?>(null) }
+    // FA-24: the notebook whose tag picker is open (mirrors the other dialog-candidate states).
+    var tagCandidate by remember { mutableStateOf<NotebookSummary?>(null) }
+    val allTags by tagViewModel.tags.collectAsStateWithLifecycle()
+    val notebookTags by tagViewModel.notebookTags.collectAsStateWithLifecycle()
 
     val callbacks = NoteCardCallbacks(
         onOpenNote = onOpenNote,
@@ -233,6 +241,7 @@ fun NotesSection(
         onMove = { assignCandidate = it },
         onDelete = { deleteCandidate = it },
         onTapSubject = { subjectViewModel.selectSubject(it) },
+        onTags = { tagCandidate = it },
     )
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -344,6 +353,19 @@ fun NotesSection(
             currentSubjectId = noteSubjects[notebook.notebookId],
             onPick = { subjectViewModel.assignNote(notebook.notebookId, it); assignCandidate = null },
             onDismiss = { assignCandidate = null },
+        )
+    }
+    tagCandidate?.let { notebook ->
+        val assignedIds = notebookTags[notebook.notebookId].orEmpty().map { it.id }.toSet()
+        TagPickerDialog(
+            allTags = allTags,
+            assignedTagIds = assignedIds,
+            onToggle = { tag ->
+                if (tag.id in assignedIds) tagViewModel.removeTag(notebook.notebookId, tag.id)
+                else tagViewModel.assignTag(notebook.notebookId, tag.id)
+            },
+            onCreateAndAssign = { tagViewModel.createAndAssignTag(notebook.notebookId, it) },
+            onDismiss = { tagCandidate = null },
         )
     }
 }
@@ -525,6 +547,7 @@ private fun NotebookCardItem(
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                             DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; callbacks.onRename(notebook) })
                             DropdownMenuItem(text = { Text("Move to subject") }, onClick = { menuOpen = false; callbacks.onMove(notebook) })
+                            DropdownMenuItem(text = { Text("Tags") }, onClick = { menuOpen = false; callbacks.onTags(notebook) })
                             DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; callbacks.onDelete(notebook) })
                         }
                     }

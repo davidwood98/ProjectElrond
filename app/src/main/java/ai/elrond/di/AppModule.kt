@@ -8,6 +8,7 @@ import ai.elrond.data.NoteRepository
 import ai.elrond.data.SessionNotesTracker
 import ai.elrond.data.SubjectRepository
 import ai.elrond.data.SuggestionRepository
+import ai.elrond.data.TagRepository
 import ai.elrond.data.TodoRepository
 import ai.elrond.data.ExtractionScheduler
 import ai.elrond.data.SettingsRepository
@@ -57,6 +58,11 @@ object AppModule {
     @Singleton
     fun provideNotebookLinkRepository(db: ElrondDatabase): NotebookLinkRepository =
         NotebookLinkRepository(linkDao = db.notebookLinkDao())
+
+    @Provides
+    @Singleton
+    fun provideTagRepository(db: ElrondDatabase): TagRepository =
+        TagRepository(tagDao = db.tagDao(), notebookTagDao = db.notebookTagDao())
 
     /** Process-wide in-memory session-notes holder (FA-16); cleared on background by MainActivity. */
     @Provides

@@ -5,6 +5,7 @@ import ai.elrond.presentation.EventsViewModel
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.SubjectViewModel
+import ai.elrond.presentation.TagViewModel
 import ai.elrond.presentation.TodoViewModel
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGrey
@@ -91,6 +92,7 @@ fun LibraryScreen(
     calendarViewModel: CalendarViewModel = hiltViewModel(),
     eventsViewModel: EventsViewModel = hiltViewModel(),
     subjectViewModel: SubjectViewModel = hiltViewModel(),
+    tagViewModel: TagViewModel = hiltViewModel(),
 ) {
     var nav by rememberSaveable { mutableStateOf(LibraryNav.NOTES) }
     val notebooks by noteListViewModel.notebooks.collectAsStateWithLifecycle()
@@ -132,6 +134,7 @@ fun LibraryScreen(
                         calendarViewModel = calendarViewModel,
                         eventsViewModel = eventsViewModel,
                         subjectViewModel = subjectViewModel,
+                        tagViewModel = tagViewModel,
                     )
                 }
             }
@@ -169,6 +172,7 @@ fun LibraryScreen(
                         calendarViewModel = calendarViewModel,
                         eventsViewModel = eventsViewModel,
                         subjectViewModel = subjectViewModel,
+                        tagViewModel = tagViewModel,
                     )
                 }
                 SlideOutSidebar(
@@ -225,6 +229,7 @@ private fun LibraryMain(
     calendarViewModel: CalendarViewModel,
     eventsViewModel: EventsViewModel,
     subjectViewModel: SubjectViewModel,
+    tagViewModel: TagViewModel,
 ) {
     Scaffold(
         // New note is always reachable from the lower-right, on every section (FA-15).
@@ -253,6 +258,7 @@ private fun LibraryMain(
                     calendarViewModel = calendarViewModel,
                     eventsViewModel = eventsViewModel,
                     subjectViewModel = subjectViewModel,
+                    tagViewModel = tagViewModel,
                 )
                 LibraryNav.FILES -> FilesSection(
                     onToggleSidebar = onToggleSidebar,

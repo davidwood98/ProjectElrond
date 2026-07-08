@@ -174,6 +174,51 @@ interface AiNoteDao {
     }
 }
 
+@Dao
+interface TagDao {
+    @Insert
+    suspend fun insert(tag: TagEntity)
+
+    @Query("SELECT * FROM tags WHERE name = :name LIMIT 1")
+    suspend fun getByName(name: String): TagEntity?
+
+    @Query("SELECT * FROM tags ORDER BY name")
+    fun observeAll(): Flow<List<TagEntity>>
+
+    /**
+     * No UI deletes a whole tag in this pass (the pickers only assign/remove memberships) —
+     * kept for the cascade-delete test and as the seam for a future "manage tags" screen.
+     */
+    @Query("DELETE FROM tags WHERE id = :id")
+    suspend fun deleteById(id: String)
+}
+
+/** A notebook-tag membership joined with its tag — mirrors the [PendingTypeContent] projection. */
+data class NotebookTagRow(
+    val notebookId: String,
+    val tagId: String,
+    val name: String,
+    val colorArgb: Int,
+)
+
+@Dao
+interface NotebookTagDao {
+    /** IGNORE: assigning an already-assigned tag is a harmless no-op (composite PK). */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun assign(membership: NotebookTagEntity)
+
+    @Query("DELETE FROM notebook_tags WHERE notebookId = :notebookId AND tagId = :tagId")
+    suspend fun remove(notebookId: String, tagId: String)
+
+    /** Every membership with its tag — the Library grid needs all notebooks' tags at once. */
+    @Query(
+        "SELECT nt.notebookId AS notebookId, nt.tagId AS tagId, t.name AS name, " +
+            "t.colorArgb AS colorArgb FROM notebook_tags nt JOIN tags t ON t.id = nt.tagId " +
+            "ORDER BY t.name",
+    )
+    fun observeAllWithTag(): Flow<List<NotebookTagRow>>
+}
+
 /** One backlink row: a link on [sourcePageId] (in notebook [sourceNotebookId]) pointing here. */
 data class BacklinkRow(
     val id: String,

@@ -9,6 +9,7 @@ import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.QuickNavSearch
 import ai.elrond.domain.SubjectNode
+import ai.elrond.domain.Tag
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.ui.icons.ElrondIcons
 import ai.elrond.ui.theme.LeapGrey
@@ -397,6 +398,10 @@ private fun OrientationDropdown(
  * The editor title band (FA-15/FA-20): a distinct light-grey band holding the open note's title (bold
  * Poppins — **tap the title itself to rename inline**) and the **created** date on the right. The note
  * tabs are a separate pinned band ([NoteTabsBand]) above this one; only this title block scrolls away.
+ *
+ * FA-24: a FIXED-position, FIXED-width [TagRow] sits right of the date — fixed regions with
+ * internal overflow handling, so the tag row and the title can never encroach on each other
+ * regardless of tag count or title length (the title keeps its own 320dp max-width + ellipsis).
  */
 @Composable
 fun EditorHeader(
@@ -404,6 +409,11 @@ fun EditorHeader(
     dateLabel: String,
     onRename: (String) -> Unit,
     modifier: Modifier = Modifier,
+    tags: List<Tag> = emptyList(),
+    pendingRemovalTagIds: Set<String> = emptySet(),
+    onBeginUntag: (Tag) -> Unit = {},
+    onCancelUntag: (Tag) -> Unit = {},
+    onAddTag: (() -> Unit)? = null,
 ) {
     var editing by remember { mutableStateOf(false) }
     val accent = LeapTheme.tokens.accent
@@ -478,6 +488,20 @@ fun EditorHeader(
             style = MaterialTheme.typography.bodyMedium,
             color = Neutral500,
         )
+        // FA-24 tag row: HARD fixed width (not widthIn) so an empty row can't collapse and shift
+        // the date/`+` — the layout-shift regression class this design exists to prevent.
+        if (onAddTag != null) {
+            Spacer(Modifier.width(10.dp))
+            TagRow(
+                tags = tags,
+                pendingRemovalTagIds = pendingRemovalTagIds,
+                onBeginUntag = onBeginUntag,
+                onCancelUntag = onCancelUntag,
+                onAddTag = onAddTag,
+                fadeColor = HeaderBandColor,
+                modifier = Modifier.width(TAG_ROW_WIDTH),
+            )
+        }
     }
 }
 
