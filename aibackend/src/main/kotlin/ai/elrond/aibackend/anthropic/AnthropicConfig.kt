@@ -13,11 +13,12 @@ data class AnthropicConfig(
 
     companion object {
         /**
-         * Default model. Originally specified as claude-sonnet-4-20250514, but that
-         * model is deprecated (retires 2026-06-15); claude-sonnet-4-6 is its
-         * recommended drop-in replacement. Override via [model] if needed.
+         * Default model: Claude Haiku 4.5 — the fastest, most cost-effective tier, chosen
+         * (2026-07-12) to keep the on-canvas /Q + extraction features cheap and snappy.
+         * (History: originally claude-sonnet-4-20250514, deprecated → claude-sonnet-4-6.)
+         * Override via [model] if needed.
          */
-        const val DEFAULT_MODEL: String = "claude-sonnet-4-6"
+        const val DEFAULT_MODEL: String = "claude-haiku-4-5"
         const val DEFAULT_BASE_URL: String = "https://api.anthropic.com"
         const val ANTHROPIC_VERSION: String = "2023-06-01"
     }

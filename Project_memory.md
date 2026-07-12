@@ -1784,6 +1784,10 @@ build on the WSL SDK. All five items are **device-verify pending** (re-test list
   console.anthropic.com → Plans & Billing; no code change needed. Noted follow-up: the app maps
   EVERY API failure to the generic connection-error ink, which mis-directed this diagnosis —
   worth surfacing billing/auth (4xx) errors distinctly from network failures in a future batch.
+- **Default AI model → `claude-haiku-4-5` (2026-07-12).** After the credit top-up,
+  `AnthropicConfig.DEFAULT_MODEL` switched from `claude-sonnet-4-6` to Claude Haiku 4.5 (fast +
+  cheap for /Q + extraction). Live-verified against the API; `:aibackend:test` green. Still the
+  single config source — never hardcode the id at call sites.
 - **Device re-verify list:** finger hold on healthy + broken links (and that tap still opens /
   scroll still scrolls), link label updates after renaming the target, tag row left of the date,
   the header no longer inflating when tags overflow (the original repro: enough/long tags to
