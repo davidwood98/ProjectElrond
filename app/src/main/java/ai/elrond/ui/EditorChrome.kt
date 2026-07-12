@@ -247,6 +247,10 @@ fun PaperBackground(
 // tabs. Neutral100 matches the previous translucent band's apparent colour over white paper.
 private val HeaderBandColor = Neutral100
 
+/** Title max-widths (FA-24 device feedback): landscape gets 50% more room for the title. */
+private val TITLE_MAX_WIDTH_PORTRAIT = 320.dp
+private val TITLE_MAX_WIDTH_LANDSCAPE = 480.dp
+
 /**
  * Per-notebook page-style dialog (FA-20): paper style (Lines / Dots / Grid / Blank), spacing density
  * (1–10), orientation (Portrait / Landscape), and paper colour. Edits apply to the whole notebook
@@ -399,9 +403,12 @@ private fun OrientationDropdown(
  * Poppins — **tap the title itself to rename inline**) and the **created** date on the right. The note
  * tabs are a separate pinned band ([NoteTabsBand]) above this one; only this title block scrolls away.
  *
- * FA-24: a FIXED-position, FIXED-width [TagRow] sits right of the date — fixed regions with
- * internal overflow handling, so the tag row and the title can never encroach on each other
- * regardless of tag count or title length (the title keeps its own 320dp max-width + ellipsis).
+ * FA-24 (device-feedback layout): the [TagRow] fills ALL the space between the capped title and
+ * the created date — fixed regions with internal overflow handling, so the tag row and the
+ * title can never encroach on each other regardless of tag count or title length. The title's
+ * max-width is 320dp in portrait and 50% wider (480dp) in [landscape]; the tag space always
+ * runs up to that limit before its faded scroll engages. Pills anchor to the right and build
+ * out leftward.
  */
 @Composable
 fun EditorHeader(
@@ -409,12 +416,14 @@ fun EditorHeader(
     dateLabel: String,
     onRename: (String) -> Unit,
     modifier: Modifier = Modifier,
+    landscape: Boolean = false,
     tags: List<Tag> = emptyList(),
     pendingRemovalTagIds: Set<String> = emptySet(),
     onBeginUntag: (Tag) -> Unit = {},
     onCancelUntag: (Tag) -> Unit = {},
     onAddTag: (() -> Unit)? = null,
 ) {
+    val titleMaxWidth = if (landscape) TITLE_MAX_WIDTH_LANDSCAPE else TITLE_MAX_WIDTH_PORTRAIT
     var editing by remember { mutableStateOf(false) }
     val accent = LeapTheme.tokens.accent
     Row(
@@ -452,7 +461,7 @@ fun EditorHeader(
                 textStyle = titleStyle,
                 cursorBrush = SolidColor(accent),
                 modifier = Modifier
-                    .widthIn(max = 320.dp)
+                    .widthIn(max = titleMaxWidth)
                     .focusRequester(focusRequester)
                     // Commit when focus is lost (tap a blank space), not only on the IME Done action.
                     .onFocusChanged {
@@ -478,15 +487,16 @@ fun EditorHeader(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
-                    .widthIn(max = 320.dp)
+                    .widthIn(max = titleMaxWidth)
                     .clickable { editing = true },
             )
         }
-        Spacer(Modifier.weight(1f))
-        // FA-24 tag row, LEFT of the created date (device feedback): HARD fixed width (not
-        // widthIn) so an empty row can't collapse and shift the date — the layout-shift
-        // regression class this design exists to prevent.
+        // FA-24 tag row, LEFT of the created date: takes ALL the leftover space between the
+        // capped title and the date (weight), so the region is fixed for a given title/date —
+        // an empty row can't shift the chrome, and the pills (right-anchored inside TagRow)
+        // run all the way up to the title's limit before the faded scroll engages.
         if (onAddTag != null) {
+            Spacer(Modifier.width(10.dp))
             TagRow(
                 tags = tags,
                 pendingRemovalTagIds = pendingRemovalTagIds,
@@ -494,9 +504,11 @@ fun EditorHeader(
                 onCancelUntag = onCancelUntag,
                 onAddTag = onAddTag,
                 fadeColor = HeaderBandColor,
-                modifier = Modifier.width(TAG_ROW_WIDTH),
+                modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(10.dp))
+        } else {
+            Spacer(Modifier.weight(1f))
         }
         Text(
             text = if (dateLabel.isBlank()) "Saved" else "$dateLabel · Saved",

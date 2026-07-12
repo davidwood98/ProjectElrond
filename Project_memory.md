@@ -1784,6 +1784,16 @@ build on the WSL SDK. All five items are **device-verify pending** (re-test list
   console.anthropic.com → Plans & Billing; no code change needed. Noted follow-up: the app maps
   EVERY API failure to the generic connection-error ink, which mis-directed this diagnosis —
   worth surfacing billing/auth (4xx) errors distinctly from network failures in a future batch.
+- **Tag row layout rework (2026-07-12 device feedback, round 2).** (1) Pills now anchor to the
+  RIGHT and build out leftward — the pill row end-aligns inside its box and uses
+  `horizontalScroll(reverseScrolling = true)` so an overflowing row starts pinned to the right
+  end (fade-edge conditions flip accordingly: left fade while `value < maxValue`, right fade
+  once `value > 0`). (2) The fixed 220dp `TAG_ROW_WIDTH` strip is gone — `TagRow` now takes
+  `Modifier.weight(1f)` in `EditorHeader`, filling ALL the space between the capped title and
+  the date, so tags run up to the title's limit before the faded scroll engages. (3) The title
+  cap is orientation-aware: 320dp portrait / 480dp landscape (+50%), gated on
+  `maxWidth > maxHeight` per the FA-15 convention. Device-verify pending (both orientations,
+  empty/1/many tags).
 - **Distinct billing/auth AI error messages (2026-07-12).** The generic "Could not connect — try
   again" ink had disguised the out-of-credits fault as a network problem. `AIException.Api` now
   carries the API error-envelope `errorType` and derives `isBillingError` (a `billing_error`

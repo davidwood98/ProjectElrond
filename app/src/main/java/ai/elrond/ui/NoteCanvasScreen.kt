@@ -440,6 +440,9 @@ fun NoteCanvasScreen(
             title = pageTitle,
             dateLabel = pageDateLabel,
             onRename = viewModel::renamePage,
+            // Orientation, not a width breakpoint (the FA-15 convention): landscape widens the
+            // title cap by 50%; the tag space still runs up to it.
+            landscape = maxWidth > maxHeight,
             tags = headerTags,
             pendingRemovalTagIds = pendingRemovalTagIds,
             onBeginUntag = { tag ->

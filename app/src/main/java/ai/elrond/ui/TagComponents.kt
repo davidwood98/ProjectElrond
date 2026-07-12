@@ -54,13 +54,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
 
-// ── Tag pill metrics (FA-24). The row is a FIXED region: it never grows, shrinks or shifts the
-// header chrome regardless of tag count or title length — overflow scrolls internally.
+// ── Tag pill metrics (FA-24). The row fills the fixed leftover space between the capped title
+// and the date: it never shifts the header chrome regardless of tag count or title length —
+// overflow scrolls internally.
 private val TAG_PILL_MAX_WIDTH = 96.dp
 private val TAG_ROW_FADE_WIDTH = 18.dp
 private const val TAG_COLLAPSE_ANIM_MS = 250
@@ -172,11 +172,14 @@ fun TagPickerDialog(
 }
 
 /**
- * The editor header's tag row (FA-24) — a FIXED-width region right of the created date. Never
- * encroaches on the title: overflow scrolls horizontally with a fade-out gradient on each edge
- * that hides content (a silently-clipped scrollable row would hide tags with no affordance).
- * Each pill truncates independently ([TAG_PILL_MAX_WIDTH]); the trailing `+` opens the shared
- * picker.
+ * The editor header's tag row (FA-24) — fills ALL the space between the title (which keeps its
+ * own max-width cap) and the created date, so the region is fixed for a given title/date and
+ * can never encroach on either (device feedback: the old fixed 220dp strip wasted the run-up
+ * to the title). Pills are anchored to the RIGHT edge and build out leftward — the first tag
+ * sits next to the `+`, each new one pushes the rest left. Overflow scrolls horizontally
+ * (initially pinned to the right end) with a fade-out gradient on each edge that hides content
+ * (a silently-clipped scrollable row would hide tags with no affordance). Each pill truncates
+ * independently ([TAG_PILL_MAX_WIDTH]); the trailing `+` opens the shared picker.
  *
  * Pill gesture (uniform regardless of truncation — [TagTapResolver]): tap 1 previews the full
  * name (expanded pill); tap 2 within 300ms greys it out in place (the ViewModel's 2s window);
@@ -217,10 +220,13 @@ fun TagRow(
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         val scrollState = rememberScrollState()
         Box(modifier = Modifier.weight(1f)) {
+            // Right-anchored build-out: the pill row end-aligns while it fits (each new pill
+            // pushes the rest left), and reverseScrolling pins the viewport to the RIGHT end
+            // when it overflows — scrolling reveals the older content on the left.
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(scrollState),
+                    .align(Alignment.CenterEnd)
+                    .horizontalScroll(scrollState, reverseScrolling = true),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -271,12 +277,13 @@ fun TagRow(
             // and a fill* child under the screen-height max constraint inflated the whole header
             // band to screen height the moment scrolling engaged (the device-reported title/date
             // pushed-to-bottom glitch). matchParentSize sizes to the pills without influencing
-            // the Box's own measurement.
+            // the Box's own measurement. With reverseScrolling, value 0 = the RIGHT end: content
+            // is hidden on the LEFT while value < maxValue, and on the RIGHT once value > 0.
             Box(modifier = Modifier.matchParentSize()) {
-                if (scrollState.value > 0) {
+                if (scrollState.value < scrollState.maxValue) {
                     FadeEdge(color = fadeColor, leftEdge = true, modifier = Modifier.align(Alignment.CenterStart))
                 }
-                if (scrollState.value < scrollState.maxValue) {
+                if (scrollState.value > 0) {
                     FadeEdge(color = fadeColor, leftEdge = false, modifier = Modifier.align(Alignment.CenterEnd))
                 }
             }
@@ -334,6 +341,3 @@ private fun TagPill(
         )
     }
 }
-
-/** The header tag row's fixed width (see [TagRow]) — a hard width, so an empty row can't shift chrome. */
-val TAG_ROW_WIDTH: Dp = 220.dp
