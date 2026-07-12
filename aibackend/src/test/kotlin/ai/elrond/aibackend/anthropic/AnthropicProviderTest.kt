@@ -149,6 +149,85 @@ class AnthropicProviderTest {
         val error = result.exceptionOrNull() as AIException.Api
         assertEquals(400, error.statusCode)
         assertEquals("max_tokens required", error.message)
+        assertEquals("invalid_request_error", error.errorType)
+        assertTrue(!error.isBillingError)
+        assertTrue(!error.isAuthError)
+    }
+
+    @Test
+    fun `credit-balance error is classified as a billing fault`() = runTest {
+        // The exact envelope Anthropic returns when the account is out of credits
+        // (HTTP 400 invalid_request_error — the message text is the billing signal).
+        val engine = MockEngine {
+            respond(
+                content = """{"type":"error","error":{"type":"invalid_request_error",""" +
+                    """"message":"Your credit balance is too low to access the Anthropic API. """ +
+                    """Please go to Plans & Billing to upgrade or purchase credits."}}""",
+                status = HttpStatusCode.BadRequest,
+                headers = headersOf("Content-Type", "application/json"),
+            )
+        }
+        val provider = AnthropicProvider(config, engine)
+
+        val error = provider.generate(AIRequest(AIInput.Text("hello")))
+            .exceptionOrNull() as AIException.Api
+
+        assertTrue(error.isBillingError)
+        assertTrue(!error.isAuthError)
+    }
+
+    @Test
+    fun `billing_error type is classified as a billing fault regardless of message`() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = """{"type":"error","error":{"type":"billing_error","message":"Payment required"}}""",
+                status = HttpStatusCode.Forbidden,
+                headers = headersOf("Content-Type", "application/json"),
+            )
+        }
+        val provider = AnthropicProvider(config, engine)
+
+        val error = provider.generate(AIRequest(AIInput.Text("hello")))
+            .exceptionOrNull() as AIException.Api
+
+        assertTrue(error.isBillingError)
+    }
+
+    @Test
+    fun `401 is classified as an auth fault`() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = """{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}""",
+                status = HttpStatusCode.Unauthorized,
+                headers = headersOf("Content-Type", "application/json"),
+            )
+        }
+        val provider = AnthropicProvider(config, engine)
+
+        val error = provider.generate(AIRequest(AIInput.Text("hello")))
+            .exceptionOrNull() as AIException.Api
+
+        assertTrue(error.isAuthError)
+        assertTrue(!error.isBillingError)
+    }
+
+    @Test
+    fun `unparseable error body still maps to Api with the status code`() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = "<html>502 Bad Gateway</html>",
+                status = HttpStatusCode.BadGateway,
+                headers = headersOf("Content-Type", "text/html"),
+            )
+        }
+        val provider = AnthropicProvider(config, engine)
+
+        val error = provider.generate(AIRequest(AIInput.Text("hello")))
+            .exceptionOrNull() as AIException.Api
+
+        assertEquals(502, error.statusCode)
+        assertEquals("HTTP 502", error.message)
+        assertNull(error.errorType)
     }
 
     @Test

@@ -7,6 +7,7 @@ import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.RecognitionCandidate
 import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.TriggerMode
+import ai.elrond.aibackend.AIException
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
@@ -108,6 +109,70 @@ class CanvasViewModelAiTest {
             kotlinx.coroutines.delay(Long.MAX_VALUE)
             error("unreachable")
         }
+    }
+
+    /** Provider that always fails with the given exception (billing/auth fault tests). */
+    private class FailingProvider(private val failure: Throwable) : AIProvider {
+        override suspend fun generate(request: AIRequest): Result<AIResponse> =
+            Result.failure(failure)
+    }
+
+    private fun failingViewModel(failure: Throwable) = CanvasViewModel(
+        recognizer = FakeRecognizer("hello /Q"),
+        aiProvider = FailingProvider(failure),
+        lineSplitter = singleLine,
+        notePlacer = fixedPlacement,
+    )
+
+    @Test
+    fun `an out-of-credits API failure shows the billing message, not the connection error`() =
+        runTest(dispatcher) {
+            // The exact fault from the 2026-07-12 device report: HTTP 400 invalid_request_error
+            // whose message names the credit balance. It rendered as "Could not connect" and sent
+            // the diagnosis down the network path — it must surface as an actionable billing fault.
+            val viewModel = failingViewModel(
+                AIException.Api(
+                    statusCode = 400,
+                    message = "Your credit balance is too low to access the Anthropic API. " +
+                        "Please go to Plans & Billing to upgrade or purchase credits.",
+                    errorType = "invalid_request_error",
+                ),
+            )
+
+            viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+            advanceUntilIdle()
+
+            val state = viewModel.aiState.value
+            assertTrue(state is AiUiState.Error)
+            assertEquals(CanvasViewModel.BILLING_ERROR, (state as AiUiState.Error).message)
+        }
+
+    @Test
+    fun `a rejected API key shows the auth message`() = runTest(dispatcher) {
+        val viewModel = failingViewModel(
+            AIException.Api(statusCode = 401, message = "invalid x-api-key", errorType = "authentication_error"),
+        )
+
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+
+        val state = viewModel.aiState.value
+        assertTrue(state is AiUiState.Error)
+        assertEquals(CanvasViewModel.AUTH_ERROR, (state as AiUiState.Error).message)
+    }
+
+    @Test
+    fun `other API failures keep the generic connection error`() = runTest(dispatcher) {
+        val viewModel = failingViewModel(
+            AIException.Api(statusCode = 529, message = "Overloaded", errorType = "overloaded_error"),
+        )
+
+        viewModel.onStrokesFinished(listOf(mockk<Stroke>()))
+        advanceUntilIdle()
+
+        val state = viewModel.aiState.value
+        assertTrue(state is AiUiState.Error)
+        assertEquals(CanvasViewModel.CONNECTION_ERROR, (state as AiUiState.Error).message)
     }
 
     @Test

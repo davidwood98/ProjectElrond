@@ -54,6 +54,7 @@ import ai.elrond.domain.notebookTitle
 import ai.elrond.domain.selectQuestionLines
 import ai.elrond.domain.strokeCentroid
 import ai.elrond.domain.strokeLoopOrNull
+import ai.elrond.aibackend.AIException
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AIRequest
@@ -2769,8 +2770,21 @@ class CanvasViewModel(
                 }
                 _aiState.value = AiUiState.Idle
             }
-            else -> _aiState.value = AiUiState.Error(CONNECTION_ERROR, position.x, position.y)
+            else -> _aiState.value =
+                AiUiState.Error(aiFailureMessage(result.exceptionOrNull()), position.x, position.y)
         }
+    }
+
+    /**
+     * The on-canvas red-ink message for a provider failure. Billing and auth faults are
+     * account problems a retry can never fix, so they get specific, actionable text instead of
+     * the generic "could not connect" (which mis-directed a real out-of-credits fault into
+     * network debugging — 2026-07-12 device report). Timeouts and everything else stay generic.
+     */
+    private fun aiFailureMessage(failure: Throwable?): String = when {
+        failure is AIException.Api && failure.isBillingError -> BILLING_ERROR
+        failure is AIException.Api && failure.isAuthError -> AUTH_ERROR
+        else -> CONNECTION_ERROR
     }
 
     /** Shows a short notification over the canvas, auto-clearing after [TRANSIENT_MESSAGE_MILLIS]. */
@@ -3077,6 +3091,16 @@ class CanvasViewModel(
 
         /** Shown as red handwriting on the canvas for failures and timeouts. */
         const val CONNECTION_ERROR: String = "Could not connect — try again"
+
+        /** Billing fault: the account can't pay — a retry won't help, so say what will. */
+        const val BILLING_ERROR: String =
+            "AI unavailable — the Anthropic account is out of credits. " +
+                "Add credits at console.anthropic.com, then try again"
+
+        /** Auth fault: the API key was rejected — a retry won't help, so say what will. */
+        const val AUTH_ERROR: String =
+            "AI unavailable — the API key was rejected. " +
+                "Check anthropic.apiKey in local.properties and rebuild"
 
         /** Fallback body for an unclear response that carried no message line of its own. */
         private const val DEFAULT_UNCLEAR_MESSAGE: String = "I need more information, request unclear"

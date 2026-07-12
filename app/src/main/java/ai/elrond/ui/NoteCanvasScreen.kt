@@ -400,6 +400,7 @@ fun NoteCanvasScreen(
                 message = state.message,
                 x = pageTransform.pageToScreenX(state.x),
                 y = pageTransform.pageToScreenY(state.y),
+                containerWidthPx = constraints.maxWidth.toFloat(),
                 onDismiss = viewModel::dismissAiResponse,
             )
             AiUiState.Idle -> Unit
@@ -1174,22 +1175,38 @@ private fun AiLoadingIndicator(x: Float, y: Float) {
 
 /** Inline failure message in red handwriting style, on the canvas; tap to dismiss. */
 @Composable
-private fun AiErrorInk(message: String, x: Float, y: Float, onDismiss: () -> Unit) {
+private fun AiErrorInk(
+    message: String,
+    x: Float,
+    y: Float,
+    containerWidthPx: Float,
+    onDismiss: () -> Unit,
+) {
     val density = LocalDensity.current
+    // The longer billing/auth messages must wrap AND stay on-screen (the on-canvas popup rule):
+    // cap the width, then clamp the measured box inside the right edge — a /Q near the edge
+    // otherwise pushed the text off-screen.
+    var measuredWidthPx by remember { mutableStateOf(0) }
     Text(
         text = message,
         fontFamily = HandwritingFontFamily,
         fontSize = 24.sp,
         color = ErrorInkColor,
         modifier = Modifier
-            .absoluteOffset(
-                x = with(density) { x.toDp() },
-                y = with(density) { y.toDp() },
-            )
+            .absoluteOffset {
+                val margin = 8.dp.toPx()
+                val maxX = (containerWidthPx - measuredWidthPx - margin).coerceAtLeast(margin)
+                IntOffset(x.coerceIn(margin, maxX).roundToInt(), y.roundToInt())
+            }
+            .widthIn(max = ERROR_INK_MAX_WIDTH)
+            .onSizeChanged { measuredWidthPx = it.width }
             .clickable(onClick = onDismiss)
             .padding(4.dp),
     )
 }
+
+/** Wrap width for the on-canvas red-ink error, so long billing/auth messages stay readable. */
+private val ERROR_INK_MAX_WIDTH = 380.dp
 
 /**
  * One collated confirmation sheet for all background-extracted items (FA-2). Each item has a

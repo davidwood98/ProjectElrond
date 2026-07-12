@@ -1784,6 +1784,16 @@ build on the WSL SDK. All five items are **device-verify pending** (re-test list
   console.anthropic.com → Plans & Billing; no code change needed. Noted follow-up: the app maps
   EVERY API failure to the generic connection-error ink, which mis-directed this diagnosis —
   worth surfacing billing/auth (4xx) errors distinctly from network failures in a future batch.
+- **Distinct billing/auth AI error messages (2026-07-12).** The generic "Could not connect — try
+  again" ink had disguised the out-of-credits fault as a network problem. `AIException.Api` now
+  carries the API error-envelope `errorType` and derives `isBillingError` (a `billing_error`
+  type OR a message naming the credit balance) and `isAuthError` (401 / `authentication_error`);
+  `AnthropicProvider.parseError` populates it. `CanvasViewModel.aiFailureMessage` maps failures
+  to `BILLING_ERROR` ("out of credits… add credits at console.anthropic.com") / `AUTH_ERROR`
+  ("API key rejected… check local.properties") / `CONNECTION_ERROR` (timeouts + everything
+  else). `AiErrorInk` gained a wrap width (380dp) + a measured right-edge clamp so the longer
+  messages obey the on-canvas on-screen rule. Tests: provider classification (billing message
+  match, `billing_error` type, 401, unparseable body) + VM mapping (billing/auth/other).
 - **Default AI model → `claude-haiku-4-5` (2026-07-12).** After the credit top-up,
   `AnthropicConfig.DEFAULT_MODEL` switched from `claude-sonnet-4-6` to Claude Haiku 4.5 (fast +
   cheap for /Q + extraction). Live-verified against the API; `:aibackend:test` green. Still the

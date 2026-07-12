@@ -107,12 +107,16 @@ class AnthropicProvider(
     }
 
     private fun parseError(statusCode: Int, body: String): AIException {
-        val message = try {
-            json.decodeFromString<ErrorResponse>(body).error.message
+        val detail = try {
+            json.decodeFromString<ErrorResponse>(body).error
         } catch (_: Exception) {
-            "HTTP $statusCode"
+            null
         }
-        return AIException.Api(statusCode, message)
+        return AIException.Api(
+            statusCode = statusCode,
+            message = detail?.message?.ifBlank { null } ?: "HTTP $statusCode",
+            errorType = detail?.type?.ifBlank { null },
+        )
     }
 
     fun close() {
