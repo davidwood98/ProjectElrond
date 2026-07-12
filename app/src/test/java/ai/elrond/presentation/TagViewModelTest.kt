@@ -92,6 +92,13 @@ class TagViewModelTest {
     }
 
     @Test
+    fun `construction sweeps orphaned tags so the menu opens clean`() = runTest(dispatcher) {
+        TagViewModel(repository)
+        runCurrent()
+        coVerify(exactly = 1) { repository.pruneOrphans() }
+    }
+
+    @Test
     fun `pendingRemovalTagIdsFor scopes keys to one notebook as bare tag ids`() = runTest(dispatcher) {
         every { repository.observeNotebookTags() } returns flowOf(
             mapOf(

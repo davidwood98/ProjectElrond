@@ -241,7 +241,10 @@ fun NotesSection(
         onMove = { assignCandidate = it },
         onDelete = { deleteCandidate = it },
         onTapSubject = { subjectViewModel.selectSubject(it) },
-        onTags = { tagCandidate = it },
+        onTags = {
+            tagViewModel.pruneOrphans() // the menu must never list an orphaned tag
+            tagCandidate = it
+        },
     )
 
     Column(modifier = Modifier.fillMaxSize()) {

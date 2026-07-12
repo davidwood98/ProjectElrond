@@ -483,15 +483,10 @@ fun EditorHeader(
             )
         }
         Spacer(Modifier.weight(1f))
-        Text(
-            text = if (dateLabel.isBlank()) "Saved" else "$dateLabel · Saved",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Neutral500,
-        )
-        // FA-24 tag row: HARD fixed width (not widthIn) so an empty row can't collapse and shift
-        // the date/`+` — the layout-shift regression class this design exists to prevent.
+        // FA-24 tag row, LEFT of the created date (device feedback): HARD fixed width (not
+        // widthIn) so an empty row can't collapse and shift the date — the layout-shift
+        // regression class this design exists to prevent.
         if (onAddTag != null) {
-            Spacer(Modifier.width(10.dp))
             TagRow(
                 tags = tags,
                 pendingRemovalTagIds = pendingRemovalTagIds,
@@ -501,7 +496,13 @@ fun EditorHeader(
                 fadeColor = HeaderBandColor,
                 modifier = Modifier.width(TAG_ROW_WIDTH),
             )
+            Spacer(Modifier.width(10.dp))
         }
+        Text(
+            text = if (dateLabel.isBlank()) "Saved" else "$dateLabel · Saved",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Neutral500,
+        )
     }
 }
 

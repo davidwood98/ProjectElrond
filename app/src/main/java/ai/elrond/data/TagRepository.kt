@@ -44,7 +44,17 @@ class TagRepository(
         notebookTagDao.assign(NotebookTagEntity(notebookId = notebookId, tagId = tagId))
     }
 
+    /** Removing the last membership also erases the tag itself (no orphans in the menu). */
     suspend fun removeTag(notebookId: String, tagId: String) {
         notebookTagDao.remove(notebookId, tagId)
+        tagDao.deleteOrphans()
+    }
+
+    /**
+     * Sweeps tags orphaned by paths that bypass [removeTag] — chiefly a notebook deletion, whose
+     * FK cascade clears memberships inside SQLite. Called on tagging-surface start/open.
+     */
+    suspend fun pruneOrphans() {
+        tagDao.deleteOrphans()
     }
 }

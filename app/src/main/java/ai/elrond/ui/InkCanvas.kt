@@ -532,6 +532,15 @@ private fun createTouchListener(
         pendingHold?.let { holdHandler.removeCallbacks(it) }
         pendingHold = null
     }
+    // FA-24 device feedback: a stationary finger HOLD on a link (scroll mode) selects it — a tap
+    // opens, so unlike AI boxes (where a tap already selects) a link needs the hold to be
+    // selectable by finger at all. Same AI_NOTE_HOLD_MS; a fired hold suppresses the UP tap.
+    var pendingScrollHold: Runnable? = null
+    var scrollHoldConsumed = false
+    fun cancelPendingScrollHold() {
+        pendingScrollHold?.let { holdHandler.removeCallbacks(it) }
+        pendingScrollHold = null
+    }
     fun cancelStraightenTimer() {
         straightenRunnable?.let { holdHandler.removeCallbacks(it) }
         straightenRunnable = null
@@ -598,6 +607,8 @@ private fun createTouchListener(
                         erasing = false
                         scrollPointerId = null
                         scrollAxis = 0
+                        cancelPendingScrollHold()
+                        scrollHoldConsumed = false
                         pinching = true
                         pinchPrevSpread = span.spread
                         pinchPrevCx = span.cx
@@ -652,6 +663,18 @@ private fun createTouchListener(
                                 viewModel.aiNoteAt(downPageX, downPageY)
                             } else {
                                 null
+                            }
+                            // Arm the finger hold-to-select for a link (tap = open, hold = select /
+                            // broken-link menu). Movement past the slop or an axis lock cancels it.
+                            scrollHoldConsumed = false
+                            scrollDownLinkId?.let { linkId ->
+                                val runnable = Runnable {
+                                    pendingScrollHold = null
+                                    scrollHoldConsumed = true
+                                    viewModel.holdLink(linkId)
+                                }
+                                pendingScrollHold = runnable
+                                holdHandler.postDelayed(runnable, AI_NOTE_HOLD_MS)
                             }
                         }
                         return@OnTouchListener true
@@ -796,12 +819,19 @@ private fun createTouchListener(
                     // A lone finger drag scrolls or swipes to turn pages (FA-20), before stylus
                     // handling. The axis locks after a small slop.
                     scrollPointerId?.let { sid ->
+                        // A fired link hold owns the rest of this gesture — don't also scroll.
+                        if (scrollHoldConsumed) return@OnTouchListener true
                         val si = event.findPointerIndex(sid)
                         if (si >= 0) {
                             val fx = event.getX(si)
                             val fy = event.getY(si)
                             val totalDx = fx - scrollStartX
                             val totalDy = fy - scrollStartY
+                            // Real movement means a scroll, not a hold — cancel the pending
+                            // link hold (FA-24 device feedback).
+                            if (pendingScrollHold != null && hypot(totalDx, totalDy) > HOLD_MOVE_SLOP_PX) {
+                                cancelPendingScrollHold()
+                            }
                             if (scrollAxis == 0) {
                                 val locked = lockAxisOrUndecided(totalDx, totalDy)
                                 if (locked != 0) {
@@ -937,13 +967,15 @@ private fun createTouchListener(
                     // Only finish when the tracked pointer lifts; a finger lifting is ignored.
                     val pointerId = event.getPointerId(event.actionIndex)
                     if (pointerId == scrollPointerId) {
+                        cancelPendingScrollHold()
                         // Resolve a horizontal swipe (turn or spring back) or a vertical drag (elastic
                         // page-turn or spring back in vertical mode). A pan just ends. (FA-20)
                         if (scrollAxis == 2 && !horizontalIsPan) viewModel.releaseSwipe()
                         if (scrollAxis == 1) viewModel.releaseScroll()
-                        // A clean tap (no axis ever locked): open a tapped link box, else select the
-                        // tapped AI box, else deselect.
-                        if (scrollAxis == 0) {
+                        // A clean tap (no axis ever locked, no hold fired): open a tapped link box,
+                        // else select the tapped AI box, else deselect. A fired hold (link selected /
+                        // broken menu shown) consumes the gesture — the UP does nothing more.
+                        if (scrollAxis == 0 && !scrollHoldConsumed) {
                             val tappedLink = scrollDownLinkId
                             val tapped = scrollDownNoteId
                             when {
@@ -956,6 +988,7 @@ private fun createTouchListener(
                         scrollAxis = 0
                         scrollDownNoteId = null
                         scrollDownLinkId = null
+                        scrollHoldConsumed = false
                     }
                     if (pointerId == currentPointerId) {
                         cancelPendingHold()
@@ -1019,6 +1052,8 @@ private fun createTouchListener(
                     if (pinching) { pinching = false; viewModel.endPinch() }
                     if (scrollAxis == 2 && !horizontalIsPan) viewModel.releaseSwipe() // spring an in-progress swipe back
                     if (scrollAxis == 1) viewModel.releaseScroll() // spring an in-progress vertical overscroll back
+                    cancelPendingScrollHold()
+                    scrollHoldConsumed = false
                     scrollPointerId = null
                     scrollAxis = 0
                     scrollDownNoteId = null

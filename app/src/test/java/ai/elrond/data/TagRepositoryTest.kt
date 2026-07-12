@@ -101,15 +101,42 @@ class TagRepositoryTest {
     }
 
     @Test
-    fun `deleting a notebook cascades its memberships, the tag survives`() = runTest {
+    fun `removing the last membership erases the orphaned tag from the menu`() = runTest {
+        seedNotebook("nb1")
+        val tag = repo.createTag("lonely")
+        repo.assignTag("nb1", tag.id)
+
+        repo.removeTag("nb1", tag.id)
+
+        assertTrue(repo.observeTags().first().isEmpty()) // gone, not lingering unassigned
+    }
+
+    @Test
+    fun `deleting a notebook cascades its memberships and pruneOrphans erases the tag`() = runTest {
         seedNotebook("nb1")
         val tag = repo.createTag("x")
         repo.assignTag("nb1", tag.id)
 
+        // The FK cascade happens inside SQLite (no repository code runs) — memberships vanish...
         db.notebookDao().deleteById("nb1")
-
         assertTrue(repo.observeNotebookTags().first().isEmpty())
         assertEquals(1, repo.observeTags().first().size)
+
+        // ...and the tagging-surface sweep erases the now-orphaned tag.
+        repo.pruneOrphans()
+        assertTrue(repo.observeTags().first().isEmpty())
+    }
+
+    @Test
+    fun `pruneOrphans leaves tags that still have a membership`() = runTest {
+        seedNotebook("nb1")
+        val kept = repo.createTag("kept")
+        repo.assignTag("nb1", kept.id)
+        repo.createTag("orphan") // created but never assigned
+
+        repo.pruneOrphans()
+
+        assertEquals(listOf("kept"), repo.observeTags().first().map { it.name })
     }
 
     @Test

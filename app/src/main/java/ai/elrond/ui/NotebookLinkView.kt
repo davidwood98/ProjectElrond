@@ -58,6 +58,12 @@ fun NotebookLinkView(
     transform: PageTransform,
     modifier: Modifier = Modifier,
     liveTransform: LiveTransform = LiveTransform.IDENTITY,
+    /**
+     * The target notebook's CURRENT title, when known (FA-24 device feedback: the label must
+     * track renames). [NotebookLink.linkText] is only the at-link-time cache, used as the
+     * fallback while the live title hasn't loaded.
+     */
+    liveTitle: String? = null,
     onMeasured: (widthPx: Float, heightPx: Float) -> Unit = { _, _ -> },
 ) {
     val density = LocalDensity.current
@@ -69,7 +75,7 @@ fun NotebookLinkView(
         ?: Modifier
     val accent = LeapTheme.tokens.accent
     val contentColor = if (link.isBroken) Neutral500 else accent
-    val label = if (link.isBroken) "Reference not found" else link.linkText
+    val label = if (link.isBroken) "Reference not found" else liveTitle ?: link.linkText
 
     Box(
         modifier = modifier

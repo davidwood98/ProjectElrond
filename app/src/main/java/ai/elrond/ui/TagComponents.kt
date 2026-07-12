@@ -266,12 +266,19 @@ fun TagRow(
                 }
             }
             // Fade affordance on each edge hiding content (the band colour is opaque, so a plain
-            // overlay gradient reads correctly — no blend modes needed).
-            if (scrollState.value > 0) {
-                FadeEdge(color = fadeColor, leftEdge = true, modifier = Modifier.align(Alignment.CenterStart))
-            }
-            if (scrollState.value < scrollState.maxValue) {
-                FadeEdge(color = fadeColor, leftEdge = false, modifier = Modifier.align(Alignment.CenterEnd))
+            // overlay gradient reads correctly — no blend modes needed). The overlay MUST be
+            // matchParentSize, never fillMaxHeight/Size: this Box is content-sized (the pills),
+            // and a fill* child under the screen-height max constraint inflated the whole header
+            // band to screen height the moment scrolling engaged (the device-reported title/date
+            // pushed-to-bottom glitch). matchParentSize sizes to the pills without influencing
+            // the Box's own measurement.
+            Box(modifier = Modifier.matchParentSize()) {
+                if (scrollState.value > 0) {
+                    FadeEdge(color = fadeColor, leftEdge = true, modifier = Modifier.align(Alignment.CenterStart))
+                }
+                if (scrollState.value < scrollState.maxValue) {
+                    FadeEdge(color = fadeColor, leftEdge = false, modifier = Modifier.align(Alignment.CenterEnd))
+                }
             }
         }
         IconButton(onClick = onAddTag, modifier = Modifier.size(28.dp)) {

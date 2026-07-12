@@ -360,7 +360,11 @@ fun NoteCanvasScreen(
         // Notebook link boxes (FA-24) — rendered AFTER the AI notes (so links sit visually on top;
         // CanvasViewModel.linkAt is hit-tested before aiNoteAt to match) and, like them, BELOW the
         // ink canvas: passive chips the pen writes over. Tap-to-open and hold-to-select are handled
-        // by InkCanvas → the ViewModel.
+        // by InkCanvas → the ViewModel. Labels track the target's CURRENT title (device feedback);
+        // the stored linkText is only the fallback cache.
+        val linkTitleByNotebook = remember(libraryNotebooks) {
+            libraryNotebooks.associate { it.notebookId to it.title }
+        }
         links.forEach { link ->
             key(link.id) {
                 val live = selection?.takeIf { link.id in it.linkIds }?.transform
@@ -368,6 +372,7 @@ fun NoteCanvasScreen(
                     link = link,
                     transform = pageTransform,
                     liveTransform = live ?: LiveTransform.IDENTITY,
+                    liveTitle = link.targetNotebookId?.let { linkTitleByNotebook[it] },
                     onMeasured = { w, h -> viewModel.reportLinkMeasuredSize(link.id, w, h) },
                 )
             }
@@ -443,7 +448,10 @@ fun NoteCanvasScreen(
                 headerNotebookId?.let { tagViewModel.cancelUntag(it, tag.id) }
             },
             onAddTag = if (headerNotebookId != null) {
-                { tagPickerOpen = true }
+                {
+                    tagViewModel.pruneOrphans() // the menu must never list an orphaned tag
+                    tagPickerOpen = true
+                }
             } else {
                 null
             },

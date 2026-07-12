@@ -186,11 +186,19 @@ interface TagDao {
     fun observeAll(): Flow<List<TagEntity>>
 
     /**
-     * No UI deletes a whole tag in this pass (the pickers only assign/remove memberships) —
+     * No UI deletes a whole tag directly (the pickers only assign/remove memberships) —
      * kept for the cascade-delete test and as the seam for a future "manage tags" screen.
      */
     @Query("DELETE FROM tags WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    /**
+     * Erases every tag with no remaining notebook membership (FA-24 device feedback): an
+     * orphaned tag must vanish from the selection menu. Recreating the same name later gets the
+     * same colour back (deterministic per name), so nothing of value is lost.
+     */
+    @Query("DELETE FROM tags WHERE id NOT IN (SELECT tagId FROM notebook_tags)")
+    suspend fun deleteOrphans()
 }
 
 /** A notebook-tag membership joined with its tag — mirrors the [PendingTypeContent] projection. */

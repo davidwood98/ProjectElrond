@@ -41,6 +41,18 @@ class TagViewModel @Inject constructor(
     private val tagRepository: TagRepository,
 ) : ViewModel() {
 
+    init {
+        // Sweep orphans left by paths that bypass removeTag (e.g. a notebook deletion's FK
+        // cascade), so the selection menu never lists a tag no notebook carries. Also re-run
+        // by [pruneOrphans] each time a picker opens.
+        viewModelScope.launch { runCatching { tagRepository.pruneOrphans() } }
+    }
+
+    /** Called when a tag picker opens — clears any tag orphaned since this screen started. */
+    fun pruneOrphans() {
+        viewModelScope.launch { runCatching { tagRepository.pruneOrphans() } }
+    }
+
     val tags: StateFlow<List<Tag>> = tagRepository.observeTags()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

@@ -1746,6 +1746,49 @@ navigation stays page-based (`onOpenNote(pageId)`).
   stability (empty/1/6+ tags × short/long titles, both orientations), fade edges, pill
   preview/grey-out/cancel/width-collapse, the shared picker from both surfaces.
 
+### FA-24 device-feedback round (2026-07-12)
+
+First on-device pass over the FA-24 batch — one feature, four fixes, committed on branch
+**FA-24**. **No schema change — DB stays v18.** All JVM/Robolectric suites green
+(`:app:testDebugUnitTest` + `:aibackend:test`); `assembleDebug` + `assembleDebugAndroidTest`
+build on the WSL SDK. All five items are **device-verify pending** (re-test list below).
+
+- **Finger hold-to-select on link boxes (feature).** In scroll mode a finger tap OPENS a link, so
+  fingers had no way to select one (AI boxes don't have this gap — their tap selects). The
+  scroll-finger DOWN over a link now arms the same 800ms hold → `holdLink` (select, or the
+  broken-link Redefine/Delete menu — which this also makes finger-reachable). Movement past the
+  hold slop or an axis lock cancels; a fired hold consumes the gesture (no tap-open, no scroll).
+- **Live link labels (bug).** The box label now renders the target notebook's CURRENT title
+  (`NotebookLinkView.liveTitle`, resolved from the already-collected notebook summaries);
+  the stored `linkText` is only the fallback cache while the live title hasn't loaded.
+- **Tag row moved LEFT of the "date · Saved" text (issue)** in `EditorHeader` (was right).
+- **Header inflation glitch (bug) — root cause: `fillMaxHeight` in a content-sized Box.** The tag
+  row's fade edges used `fillMaxHeight()` inside the content-sized pills Box; the fades only
+  compose once horizontal scroll engages, and under the editor's screen-height max constraint
+  they inflated the whole header band to screen height — pushing title/date to the bottom,
+  exactly as reported. Fixed with a `matchParentSize()` overlay (sizes to the pills without
+  influencing the Box's own measurement). **Rule of thumb: never `fillMax*` inside a
+  content-sized Box that lives under a loose screen-sized constraint — use `matchParentSize`.**
+- **Orphan tags auto-erased (bug).** `TagDao.deleteOrphans()` (`DELETE FROM tags WHERE id NOT IN
+  (SELECT tagId FROM notebook_tags)`): run after every `removeTag` (removing the last membership
+  erases the tag), on `TagViewModel` init, and when either surface opens the picker
+  (`pruneOrphans`) — covering the notebook-deletion path whose FK cascade runs inside SQLite with
+  no repository code. Recreating the same name later restores the same colour (deterministic per
+  name), so nothing is lost.
+- New/updated tests: `TagRepositoryTest` (+last-membership erase, +notebook-delete →
+  `pruneOrphans` sweep, +prune keeps assigned tags), `TagViewModelTest` (+init sweep).
+- **AI prompting "Could not connect — try again" — DIAGNOSED, not an app bug: the Anthropic
+  account is out of credits.** A direct `/v1/messages` call with the app's key + configured
+  model (`claude-sonnet-4-6`, current) returns HTTP 400 "Your credit balance is too low to
+  access the Anthropic API. Please go to Plans & Billing…". Fix: top up credits at
+  console.anthropic.com → Plans & Billing; no code change needed. Noted follow-up: the app maps
+  EVERY API failure to the generic connection-error ink, which mis-directed this diagnosis —
+  worth surfacing billing/auth (4xx) errors distinctly from network failures in a future batch.
+- **Device re-verify list:** finger hold on healthy + broken links (and that tap still opens /
+  scroll still scrolls), link label updates after renaming the target, tag row left of the date,
+  the header no longer inflating when tags overflow (the original repro: enough/long tags to
+  engage scroll, both orientations), untagging the last notebook removes the tag from the picker.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
