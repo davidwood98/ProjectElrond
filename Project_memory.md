@@ -1655,7 +1655,13 @@ and the highlighter width/colour retune all passed.
   — `DeviceCalendarProviderTest.create_read_update_delete_event` — is the **pre-existing** FA-10
   device-environment failure (deleted event still returned by the follow-up query), not FA-23.
 
-## FA-24 — notebook cross-linking + tagging (2026-07-09)
+## FA-24 — notebook cross-linking + tagging (2026-07-09; device-confirmed 2026-07-13)
+
+**All FA-24 device-verify items PASSED on the Galaxy Tab S (confirmed 2026-07-13)** across the
+feature batch and the three feedback rounds: link tap/hold/write-over + broken-link flow + Quick
+Nav search/pick + Backlinks; tag row layout (right-anchored build-out, fill-to-title, landscape
+title width, fades, no encroachment), readable colours + self-heal, single-tap untag with the 2s
+correction window, new-tag-at-left; and the billing/auth error ink. FA-24 is merge-ready.
 
 Feature batch on branch **FA-24** (spec: `.claude/Feature prompts/FA24_claude_code_prompt_tagging_
 and_linking_feature.md`), one commit per phase. **Phase 3 (AI tag/link suggestions) was skipped by
