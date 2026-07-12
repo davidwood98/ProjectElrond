@@ -1,7 +1,6 @@
 package ai.elrond.ui
 
 import ai.elrond.domain.Tag
-import ai.elrond.domain.TagTapResolver
 import ai.elrond.ui.theme.LeapGrey
 import ai.elrond.ui.theme.Neutral100
 import ai.elrond.ui.theme.Neutral200
@@ -181,10 +180,15 @@ fun TagPickerDialog(
  * (a silently-clipped scrollable row would hide tags with no affordance). Each pill truncates
  * independently ([TAG_PILL_MAX_WIDTH]); the trailing `+` opens the shared picker.
  *
- * Pill gesture (uniform regardless of truncation — [TagTapResolver]): tap 1 previews the full
- * name (expanded pill); tap 2 within 300ms greys it out in place (the ViewModel's 2s window);
- * tapping the greyed pill cancels; when the window elapses the pill collapses its width away
- * (never a jump-cut) via a ghost entry that outlives the tag by the exit animation.
+ * New tags GENERATE at the left end — existing pills keep their (right-anchored) positions and
+ * the newcomer appears alone on the left (device feedback: adding must not shuffle the rest).
+ *
+ * Pill gesture (device feedback: the old double-tap felt clunky): a SINGLE tap deselects the
+ * tag — the pill greys out in place for the ViewModel's 2s correction window, and tapping the
+ * greyed pill again cancels the removal (no DB write happened). While greyed it also shows its
+ * full untruncated name, so the user sees exactly what's being removed. When the window
+ * elapses the pill collapses its width away (never a jump-cut) via a ghost entry that outlives
+ * the tag by the exit animation.
  */
 @Composable
 fun TagRow(
@@ -196,18 +200,17 @@ fun TagRow(
     modifier: Modifier = Modifier,
     fadeColor: Color = Neutral100,
 ) {
-    // Preview state is purely cosmetic → local; PendingRemoval gates a DB write → ViewModel.
-    var selectedTagId by remember { mutableStateOf<String?>(null) }
-    var lastTapAt by remember { mutableStateOf(0L) }
-
     // Ghost bookkeeping so a removed tag collapses instead of jump-cutting: keep every seen tag
-    // (and a stable order); prune ghosts after the exit animation has played.
+    // (and a stable order); prune ghosts after the exit animation has played. Unseen ids are
+    // inserted at the FRONT (left end): [tags] arrives newest-first, so walking it reversed
+    // (oldest first) both preserves that order on first composition and makes any later new tag
+    // land at the left without moving the right-anchored older pills.
     val known = remember { mutableStateMapOf<String, Tag>() }
     val order = remember { mutableStateListOf<String>() }
     val liveIds = tags.map { it.id }.toSet()
-    tags.forEach { tag ->
-        known[tag.id] = tag
-        if (tag.id !in order) order.add(tag.id)
+    tags.forEach { tag -> known[tag.id] = tag }
+    tags.asReversed().forEach { tag ->
+        if (tag.id !in order) order.add(0, tag.id)
     }
     LaunchedEffect(liveIds) {
         if (order.any { it !in liveIds }) {
@@ -237,36 +240,12 @@ fun TagRow(
                         exit = shrinkHorizontally(animationSpec = tween(TAG_COLLAPSE_ANIM_MS)) +
                             fadeOut(animationSpec = tween(TAG_COLLAPSE_ANIM_MS)),
                     ) {
+                        val pendingRemoval = id in pendingRemovalTagIds
                         TagPill(
                             tag = tag,
-                            selected = selectedTagId == id,
-                            pendingRemoval = id in pendingRemovalTagIds,
-                            onTap = {
-                                val now = System.currentTimeMillis()
-                                when (
-                                    TagTapResolver.resolve(
-                                        nowMs = now,
-                                        lastTapAtMs = lastTapAt,
-                                        selectedTagId = selectedTagId,
-                                        tagId = id,
-                                        isPendingRemoval = id in pendingRemovalTagIds,
-                                    )
-                                ) {
-                                    TagTapResolver.TapOutcome.ENTER_PREVIEW -> {
-                                        selectedTagId = id
-                                        lastTapAt = now
-                                    }
-                                    TagTapResolver.TapOutcome.BEGIN_UNTAG -> {
-                                        selectedTagId = null
-                                        onBeginUntag(tag)
-                                    }
-                                    TagTapResolver.TapOutcome.CANCEL_UNTAG -> {
-                                        onCancelUntag(tag)
-                                        selectedTagId = id // re-selects as still-tagged
-                                        lastTapAt = now
-                                    }
-                                }
-                            },
+                            pendingRemoval = pendingRemoval,
+                            // Single tap deselects; a tap on the greyed pill corrects the mistake.
+                            onTap = { if (pendingRemoval) onCancelUntag(tag) else onBeginUntag(tag) },
                         )
                     }
                 }
@@ -310,13 +289,12 @@ private fun FadeEdge(color: Color, leftEdge: Boolean, modifier: Modifier = Modif
 }
 
 /**
- * One tag pill. [selected] (preview) lifts the max-width cap so the full name shows — the
- * spec's "expanded pill" variant; [pendingRemoval] renders it greyed in place.
+ * One tag pill. [pendingRemoval] renders it greyed in place AND lifts the max-width cap so the
+ * full name shows — the user sees exactly what's being removed during the correction window.
  */
 @Composable
 private fun TagPill(
     tag: Tag,
-    selected: Boolean,
     pendingRemoval: Boolean,
     onTap: () -> Unit,
     modifier: Modifier = Modifier,
@@ -333,11 +311,12 @@ private fun TagPill(
         Text(
             text = tag.name,
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            fontWeight = FontWeight.Medium,
             color = textColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = if (selected) Modifier else Modifier.widthIn(max = TAG_PILL_MAX_WIDTH),
+            // Greyed = about to be removed: show the full name so the correction is informed.
+            modifier = if (pendingRemoval) Modifier else Modifier.widthIn(max = TAG_PILL_MAX_WIDTH),
         )
     }
 }

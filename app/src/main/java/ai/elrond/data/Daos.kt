@@ -192,6 +192,13 @@ interface TagDao {
     @Query("DELETE FROM tags WHERE id = :id")
     suspend fun deleteById(id: String)
 
+    @Query("SELECT * FROM tags")
+    suspend fun getAll(): List<TagEntity>
+
+    /** One-time colour repair for tags stored with an unreadable dark shade (FA-24 feedback). */
+    @Query("UPDATE tags SET colorArgb = :colorArgb WHERE id = :id")
+    suspend fun setColor(id: String, colorArgb: Int)
+
     /**
      * Erases every tag with no remaining notebook membership (FA-24 device feedback): an
      * orphaned tag must vanish from the selection menu. Recreating the same name later gets the
@@ -218,11 +225,15 @@ interface NotebookTagDao {
     @Query("DELETE FROM notebook_tags WHERE notebookId = :notebookId AND tagId = :tagId")
     suspend fun remove(notebookId: String, tagId: String)
 
-    /** Every membership with its tag — the Library grid needs all notebooks' tags at once. */
+    /**
+     * Every membership with its tag — the Library grid needs all notebooks' tags at once.
+     * Newest assignment FIRST (implicit rowid): the header row renders list order left→right,
+     * so a new tag generates at the left while older pills keep their right-anchored spots.
+     */
     @Query(
         "SELECT nt.notebookId AS notebookId, nt.tagId AS tagId, t.name AS name, " +
             "t.colorArgb AS colorArgb FROM notebook_tags nt JOIN tags t ON t.id = nt.tagId " +
-            "ORDER BY t.name",
+            "ORDER BY nt.rowid DESC",
     )
     fun observeAllWithTag(): Flow<List<NotebookTagRow>>
 }

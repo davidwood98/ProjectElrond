@@ -57,4 +57,18 @@ class TagRepository(
     suspend fun pruneOrphans() {
         tagDao.deleteOrphans()
     }
+
+    /**
+     * One-time repair (FA-24 device feedback): tags created before the dark-shade exclusion may
+     * carry a colour the pill text is unreadable on — re-resolve those from the name (same
+     * deterministic rule new tags use). Idempotent; readable tags are untouched, preserving the
+     * stored-colour invariant.
+     */
+    suspend fun repairUnreadableColors() {
+        tagDao.getAll().forEach { tag ->
+            if (!TagColor.isReadable(tag.colorArgb)) {
+                tagDao.setColor(tag.id, TagColor.forName(tag.name))
+            }
+        }
+    }
 }

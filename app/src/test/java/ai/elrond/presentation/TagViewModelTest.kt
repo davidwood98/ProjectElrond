@@ -92,10 +92,11 @@ class TagViewModelTest {
     }
 
     @Test
-    fun `construction sweeps orphaned tags so the menu opens clean`() = runTest(dispatcher) {
+    fun `construction sweeps orphans and repairs unreadable colours`() = runTest(dispatcher) {
         TagViewModel(repository)
         runCurrent()
         coVerify(exactly = 1) { repository.pruneOrphans() }
+        coVerify(exactly = 1) { repository.repairUnreadableColors() }
     }
 
     @Test

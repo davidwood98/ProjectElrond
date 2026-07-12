@@ -140,6 +140,44 @@ class TagRepositoryTest {
     }
 
     @Test
+    fun `notebook tags come back newest assignment first`() = runTest {
+        // The header row renders list order left→right, so newest-first makes a new tag
+        // generate at the left while older pills keep their right-anchored spots.
+        seedNotebook("nb1")
+        val first = repo.createTag("first")
+        val second = repo.createTag("second")
+        repo.assignTag("nb1", first.id)
+        repo.assignTag("nb1", second.id)
+
+        assertEquals(
+            listOf("second", "first"),
+            repo.observeNotebookTags().first()["nb1"]!!.map { it.name },
+        )
+    }
+
+    @Test
+    fun `repairUnreadableColors re-resolves dark-shade tags and leaves readable ones alone`() = runTest {
+        seedNotebook("nb1")
+        // A legacy tag stored with a hue's darkest shade (pre-exclusion), planted directly.
+        val darkest = ai.elrond.domain.SubjectPalette.argb(ai.elrond.domain.SubjectPalette.SHADE_COUNT - 1)
+        db.tagDao().insert(TagEntity(id = "legacy", name = "legacy", colorArgb = darkest))
+        db.notebookTagDao().assign(NotebookTagEntity(notebookId = "nb1", tagId = "legacy"))
+        val fine = repo.createTag("fine")
+        repo.assignTag("nb1", fine.id)
+
+        repo.repairUnreadableColors()
+
+        val byId = repo.observeTags().first().associateBy { it.id }
+        assertEquals(TagColor.forName("legacy"), byId["legacy"]!!.colorArgb)
+        assertTrue(ai.elrond.domain.TagColor.isReadable(byId["legacy"]!!.colorArgb))
+        assertEquals(fine.colorArgb, byId[fine.id]!!.colorArgb) // untouched
+
+        // Idempotent: a second run changes nothing.
+        repo.repairUnreadableColors()
+        assertEquals(TagColor.forName("legacy"), repo.observeTags().first().first { it.id == "legacy" }.colorArgb)
+    }
+
+    @Test
     fun `deleting a tag cascades its memberships across every notebook`() = runTest {
         seedNotebook("nb1"); seedNotebook("nb2")
         val doomed = repo.createTag("doomed")

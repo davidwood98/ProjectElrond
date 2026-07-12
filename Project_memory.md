@@ -1784,6 +1784,18 @@ build on the WSL SDK. All five items are **device-verify pending** (re-test list
   console.anthropic.com → Plans & Billing; no code change needed. Noted follow-up: the app maps
   EVERY API failure to the generic connection-error ink, which mis-directed this diagnosis —
   worth surfacing billing/auth (4xx) errors distinctly from network failures in a future batch.
+- **Tag UX round 3 (2026-07-12 device feedback).** (1) **Readable colours:** `TagColor` now
+  draws from the subject palette MINUS each hue's darkest shade (index `hue*SHADE_COUNT +
+  SHADE_COUNT-1` — dark pill text was unreadable on it); `TagColor.isReadable` +
+  `TagRepository.repairUnreadableColors()` (idempotent, run with the orphan sweep on
+  tagging-surface start/picker open) re-resolve legacy dark tags from their names, so existing
+  device test data self-heals. (2) **Single-tap untag:** the double-tap flow was clunky — one
+  tap now greys the pill (the 2s correction window), tapping the greyed pill cancels; the
+  greyed pill shows its full untruncated name so the correction is informed. `TagTapResolver`
+  (+its test) deleted — the state machine collapsed to `if (pendingRemoval) cancel else begin`.
+  (3) **New tags generate at the LEFT:** `observeAllWithTag` orders `nt.rowid DESC` (newest
+  assignment first) and `TagRow` inserts unseen ids at the front of its ghost order — the
+  right-anchored older pills never move when a tag is added. Device-verify pending.
 - **Tag row layout rework (2026-07-12 device feedback, round 2).** (1) Pills now anchor to the
   RIGHT and build out leftward — the pill row end-aligns inside its box and uses
   `horizontalScroll(reverseScrolling = true)` so an overflowing row starts pinned to the right

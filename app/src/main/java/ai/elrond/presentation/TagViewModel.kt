@@ -43,14 +43,18 @@ class TagViewModel @Inject constructor(
 
     init {
         // Sweep orphans left by paths that bypass removeTag (e.g. a notebook deletion's FK
-        // cascade), so the selection menu never lists a tag no notebook carries. Also re-run
-        // by [pruneOrphans] each time a picker opens.
-        viewModelScope.launch { runCatching { tagRepository.pruneOrphans() } }
+        // cascade), so the selection menu never lists a tag no notebook carries; also repair
+        // legacy dark-shade colours the pill text is unreadable on (FA-24 device feedback).
+        // Re-run by [pruneOrphans] each time a picker opens.
+        pruneOrphans()
     }
 
-    /** Called when a tag picker opens — clears any tag orphaned since this screen started. */
+    /** Called when a tag picker opens — clears orphans + repairs unreadable legacy colours. */
     fun pruneOrphans() {
-        viewModelScope.launch { runCatching { tagRepository.pruneOrphans() } }
+        viewModelScope.launch {
+            runCatching { tagRepository.pruneOrphans() }
+            runCatching { tagRepository.repairUnreadableColors() }
+        }
     }
 
     val tags: StateFlow<List<Tag>> = tagRepository.observeTags()
