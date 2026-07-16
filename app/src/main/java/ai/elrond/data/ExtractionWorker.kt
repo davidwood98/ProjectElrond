@@ -31,6 +31,7 @@ class ExtractionWorker @AssistedInject constructor(
     private val taskExtractor: TaskExtractor?,
     private val eventExtractor: CalendarEventExtractor?,
     private val recognizer: HandwritingRecognizer,
+    private val recognitionCache: RecognitionCacheRepository,
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
@@ -48,7 +49,7 @@ class ExtractionWorker @AssistedInject constructor(
 
         val runner = AutoExtractionRunner(
             recognizeLines = { id ->
-                buildRecognizedLines(noteRepository.loadStrokes(id).map { it.stroke }, recognizer)
+                buildRecognizedLinesCached(id, noteRepository.loadStrokes(id), recognizer, recognitionCache)
             },
             taskExtractor = taskExtractor,
             eventExtractor = eventExtractor,
@@ -57,6 +58,10 @@ class ExtractionWorker @AssistedInject constructor(
             suggestionRepository = suggestionRepository,
             resolvePageTitle = { id -> noteRepository.getPage(id)?.displayTitle() ?: "Note" },
             markNewTodoItems = { settings.setHasNewExtractedItems(true) },
+            // Skip-gate (FA-24b): re-derived page text is stashed in note_pages.contextSummary; an
+            // unchanged page skips both Anthropic calls on the next save.
+            loadLastText = { id -> noteRepository.getContextSummary(id) },
+            saveLastText = { id, text -> noteRepository.setContextSummary(id, text) },
         )
 
         return try {

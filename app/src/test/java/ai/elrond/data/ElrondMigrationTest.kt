@@ -45,6 +45,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_15_16,
         ElrondDatabase.MIGRATION_16_17,
         ElrondDatabase.MIGRATION_17_18,
+        ElrondDatabase.MIGRATION_18_19,
     )
 
     /**
@@ -68,11 +69,45 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v18_and_validates_final_schema() {
+    fun migrates_v1_to_v19_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v18 schema (FA-24 adds
-        // notebook_links then tags/notebook_tags on top of FA-22's binary strokes rebuild).
-        helper.runMigrationsAndValidate(TEST_DB, 18, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v19 schema (FA-24b adds the
+        // recognized_lines cache on top of FA-24's notebook_links + tags/notebook_tags).
+        helper.runMigrationsAndValidate(TEST_DB, 19, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_18_to_19_creates_recognized_lines_with_its_index_and_cascade() {
+        helper.createDatabase(TEST_DB, 18).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 19, true, *allMigrations)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'recognized_lines'",
+        ).use { assertTrue(it.moveToFirst()) }
+        // The per-page lookup index exists.
+        db.query("PRAGMA index_list('recognized_lines')").use { cursor ->
+            val names = generateSequence { if (cursor.moveToNext()) cursor.getString(1) else null }.toSet()
+            assertTrue("index_recognized_lines_pageId" in names)
+        }
+        // Cascade sanity on the migrated (not Room-built) schema: deleting the page clears its
+        // cached lines.
+        db.execSQL("PRAGMA foreign_keys = ON")
+        db.execSQL("INSERT INTO notebooks (id, name, createdAt, modifiedAt) VALUES ('nb1', 'N', 1, 1)")
+        db.execSQL(
+            "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, " +
+                "lastOpenedAt, tags, contextSummary, pageNumber, isBookmarked) " +
+                "VALUES ('p1', 'nb1', NULL, 1, 1, 1, '', NULL, 1, 0)",
+        )
+        db.execSQL(
+            "INSERT INTO recognized_lines (id, pageId, strokeIds, text, minX, minY, maxX, maxY, recognizedAt) " +
+                "VALUES ('k1', 'p1', 's1,s2', 'hello', 0, 0, 10, 20, 5)",
+        )
+        db.execSQL("DELETE FROM note_pages WHERE id = 'p1'")
+        db.query("SELECT COUNT(*) FROM recognized_lines").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
+        }
+        db.close()
     }
 
     @Test

@@ -23,8 +23,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NotebookLinkEntity::class,
         TagEntity::class,
         NotebookTagEntity::class,
+        RecognizedLineEntity::class,
     ],
-    version = 18,
+    version = 19,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -42,6 +43,7 @@ abstract class ElrondDatabase : RoomDatabase() {
     abstract fun notebookLinkDao(): NotebookLinkDao
     abstract fun tagDao(): TagDao
     abstract fun notebookTagDao(): NotebookTagDao
+    abstract fun recognizedLineDao(): RecognizedLineDao
 
     companion object {
         private const val DB_NAME = "elrond.db"
@@ -466,6 +468,35 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v19 (FA-24b) adds recognized_lines: a persistent, stroke-id-keyed cache of recognized
+         * handwriting so AI features don't re-run ML Kit on unchanged ink. Create-only — the cache
+         * warms on the first save after upgrade; no backfill. pageId cascades with its page.
+         */
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS recognized_lines (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        pageId TEXT NOT NULL,
+                        strokeIds TEXT NOT NULL,
+                        text TEXT NOT NULL,
+                        minX REAL NOT NULL,
+                        minY REAL NOT NULL,
+                        maxX REAL NOT NULL,
+                        maxY REAL NOT NULL,
+                        recognizedAt INTEGER NOT NULL,
+                        FOREIGN KEY(pageId) REFERENCES note_pages(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_recognized_lines_pageId ON recognized_lines(pageId)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -479,7 +510,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
                     MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                     MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-                    MIGRATION_16_17, MIGRATION_17_18,
+                    MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
                 ).build().also { instance = it }
             }
     }

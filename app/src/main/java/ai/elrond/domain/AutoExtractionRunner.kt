@@ -51,6 +51,10 @@ class AutoExtractionRunner(
     private val suggestionRepository: SuggestionRepository,
     private val resolvePageTitle: suspend (pageId: String) -> String,
     private val markNewTodoItems: suspend () -> Unit,
+    /** Last page text a real extraction ran against (FA-24b skip-gate); null = never run. */
+    private val loadLastText: suspend (pageId: String) -> String? = { null },
+    /** Persist the page text just extracted, so an unchanged next save skips both AI calls. */
+    private val saveLastText: suspend (pageId: String, text: String) -> Unit = { _, _ -> },
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: ZoneId = ZoneId.systemDefault(),
 ) {
@@ -60,11 +64,18 @@ class AutoExtractionRunner(
         val fullText = lines.joinToString("\n") { it.text }.trim()
         if (fullText.isBlank()) return ExtractionOutcome()
 
+        // Skip-gate (FA-24b): identical page text since the last real run → skip both Anthropic
+        // calls. On the first run loadLastText is null, which never equals a non-blank fullText,
+        // so a page always extracts at least once.
+        if (fullText == loadLastText(pageId)) return ExtractionOutcome()
+
         val today = Instant.ofEpochMilli(clock()).atZone(zone).toLocalDate()
         val referenceDate = "${today.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.ENGLISH)} $today"
 
         val tasks = taskExtractor?.extract(fullText, referenceDate)?.getOrNull().orEmpty()
         val events = eventExtractor?.extract(fullText, referenceDate)?.getOrNull().orEmpty()
+        // Ran the extractors this pass → remember the text so an unchanged next save skips.
+        saveLastText(pageId, fullText)
         if (tasks.isEmpty() && events.isEmpty()) return ExtractionOutcome()
 
         // De-dup against existing todos, existing calendar suggestions, and items already

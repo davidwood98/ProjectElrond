@@ -206,6 +206,14 @@ class NoteRepository(
 
     suspend fun getPage(pageId: String): NotePage? = pageDao.getById(pageId)?.toDomain()
 
+    /** Cached page text for the FA-24b extraction skip-gate; null until the first extraction run. */
+    suspend fun getContextSummary(pageId: String): String? = pageDao.getContextSummary(pageId)
+
+    /** Stashes the extracted page text (skip-gate) without re-stamping modifiedAt. */
+    suspend fun setContextSummary(pageId: String, summary: String) {
+        pageDao.setContextSummary(pageId, summary)
+    }
+
     /** Deletes the page; its strokes cascade-delete via the foreign key. */
     suspend fun deletePage(pageId: String) {
         pageDao.deleteById(pageId)

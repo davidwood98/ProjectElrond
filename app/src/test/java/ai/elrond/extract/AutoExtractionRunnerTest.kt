@@ -185,6 +185,73 @@ class AutoExtractionRunnerTest {
         assertTrue(calendarRepository.observeAll().first().isEmpty())
     }
 
+    // --- FA-24b skip-gate ---
+
+    /** Counts extractor invocations so a skipped run is observable. */
+    private class CountingTasks(private val tasks: List<ExtractedTask>) : TaskExtractor {
+        var calls = 0
+        override suspend fun extract(noteContent: String, referenceDate: String?): Result<List<ExtractedTask>> {
+            calls++
+            return Result.success(tasks)
+        }
+    }
+
+    private fun gatedRunner(
+        taskExtractor: TaskExtractor,
+        loadLastText: suspend (String) -> String?,
+        saveLastText: suspend (String, String) -> Unit = { _, _ -> },
+        lines: List<RecognizedLine> = listOf(RecognizedLine("note text", 0f, 0f, 100f, 20f)),
+    ) = AutoExtractionRunner(
+        recognizeLines = { lines },
+        taskExtractor = taskExtractor,
+        eventExtractor = fakeEvents(emptyList()),
+        todoRepository = todoRepository,
+        calendarRepository = calendarRepository,
+        suggestionRepository = suggestionRepository,
+        resolvePageTitle = { "Note" },
+        markNewTodoItems = { badgeFlagged = true },
+        loadLastText = loadLastText,
+        saveLastText = saveLastText,
+        clock = { 0L },
+        zone = ZoneId.of("UTC"),
+    )
+
+    @Test
+    fun `unchanged page text skips extraction entirely (zero extractor calls)`() = runTest {
+        val tasks = CountingTasks(listOf(ExtractedTask("Buy milk")))
+        // loadLastText returns exactly the assembled fullText ("note text") → gate closes.
+        gatedRunner(tasks, loadLastText = { "note text" })
+            .run("p1", confirmTodo = false, confirmCalendar = false)
+
+        assertEquals(0, tasks.calls)
+        assertTrue(todoRepository.observeAll().first().isEmpty())
+    }
+
+    @Test
+    fun `first run with no prior text always extracts`() = runTest {
+        val tasks = CountingTasks(listOf(ExtractedTask("Buy milk")))
+        // loadLastText returns null (never run) → must never be treated as "unchanged".
+        gatedRunner(tasks, loadLastText = { null })
+            .run("p1", confirmTodo = false, confirmCalendar = false)
+
+        assertEquals(1, tasks.calls)
+        assertEquals(listOf("Buy milk"), todoRepository.observeAll().first().map { it.content })
+    }
+
+    @Test
+    fun `changed page text extracts and persists the new text via saveLastText`() = runTest {
+        val tasks = CountingTasks(listOf(ExtractedTask("Buy milk")))
+        var saved: Pair<String, String>? = null
+        gatedRunner(
+            tasks,
+            loadLastText = { "an older version of the page" },
+            saveLastText = { id, text -> saved = id to text },
+        ).run("p1", confirmTodo = false, confirmCalendar = false)
+
+        assertEquals(1, tasks.calls)
+        assertEquals("p1" to "note text", saved)
+    }
+
     private fun fakeTasks(tasks: List<ExtractedTask>) = object : TaskExtractor {
         override suspend fun extract(noteContent: String, referenceDate: String?) = Result.success(tasks)
     }

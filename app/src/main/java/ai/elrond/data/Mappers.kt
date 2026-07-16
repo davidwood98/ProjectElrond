@@ -8,6 +8,7 @@ import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PageViewOrientation
 import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
+import ai.elrond.domain.RecognizedLine
 import ai.elrond.domain.Subject
 import ai.elrond.domain.Tag
 import ai.elrond.domain.TodoItem
@@ -137,6 +138,14 @@ fun NotebookLink.toEntity(sourcePageId: String): NotebookLinkEntity = NotebookLi
     heightPx = heightPx,
     linkText = linkText,
     createdAt = createdAt,
+)
+
+fun RecognizedLineEntity.toDomain(): RecognizedLine = RecognizedLine(
+    text = text,
+    minX = minX,
+    minY = minY,
+    maxX = maxX,
+    maxY = maxY,
 )
 
 fun CalendarEventEntity.toDomain(): CalendarEvent = CalendarEvent(

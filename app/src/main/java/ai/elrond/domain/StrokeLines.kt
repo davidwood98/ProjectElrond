@@ -13,6 +13,18 @@ fun groupStrokesIntoLines(strokes: List<Stroke>): List<List<Stroke>> {
     return StrokeLineGrouper.groupIntoLines(spans).map { indices -> indices.map(strokes::get) }
 }
 
+/**
+ * Same top-to-bottom line grouping as [groupStrokesIntoLines], but over [CanvasStroke]s so the
+ * stable [CanvasStroke.id]s survive into each line — the input to the FA-24b recognition-cache
+ * key. Reuses [StrokeLineGrouper.groupIntoLines] on the wrapped ink spans, then maps the grouped
+ * indices back to the original [CanvasStroke]s. Touches ink natives (via [lineSpan]).
+ */
+fun groupCanvasStrokesIntoLines(strokes: List<CanvasStroke>): List<List<CanvasStroke>> {
+    if (strokes.isEmpty()) return emptyList()
+    val spans = strokes.map { lineSpan(listOf(it.stroke)) }
+    return StrokeLineGrouper.groupIntoLines(spans).map { indices -> indices.map(strokes::get) }
+}
+
 private fun Stroke.verticalSpan(): StrokeLineGrouper.Span = lineSpan(listOf(this))
 
 /** Vertical extent (min/max Y) of an entire handwriting line. Touches ink natives. */

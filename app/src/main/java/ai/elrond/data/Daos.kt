@@ -77,6 +77,14 @@ interface NotePageDao {
     @Query("UPDATE note_pages SET customTitle = :title, modifiedAt = :modifiedAt WHERE id = :id")
     suspend fun rename(id: String, title: String?, modifiedAt: Long)
 
+    /** Cached page text used by the FA-24b extraction skip-gate. */
+    @Query("SELECT contextSummary FROM note_pages WHERE id = :id")
+    suspend fun getContextSummary(id: String): String?
+
+    /** Stashes the extracted page text (skip-gate). Does not touch modifiedAt — a silent side write. */
+    @Query("UPDATE note_pages SET contextSummary = :summary WHERE id = :id")
+    suspend fun setContextSummary(id: String, summary: String)
+
     /** Toggle a page's bookmark flag (FA-20 page index). */
     @Query("UPDATE note_pages SET isBookmarked = :bookmarked WHERE id = :id")
     suspend fun setBookmarked(id: String, bookmarked: Boolean)
@@ -172,6 +180,23 @@ interface AiNoteDao {
         deleteForPage(pageId)
         insertAll(notes)
     }
+}
+
+@Dao
+interface RecognizedLineDao {
+    @Query("SELECT * FROM recognized_lines WHERE pageId = :pageId")
+    suspend fun getForPage(pageId: String): List<RecognizedLineEntity>
+
+    /** Upsert: a re-recognized line (same stroke-id key) overwrites its cached text + bounds. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(rows: List<RecognizedLineEntity>)
+
+    @Query("DELETE FROM recognized_lines WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
+
+    /** Cached text for one line key, or null on a cache miss. */
+    @Query("SELECT text FROM recognized_lines WHERE id = :id")
+    suspend fun textForId(id: String): String?
 }
 
 @Dao

@@ -362,6 +362,39 @@ data class NoteSubjectEntity(
 )
 
 /**
+ * One recognized handwriting line, cached so AI features don't re-run ML Kit on unchanged ink
+ * (FA-24b). [id] is the SHA-256 key of pageId + the line's ordered [CanvasStroke] ids (see
+ * `ai.elrond.domain.recognizedLineKey`), so any membership change (stroke added/erased, lines
+ * merged/split) yields a fresh key → automatic invalidation. [strokeIds] is the ordered,
+ * comma-joined id list the key derives from (kept for debugging/inspection). Bounds are
+ * recomputed on every save (a lasso move keeps the ids ⇒ same key ⇒ text stays, bounds refresh).
+ */
+@Entity(
+    tableName = "recognized_lines",
+    foreignKeys = [
+        ForeignKey(
+            entity = NotePageEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["pageId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("pageId")],
+)
+data class RecognizedLineEntity(
+    @PrimaryKey val id: String,
+    val pageId: String,
+    /** Ordered, comma-joined [CanvasStroke] ids forming the line. */
+    val strokeIds: String,
+    val text: String,
+    val minX: Float,
+    val minY: Float,
+    val maxX: Float,
+    val maxY: Float,
+    val recognizedAt: Long,
+)
+
+/**
  * A background-extracted TODO/calendar item awaiting the user's confirmation
  * (FA-2 confirmation flow). On "Yes" it graduates to `todo_items` / `calendar_events`;
  * either decision marks the row [dismissed] (i.e. handled) and KEEPS it, so the same item

@@ -5,6 +5,7 @@ import ai.elrond.data.CalendarRepository
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NotebookLinkRepository
 import ai.elrond.data.NoteRepository
+import ai.elrond.data.RecognitionCacheRepository
 import ai.elrond.data.SessionNotesTracker
 import ai.elrond.data.SubjectRepository
 import ai.elrond.data.SuggestionRepository
@@ -63,6 +64,12 @@ object AppModule {
     @Singleton
     fun provideTagRepository(db: ElrondDatabase): TagRepository =
         TagRepository(tagDao = db.tagDao(), notebookTagDao = db.notebookTagDao())
+
+    /** Shared recognition cache (FA-24b) — the worker and the ViewModel must see one instance. */
+    @Provides
+    @Singleton
+    fun provideRecognitionCacheRepository(db: ElrondDatabase): RecognitionCacheRepository =
+        RecognitionCacheRepository(dao = db.recognizedLineDao())
 
     /** Process-wide in-memory session-notes holder (FA-16); cleared on background by MainActivity. */
     @Provides
