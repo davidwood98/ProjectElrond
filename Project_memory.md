@@ -1831,6 +1831,71 @@ build on the WSL SDK. All five items are **device-verify pending** (re-test list
   the header no longer inflating when tags overflow (the original repro: enough/long tags to
   engage scroll, both orientations), untagging the last notebook removes the tag from the picker.
 
+## FA-24b — AI semantic layer: persistent recognition cache (2026-07-17)
+
+Feature batch on branch **FA-24** (spec: `.claude/Feature prompts/FA24b_ai-semantic-layer-design.md`;
+plan: `~/.claude/plans/wondrous-jingling-puppy.md`), **four commits, one per stage** (planned in
+Fable 5, executed in Opus 4.8). **DB is now v19** (`MIGRATION_18_19`). **517 app + 28 aibackend
+JVM/Robolectric tests pass** (0 failures; was 493+24 pre-batch — note the pre-FA-24b app baseline
+had grown to 512). `:app:assembleDebug` builds on the WSL Linux SDK. **Device test #1 (v18→v19
+migration) passed on the Galaxy Tab S (SM-X510, 2026-07-17)** — clean upgrade, no crash, extraction
+worker ran SUCCESS. **Skip-gate confirmed by unit tests** (device logs don't surface AI calls, so it
+isn't observable on-device — user accepted unit-test coverage). **Final read-path device pass (dense
+page: command/prefix/gesture `/Q` second-query latency + identical answers) is pending.**
+
+The problem (audit 2026-07-01, FA-22): every AI feature re-derived page text from raw ink — the
+extraction worker re-recognized **every line** on every autosave, and every `/Q` re-recognized all
+context lines pre-network. Nothing was reused. FA-24b adds a persistent, incrementally-invalidated
+recognition cache so context assembly is free, keeping `/Q` full context while cutting ML Kit calls,
+and unblocks **FA-24 Phase 3** (AI tag/link suggestions, skipped by design pending this) + future
+handwriting search.
+
+- **Line identity = SHA-256 of `pageId` + the line's ORDERED `CanvasStroke.id`s** (`domain/RecognitionKeys.kt`:
+  `recognizedLineKey` + pure `recognitionCacheDiff`). Ink `Stroke`s have no value identity and are
+  rebuilt on transform, but `CanvasStroke.id` is stable — so any membership change (stroke
+  added/erased, lines merged/split) yields a new key ⇒ automatic invalidation with no line-tracking;
+  a lasso move keeps the ids ⇒ same key ⇒ cached text reused, only bounds refresh. **Note:** the read
+  paths drop ids to raw `Stroke` before grouping, so each handler rebuilds an
+  `IdentityHashMap<Stroke,String>` from `_finishedStrokes.value` to recover ids (the `handlePrefixTrigger`
+  precedent, now used in all four handlers).
+- **Stage 1 — table + cache-fed extraction + skip-gate (`976dfc4`).** `recognized_lines` (v19,
+  create-only, FK→`note_pages` CASCADE, `index_recognized_lines_pageId`) via `RecognizedLineEntity`/
+  `RecognizedLineDao`/mapper/`RecognitionCacheRepository` (`@Singleton` — the worker and VM use
+  separate recognizer instances but must share one cache). `data/LineRecognition.buildRecognizedLinesCached`
+  does hit-reuse / miss-recognize (usually just the line being written) / evict-stale, always writing
+  fresh bounds; `ExtractionWorker` routes its `recognizeLines` seam through it (now passes full
+  `CanvasStroke`s, not `.map { it.stroke }`). **Skip-gate** in the pure `AutoExtractionRunner` via
+  `loadLastText`/`saveLastText` seams: `fullText == loadLastText(pageId)` ⇒ skip **both** Anthropic
+  calls; wired to `note_pages.contextSummary` (a literal uncurated copy of the assembled page text —
+  string equality is the gate, no hash column; also seeds future search). **First run is `null`,
+  which never equals a non-blank `fullText`, so a page always extracts once** (explicit test).
+- **Stages 2-4 — cache-fed read paths in `CanvasViewModel` (`ea2e7fa`, `8b2948f`, `e8fc2be`).** A
+  nullable `recognitionCache: RecognitionCache? = null` seam (read-only interface `textForLine(pageId,
+  orderedStrokeIds)`; `RecognitionCacheRepository` implements it) + a private `recognizeCached(line,
+  idByStroke)` helper (cache hit when pageId present + all ids resolve, else live `recognizer.recognize`).
+  Stage 2: `handleCommandTrigger` context. Stage 3: `handlePrefixTrigger` standalone-trigger check
+  against cached text (reusing `firstStandaloneTriggerCandidate(listOf(cachedText), trigger)` — no new
+  detector) + `runPrefixQuery` context. Stage 4: `handleGestureTrigger` enclosed-line question.
+  **The trigger/question line is ALWAYS recognized live** (a cache can never make the AI answer a
+  stale question); only page context reads the cache. The VM **never writes** the cache (the worker
+  owns writes), so a cold cache degrades gracefully to live recognition — the `= null` default kept
+  all ~40 existing VM tests unchanged.
+- **Tests:** `RecognitionKeysTest` (8: determinism, hex format, order/membership sensitivity,
+  per-page uniqueness, diff), `BuildRecognizedLinesCachedTest` (sync hit/miss/evict + empty-page
+  clears cache), `AutoExtractionRunnerTest` (+skip-gate: unchanged⇒zero calls, null-first-run⇒always
+  extracts), `ElrondMigrationTest` (chain → **v19** + per-migration table/index/cascade),
+  `CanvasViewModelSemanticCacheTest` (command/prefix/gesture read from cache without recognizing
+  context; cold-cache falls back to live).
+- **Deliberately unchanged:** `/Q` full-context prompt envelope; the system-prompt `cache_control`;
+  recognition stays on-device ML Kit (nothing new to the network); the `groupStrokesIntoLines(List<Stroke>)`
+  seam (a new id-preserving `groupCanvasStrokesIntoLines` was added alongside).
+- **Known (pre-existing, NOT touched):** `./gradlew lint` fails on 7 FA-23-era `RestrictedApi` errors
+  in `ui/InkTextures.kt` + `data/StrokeSerialization.kt` — unrelated to FA-24b (last modified in FA-23,
+  in no FA-24b commit); FA-24b's own files add zero lint findings. Worth a separate cleanup pass.
+- **Process note:** during device work the WSL `sdk.dir` swap (see Environment Notes) must be
+  restored to the Windows path after each build; the Opus executors swapped it per build and I
+  re-verified/restored it after each stage.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
@@ -1914,7 +1979,7 @@ discipline.)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v18** — most recently `tags` + `notebook_tags` in `MIGRATION_17_18` and `notebook_links` in `MIGRATION_16_17` (FA-24); before that `strokes.inputs` became a raw binary BLOB in `MIGRATION_15_16` (FA-22 storage-format finish); `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v19** — most recently the `recognized_lines` recognition cache in `MIGRATION_18_19` (FA-24b); `tags` + `notebook_tags` in `MIGRATION_17_18` and `notebook_links` in `MIGRATION_16_17` (FA-24); before that `strokes.inputs` became a raw binary BLOB in `MIGRATION_15_16` (FA-22 storage-format finish); `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
 - **Outlook Azure app registration — required final step before release.** FA-11's Outlook integration is fully coded but ships **inert** until an Azure app is registered and `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` are set (see *Outlook / Microsoft Graph OAuth setup*). This is intentionally deferred to a final pre-release task; until done, Outlook stays NotConfigured and the calendar falls back to the device provider (not a bug). Pairs with the Anthropic-key release blocker above.
