@@ -67,6 +67,8 @@ import ai.elrond.data.CalendarEvent
 import ai.elrond.data.CalendarRepository
 import ai.elrond.data.NotebookLinkRepository
 import ai.elrond.data.NoteRepository
+import ai.elrond.data.RecognitionCache
+import ai.elrond.data.RecognitionCacheRepository
 import ai.elrond.data.SessionNotesTracker
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
@@ -145,6 +147,12 @@ class CanvasViewModel(
     private val pageId: String? = null,
     /** Enqueues background auto-extraction for [pageId] after a save (null in tests / when off). */
     private val enqueueExtraction: ((pageId: String) -> Unit)? = null,
+    /**
+     * Read-only recognition cache (FA-24b): `/Q` context lines are read from here instead of
+     * re-recognized live. Read-only — the background worker owns writes, so a cold cache degrades
+     * gracefully to live recognition. Null in tests that don't exercise the cache.
+     */
+    private val recognitionCache: RecognitionCache? = null,
     triggerCommandFlow: Flow<String>? = null,
     /** Picks which lines above a bare trigger form a multi-line question (default: span-based). */
     private val questionLineSelector: (List<List<Stroke>>, Int) -> List<Int> = ::selectQuestionLines,
@@ -258,6 +266,7 @@ class CanvasViewModel(
         calendarRepository: CalendarRepository,
         suggestionRepository: SuggestionRepository,
         enqueueExtraction: @JvmSuppressWildcards (String) -> Unit,
+        recognitionCache: RecognitionCacheRepository,
         settings: SettingsRepository,
         thumbnailCache: ThumbnailCache,
         sessionNotesTracker: SessionNotesTracker,
@@ -272,6 +281,7 @@ class CanvasViewModel(
         suggestionRepository = suggestionRepository,
         pageId = savedStateHandle.get<String>("pageId"),
         enqueueExtraction = enqueueExtraction,
+        recognitionCache = recognitionCache,
         strokeSimplifier = StrokeTransforms::simplify,
         recognizableInk = ::isRecognizableInk,
         strokeSegmenter = StrokeTransforms::segment,
@@ -2476,6 +2486,25 @@ class CanvasViewModel(
     }
 
     /**
+     * Cache-first line recognition for `/Q` **context** (FA-24b): recovers the line's ordered
+     * [CanvasStroke] ids via [idByStroke] and reads the persisted recognition cache; on any miss
+     * (cold cache, no page id, or an unresolved id) falls back to live [HandwritingRecognizer]
+     * recognition — today's behaviour. Read-only: never writes the cache. Never used for the
+     * question or trigger line, which stay live so an answer is never stale.
+     */
+    private suspend fun recognizeCached(
+        line: List<Stroke>,
+        idByStroke: java.util.IdentityHashMap<Stroke, String>,
+    ): String {
+        val recognizer = recognizer ?: return ""
+        val ids = line.map { idByStroke[it] }
+        if (pageId != null && ids.all { it != null }) {
+            recognitionCache?.textForLine(pageId, ids.filterNotNull())?.let { return it }
+        }
+        return recognizer.recognize(line).getOrNull()?.trim().orEmpty()
+    }
+
+    /**
      * Written-command activation (`/Q`). Evaluates the top recognition candidates of the
      * last-drawn line so a `/Q` the best guess garbled still fires, then assembles the
      * question (inline, or the multi-line block above a bare trigger) and page context.
@@ -2505,11 +2534,15 @@ class CanvasViewModel(
                 .joinToString(" ")
                 .ifBlank { null }
 
-        // Everything else on the page goes along as context.
+        // Everything else on the page goes along as context — read from the recognition cache
+        // (FA-24b) via each line's CanvasStroke ids, falling back to live recognition on a miss.
+        val idByStroke = java.util.IdentityHashMap<Stroke, String>()
+        _finishedStrokes.value.forEach { idByStroke[it.stroke] = it.id }
         val excluded = questionIndices.toMutableSet().apply { add(triggerIndex) }
         val context = lines.indices
             .filter { it !in excluded }
-            .mapNotNull { recognizer.recognize(lines[it]).getOrNull()?.trim()?.ifEmpty { null } }
+            .map { recognizeCached(lines[it], idByStroke) }
+            .filter { it.isNotEmpty() }
             .joinToString("\n")
 
         val effectiveQuestion = question?.ifBlank { null } ?: context.ifBlank { null } ?: return
