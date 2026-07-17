@@ -2570,8 +2570,13 @@ class CanvasViewModel(
             .filter(recognizableInk)
         if (enclosed.isEmpty()) return
 
+        // The enclosed lines are the question — read from the recognition cache (FA-24b) via each
+        // line's CanvasStroke ids, falling back to live recognition on a miss.
+        val idByStroke = java.util.IdentityHashMap<Stroke, String>()
+        _finishedStrokes.value.forEach { idByStroke[it.stroke] = it.id }
         val question = lineSplitter(enclosed)
-            .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
+            .map { recognizeCached(it, idByStroke) }
+            .filter { it.isNotEmpty() }
             .joinToString(" ")
             .ifBlank { null } ?: return
 

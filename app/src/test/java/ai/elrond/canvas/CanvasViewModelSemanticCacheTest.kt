@@ -3,6 +3,7 @@ package ai.elrond.canvas
 import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.RecognitionCache
 import ai.elrond.data.RecognitionCandidate
+import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.domain.PrefixTriggerState
 import ai.elrond.domain.TriggerMode
 import ai.elrond.presentation.CanvasViewModel
@@ -243,4 +244,45 @@ class CanvasViewModelSemanticCacheTest {
         assertTrue("the question was recognized live", prompt in recognizer.recognizedStrokes)
         assertFalse("the context line was not recognized live", notes in recognizer.recognizedStrokes)
     }
+
+    // ── Gesture (lasso) activation (TriggerMode.GESTURE) ────────────────────────────────────────
+
+    @Test
+    fun `gesture query builds the question from the cache without recognizing the enclosed line`() =
+        runTest(dispatcher) {
+            val content = mockk<Stroke>() // the enclosed line — cached
+            val lasso = mockk<Stroke>() // the loop gesture itself
+            val polygon = listOf(
+                GestureTriggerDetector.Point(0f, 0f),
+                GestureTriggerDetector.Point(100f, 0f),
+                GestureTriggerDetector.Point(100f, 100f),
+                GestureTriggerDetector.Point(0f, 100f),
+            )
+            // Would return live text if the enclosed stroke ever reached recognition — it must not.
+            val recognizer = RecordingRecognizer { "LIVE lasso text" }
+            val cache = KeyedFakeCache()
+            val provider = FakeProvider("an answer")
+            val vm = CanvasViewModel(
+                recognizer = recognizer,
+                aiProvider = provider,
+                lineSplitter = { listOf(it) }, // the enclosed strokes form one line
+                notePlacer = fixedPlacement,
+                pageId = "page-1",
+                recognitionCache = cache,
+                lassoOf = { stroke -> polygon.takeIf { stroke === lasso } },
+                centroidOf = { GestureTriggerDetector.Point(50f, 50f) }, // inside the polygon
+                triggerModeFlow = flowOf(TriggerMode.GESTURE),
+            )
+
+            vm.onStrokesFinished(listOf(content, lasso))
+            cache.byIds[listOf(vm.idOf(content))] = "cached lasso question"
+            advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+            runCurrent()
+
+            val sent = provider.prompts.single()
+            assertTrue("gesture question comes from the cache", sent.contains("cached lasso question"))
+            assertFalse("the enclosed line was not re-recognized live", sent.contains("LIVE lasso text"))
+            assertFalse("the enclosed line must not hit the recognizer", content in recognizer.recognizedStrokes)
+            assertTrue("the enclosed line was looked up in the cache", cache.lookups.isNotEmpty())
+        }
 }
