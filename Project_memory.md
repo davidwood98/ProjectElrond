@@ -1843,6 +1843,30 @@ worker ran SUCCESS. **Skip-gate confirmed by unit tests** (device logs don't sur
 isn't observable on-device — user accepted unit-test coverage). **Final read-path device pass (dense
 page: command/prefix/gesture `/Q` second-query latency + identical answers) is pending.**
 
+### FA-24b device-found bug: `/Q` falsely says "Already on your to-do list" (fixed 2026-07-17)
+
+Device pass on the Galaxy Tab S (SM-X510, logcat `samsung-SM-X510-Android-16_2026-07-17_231614`)
+surfaced a real bug: `/Q` popped **"Already on your to-do list"** while the to-do list was empty.
+Root cause — `CanvasViewModel.offerExtraction` de-duped extracted tasks against
+`SuggestionRepository.existingContents(pageId)`, which returns **every** suggestion row for the page
+(`PendingSuggestionDao.contentsForPage` has no `dismissed` filter — pending *and* dismissed). Once the
+FA-2/FA-24b background `ExtractionWorker` (running with confirmation on → `confirmTodo=true`) had added
+tasks as **pending on-canvas suggestions** (never onto the to-do list), a manual `/Q` found them all
+"existing" → `ExtractionOffer.ALL_EXISTING` → the false toast. The dedup decision itself isn't logged
+(only stroke persistence + `/Q` cache HIT/MISS emit `ElrondPerf`), so the logcat only confirmed the
+worker ran repeatedly; the code path was decisive.
+
+Fix (commit `decd96c`): `/Q` now de-dups only against items the user has actually actioned — the
+to-do list **plus dismissed/handled suggestions** (permanently ignored, per the user's "dismissed
+should never re-trigger the same line" rule). A still-**pending** background suggestion is re-offered
+in the confirmation sheet, and its stale popup is **claimed** (dismissed) so the same task can't be
+added twice (popup + sheet). New: `PendingSuggestionDao.dismissedContentsForPage` /
+`dismissPendingTodos`; `SuggestionRepository.dismissedContents` / `claimPendingTodos`.
+`existingContents(pageId)` (all-inclusive) is now only used by the background runner's typed variant +
+its own tests — left in place as the coherent counterpart. Tests: `CanvasViewModelExtractionTest`
+(dismissed stays ignored; pending re-offered + popup claimed), `SuggestionRepositoryTest`
+(dismissed-only contents; `claimPendingTodos` removes the matching popup). No schema change (still v19).
+
 The problem (audit 2026-07-01, FA-22): every AI feature re-derived page text from raw ink — the
 extraction worker re-recognized **every line** on every autosave, and every `/Q` re-recognized all
 context lines pre-network. Nothing was reused. FA-24b adds a persistent, incrementally-invalidated
