@@ -1882,6 +1882,21 @@ popup (double-add guard). Removed the now-unused `dismissedContents`/`dismissedC
 poisoned test page needs no cleanup — todos-only dedup ignores the stale dismissed rows. Toast
 "Already on your to-do list" is now always literally true.
 
+**Follow-up 2 (commit `53bd310`, device pass 3 — Test B3/C2): `8ab5623` over-corrected.** Todos-only
+dedup re-offered lines the user had explicitly **rejected** (B3 showed the sheet for a dismissed
+"book dentist appointment"; C2 kept re-asking). Correct rule distinguishes **undecided** from
+**decided**: a still-pending suggestion → `/Q` re-offers it; an accepted/rejected (dismissed) one →
+stays ignored even under `/Q`. `offerExtraction` now de-dups against the to-do list **+ the page's
+dismissed (decided) suggestions** (`dismissedContents`). The poisoning is killed at the source:
+`dismissed = 1` is now set **only by a genuine accept/reject** — `offerExtraction` no longer records
+offered items as handled (removed the offer-time `recordHandled`), and `claimPendingTodos` **DELETEs**
+the matching pending popup (double-add guard) instead of dismissing it, so an offer/claim never lands
+in the decided set. New DAO: `dismissedContentsForPage` (dismissed=1) + `deletePendingTodos` (replaces
+the dismiss-based variant). `recordHandled` kept on the repo but no longer called from the offer path.
+This is the model the user asked for across both device rounds: undecided lines re-offer, rejected
+lines stay silent. (Cosmetic note: a rejected-but-not-listed line still shows the "Already on your
+to-do list" toast — behavior is right, wording is imperfect; deferred.)
+
 The problem (audit 2026-07-01, FA-22): every AI feature re-derived page text from raw ink — the
 extraction worker re-recognized **every line** on every autosave, and every `/Q` re-recognized all
 context lines pre-network. Nothing was reused. FA-24b adds a persistent, incrementally-invalidated
