@@ -25,6 +25,7 @@ import ai.elrond.domain.FingerGesture
 import ai.elrond.domain.FingerGestureAction
 import ai.elrond.domain.StylusHoldTool
 import ai.elrond.BuildConfig
+import android.util.Log
 import ai.elrond.domain.AiInkNote
 import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.data.HandwritingRecognizer
@@ -2499,8 +2500,13 @@ class CanvasViewModel(
         val recognizer = recognizer ?: return ""
         val ids = line.map { idByStroke[it] }
         if (pageId != null && ids.all { it != null }) {
-            recognitionCache?.textForLine(pageId, ids.filterNotNull())?.let { return it }
+            recognitionCache?.textForLine(pageId, ids.filterNotNull())?.let {
+                // FA-24b observability (debug only, no note content): filter `adb logcat -s ElrondPerf`.
+                if (BuildConfig.DEBUG) Log.d("ElrondPerf", "/Q context line: cache HIT")
+                return it
+            }
         }
+        if (BuildConfig.DEBUG) Log.d("ElrondPerf", "/Q context line: cache MISS -> live recognize")
         return recognizer.recognize(line).getOrNull()?.trim().orEmpty()
     }
 
@@ -2929,15 +2935,24 @@ class CanvasViewModel(
         val extracted = extractor.extract(pageText, referenceDate).getOrNull().orEmpty()
         if (extracted.isEmpty()) return ExtractionOffer.NONE
 
-        // Already on the to-do list, or already suggested (incl. background) for this page.
+        // De-dup only against items the user has already actioned: the to-do list, or suggestions
+        // already handled (dismissed) for this page — those stay permanently ignored. A background
+        // suggestion that is still *pending* (undecided) is NOT treated as existing, so an explicit
+        // `/Q` re-offers it instead of falsely reporting it as already on the to-do list.
         val existing = buildSet {
             addAll(runCatching { todoRepository.existingContents() }.getOrDefault(emptySet()))
             suggestionRepository?.let {
-                addAll(runCatching { it.existingContents(pageId) }.getOrDefault(emptySet()))
+                addAll(runCatching { it.dismissedContents(pageId) }.getOrDefault(emptySet()))
             }
         }
         val newTasks = extracted.filter { it.content.trim().lowercase() !in existing }
         if (newTasks.isEmpty()) return ExtractionOffer.ALL_EXISTING // found, but all already captured
+
+        // Re-offering items that may still have on-canvas popups: claim (dismiss) those pending
+        // suggestions so the user can't add the same task twice — once via the popup, once here.
+        suggestionRepository?.let {
+            runCatching { it.claimPendingTodos(pageId, newTasks.map { t -> t.content.trim().lowercase() }) }
+        }
 
         val repoTasks = newTasks.map { task ->
             TodoRepository.ExtractedTask(

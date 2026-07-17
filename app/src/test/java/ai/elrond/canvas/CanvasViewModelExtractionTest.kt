@@ -174,11 +174,11 @@ class CanvasViewModelExtractionTest {
         }
 
     @Test
-    fun `a task already suggested for the page is not re-offered by manual extraction`() =
+    fun `a task already dismissed for the page is not re-offered by manual extraction`() =
         runTest(dispatcher) {
             val suggestionRepository = mockk<SuggestionRepository>(relaxed = true)
-            // Not on the to-do list yet, but already suggested for this page (e.g. by the background run).
-            coEvery { suggestionRepository.existingContents("page-1") } returns setOf("buy milk")
+            // Not on the to-do list, but already handled (dismissed) for this page — stays ignored.
+            coEvery { suggestionRepository.dismissedContents("page-1") } returns setOf("buy milk")
             val vm = viewModel(listOf(ExtractedTask("Buy milk")), suggestionRepository)
 
             vm.onStrokesFinished(listOf(mockk<Stroke>()))
@@ -188,6 +188,23 @@ class CanvasViewModelExtractionTest {
             assertNull(vm.pendingExtraction.value)
             assertEquals(CanvasViewModel.ALREADY_EXISTS_MESSAGE, vm.transientMessage.value)
             coVerify(exactly = 0) { suggestionRepository.recordHandled(any()) }
+        }
+
+    @Test
+    fun `a still-pending background suggestion is re-offered by manual extraction and its popup claimed`() =
+        runTest(dispatcher) {
+            val suggestionRepository = mockk<SuggestionRepository>(relaxed = true)
+            // Suggested by the background run but still undecided (not dismissed): /Q must re-offer it.
+            coEvery { suggestionRepository.dismissedContents("page-1") } returns emptySet()
+            val vm = viewModel(listOf(ExtractedTask("Buy milk")), suggestionRepository)
+
+            vm.onStrokesFinished(listOf(mockk<Stroke>()))
+            advanceUntilIdle()
+
+            // Re-offered in the confirmation sheet, not swallowed as "already on your to-do list".
+            assertEquals(listOf("Buy milk"), vm.pendingExtraction.value?.tasks)
+            // The stale on-canvas popup for the same item is claimed so it can't be added twice.
+            coVerify { suggestionRepository.claimPendingTodos("page-1", match { it.contains("buy milk") }) }
         }
 
     @Test

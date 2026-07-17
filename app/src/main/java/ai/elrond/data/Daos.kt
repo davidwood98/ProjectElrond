@@ -325,6 +325,25 @@ interface PendingSuggestionDao {
     @Query("SELECT content FROM pending_suggestions WHERE pageId = :pageId")
     suspend fun contentsForPage(pageId: String): List<String>
 
+    /**
+     * Contents of the already-handled (dismissed) suggestions for a page — a manual `/Q`
+     * de-dups against these (permanently ignored) but NOT against still-pending suggestions,
+     * so an undecided background suggestion can still be re-offered by `/Q`.
+     */
+    @Query("SELECT content FROM pending_suggestions WHERE pageId = :pageId AND dismissed = 1")
+    suspend fun dismissedContentsForPage(pageId: String): List<String>
+
+    /**
+     * Dismiss the still-pending TODO suggestions for a page whose normalized content matches
+     * [contents] — a manual `/Q` claims the on-canvas popups for items it is re-offering, so the
+     * same item can't be added twice (once via the popup, once via the `/Q` sheet).
+     */
+    @Query(
+        "UPDATE pending_suggestions SET dismissed = 1 WHERE pageId = :pageId AND dismissed = 0 " +
+            "AND type = 'TODO' AND lower(trim(content)) IN (:contents)",
+    )
+    suspend fun dismissPendingTodos(pageId: String, contents: List<String>)
+
     /** Type + content for every suggestion on a page (incl. dismissed) — type-namespaced de-dup. */
     @Query("SELECT type, content FROM pending_suggestions WHERE pageId = :pageId")
     suspend fun typedContentsForPage(pageId: String): List<PendingTypeContent>

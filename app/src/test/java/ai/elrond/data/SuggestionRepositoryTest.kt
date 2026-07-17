@@ -72,6 +72,30 @@ class SuggestionRepositoryTest {
     }
 
     @Test
+    fun `dismissedContents excludes still-pending suggestions`() = runTest {
+        repo.add(listOf(todo("Buy milk"), todo("Call bank")))
+        val bankId = repo.observePending("p1").first().single { it.content == "Call bank" }.id
+        repo.dismiss(bankId)
+
+        // Pending "Buy milk" is NOT reported as dismissed; handled "Call bank" is.
+        assertEquals(setOf("call bank"), repo.dismissedContents("p1"))
+        // The all-inclusive set still holds both (background de-dup).
+        assertEquals(setOf("buy milk", "call bank"), repo.existingContents("p1"))
+    }
+
+    @Test
+    fun `claimPendingTodos dismisses the matching pending popup so it cannot double-add`() = runTest {
+        repo.add(listOf(todo("Buy milk"), todo("Call bank")))
+
+        repo.claimPendingTodos("p1", listOf("buy milk"))
+
+        // The claimed item leaves the popup queue; the other stays pending.
+        assertEquals(setOf("Call bank"), repo.observePending("p1").first().map { it.content }.toSet())
+        // Claimed → now counted as dismissed (permanently handled).
+        assertTrue("buy milk" in repo.dismissedContents("p1"))
+    }
+
+    @Test
     fun `recordHandled de-dups future runs without ever showing in the popup`() = runTest {
         // The manual /Q path claims the items it proposed so the background runner can't re-add.
         repo.recordHandled(listOf(todo("Buy milk")))

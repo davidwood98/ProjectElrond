@@ -27,6 +27,22 @@ class SuggestionRepository(
     suspend fun existingContents(pageId: String): Set<String> =
         dao.contentsForPage(pageId).map { it.trim().lowercase() }.toSet()
 
+    /**
+     * Normalized contents of the already-handled (dismissed) suggestions for a page. A manual
+     * `/Q` de-dups against these — permanently ignored — but re-offers still-pending ones.
+     */
+    suspend fun dismissedContents(pageId: String): Set<String> =
+        dao.dismissedContentsForPage(pageId).map { it.trim().lowercase() }.toSet()
+
+    /**
+     * Claims the pending TODO popups for [contents] (already-normalized) by dismissing them, so a
+     * manual `/Q` re-offering the same items via its sheet can't lead to a double-add.
+     */
+    suspend fun claimPendingTodos(pageId: String, contents: Collection<String>) {
+        if (contents.isEmpty()) return
+        dao.dismissPendingTodos(pageId, contents.toList())
+    }
+
     /** Type-namespaced keys ("TODO:content" / "EVENT:content") already suggested for this page. */
     suspend fun existingTypedContents(pageId: String): Set<String> =
         dao.typedContentsForPage(pageId).map { "${it.type}:${it.content.trim().lowercase()}" }.toSet()
