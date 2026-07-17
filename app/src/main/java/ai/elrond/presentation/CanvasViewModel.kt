@@ -2935,21 +2935,18 @@ class CanvasViewModel(
         val extracted = extractor.extract(pageText, referenceDate).getOrNull().orEmpty()
         if (extracted.isEmpty()) return ExtractionOffer.NONE
 
-        // De-dup only against items the user has already actioned: the to-do list, or suggestions
-        // already handled (dismissed) for this page — those stay permanently ignored. A background
-        // suggestion that is still *pending* (undecided) is NOT treated as existing, so an explicit
-        // `/Q` re-offers it instead of falsely reporting it as already on the to-do list.
-        val existing = buildSet {
-            addAll(runCatching { todoRepository.existingContents() }.getOrDefault(emptySet()))
-            suggestionRepository?.let {
-                addAll(runCatching { it.dismissedContents(pageId) }.getOrDefault(emptySet()))
-            }
-        }
+        // The to-do list is the single source of truth for "already captured". An explicit /Q or
+        // lasso is authoritative: it re-offers every extracted item that isn't already on the list,
+        // regardless of any prior background suggestion for the same line (a suggestion is not the
+        // same as an added task). The background worker still de-dups its own passive popups against
+        // suggestion rows; this manual path deliberately does not, so it can never falsely report an
+        // un-added item as "already on your to-do list".
+        val existing = runCatching { todoRepository.existingContents() }.getOrDefault(emptySet())
         val newTasks = extracted.filter { it.content.trim().lowercase() !in existing }
-        if (newTasks.isEmpty()) return ExtractionOffer.ALL_EXISTING // found, but all already captured
+        if (newTasks.isEmpty()) return ExtractionOffer.ALL_EXISTING // found, but all already on the list
 
-        // Re-offering items that may still have on-canvas popups: claim (dismiss) those pending
-        // suggestions so the user can't add the same task twice — once via the popup, once here.
+        // Any of these items may still have a pending on-canvas popup from the background worker;
+        // claim (dismiss) those so the same task can't be added twice — once via the popup, once here.
         suggestionRepository?.let {
             runCatching { it.claimPendingTodos(pageId, newTasks.map { t -> t.content.trim().lowercase() }) }
         }
