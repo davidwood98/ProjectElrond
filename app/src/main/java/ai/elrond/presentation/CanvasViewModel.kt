@@ -2935,18 +2935,23 @@ class CanvasViewModel(
         val extracted = extractor.extract(pageText, referenceDate).getOrNull().orEmpty()
         if (extracted.isEmpty()) return ExtractionOffer.NONE
 
-        // The to-do list is the single source of truth for "already captured". An explicit /Q or
-        // lasso is authoritative: it re-offers every extracted item that isn't already on the list,
-        // regardless of any prior background suggestion for the same line (a suggestion is not the
-        // same as an added task). The background worker still de-dups its own passive popups against
-        // suggestion rows; this manual path deliberately does not, so it can never falsely report an
-        // un-added item as "already on your to-do list".
-        val existing = runCatching { todoRepository.existingContents() }.getOrDefault(emptySet())
+        // De-dup against what the user has actually DECIDED on: items already on the to-do list, and
+        // suggestions the user explicitly accepted/rejected (dismissed) for this page — a rejected
+        // line stays ignored even under an explicit /Q. A still-*pending* (undecided) background
+        // suggestion is NOT dedup'd, so /Q re-offers it. Crucially, an item is only ever marked
+        // dismissed by a genuine accept/reject — never merely by being offered — so an offer can't
+        // poison this set and turn later triggers into a false "already on your to-do list".
+        val existing = buildSet {
+            addAll(runCatching { todoRepository.existingContents() }.getOrDefault(emptySet()))
+            suggestionRepository?.let {
+                addAll(runCatching { it.dismissedContents(pageId) }.getOrDefault(emptySet()))
+            }
+        }
         val newTasks = extracted.filter { it.content.trim().lowercase() !in existing }
-        if (newTasks.isEmpty()) return ExtractionOffer.ALL_EXISTING // found, but all already on the list
+        if (newTasks.isEmpty()) return ExtractionOffer.ALL_EXISTING // found, but all already decided
 
         // Any of these items may still have a pending on-canvas popup from the background worker;
-        // claim (dismiss) those so the same task can't be added twice — once via the popup, once here.
+        // remove those popups so the same task can't be added twice — once via the popup, once here.
         suggestionRepository?.let {
             runCatching { it.claimPendingTodos(pageId, newTasks.map { t -> t.content.trim().lowercase() }) }
         }
@@ -2965,19 +2970,9 @@ class CanvasViewModel(
             tasks = repoTasks.map { it.content },
             sourcePageTitle = title,
         )
-        // Record the proposed items as handled suggestions so the background auto-extraction
-        // (which de-dupes against this page's suggestions) can't re-propose the same ones.
-        suggestionRepository?.recordHandled(
-            newTasks.map { task ->
-                PendingSuggestion(
-                    pageId = pageId,
-                    type = SuggestionType.TODO,
-                    content = task.content,
-                    x = 0f,
-                    y = 0f,
-                )
-            },
-        )
+        // NB: offered items are deliberately NOT recorded as handled here. "Handled/dismissed" must
+        // mean the user decided (accept/reject) — recording an *offer* as handled would suppress a
+        // re-offer and mislabel it "already on your to-do list" on the next trigger.
         return ExtractionOffer.NEW_ITEMS
     }
 

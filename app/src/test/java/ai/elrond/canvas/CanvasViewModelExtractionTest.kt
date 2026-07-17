@@ -12,8 +12,6 @@ import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
-import ai.elrond.domain.PendingSuggestion
-import ai.elrond.domain.SuggestionType
 import ai.elrond.domain.NotePage
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
@@ -158,28 +156,27 @@ class CanvasViewModelExtractionTest {
     }
 
     @Test
-    fun `manual extraction records handled suggestions so the background runner cannot re-add them`() =
+    fun `manual extraction does not mark offered items handled — an offer is not a decision`() =
         runTest(dispatcher) {
             val suggestionRepository = mockk<SuggestionRepository>(relaxed = true)
+            coEvery { todoRepository.existingContents() } returns emptySet()
             val vm = viewModel(listOf(ExtractedTask("Buy milk")), suggestionRepository)
 
             vm.onStrokesFinished(listOf(mockk<Stroke>()))
             advanceUntilIdle()
 
-            val slot = slot<List<PendingSuggestion>>()
-            coVerify { suggestionRepository.recordHandled(capture(slot)) }
-            assertEquals("Buy milk", slot.captured.single().content)
-            assertEquals(SuggestionType.TODO, slot.captured.single().type)
+            // Merely offering must NOT record the item as handled/dismissed — otherwise the next
+            // trigger would wrongly treat it as "already on your to-do list".
+            coVerify(exactly = 0) { suggestionRepository.recordHandled(any()) }
         }
 
     @Test
-    fun `manual extraction re-offers a background-suggested item — the to-do list is the sole dedup source`() =
+    fun `a pending (undecided) background suggestion is re-offered by manual extraction and its popup claimed`() =
         runTest(dispatcher) {
             val suggestionRepository = mockk<SuggestionRepository>(relaxed = true)
-            // Nothing on the to-do list. Whatever the suggestion state for this line (pending OR
-            // already dismissed), an explicit /Q or lasso must re-offer it — never falsely report
-            // "already on your to-do list". The to-do list is the only thing that suppresses an offer.
+            // Suggested by the background run but still undecided (dismissedContents empty): /Q re-offers.
             coEvery { todoRepository.existingContents() } returns emptySet()
+            coEvery { suggestionRepository.dismissedContents("page-1") } returns emptySet()
             val vm = viewModel(listOf(ExtractedTask("Buy milk")), suggestionRepository)
 
             vm.onStrokesFinished(listOf(mockk<Stroke>()))
@@ -187,8 +184,26 @@ class CanvasViewModelExtractionTest {
 
             assertEquals(listOf("Buy milk"), vm.pendingExtraction.value?.tasks)
             assertNull(vm.transientMessage.value) // no false "already on your to-do list"
-            // The stale on-canvas popup for the same item is claimed so it can't be added twice.
+            // The stale on-canvas popup for the same item is removed so it can't be added twice.
             coVerify { suggestionRepository.claimPendingTodos("page-1", match { it.contains("buy milk") }) }
+        }
+
+    @Test
+    fun `a rejected suggestion is not re-offered by manual extraction`() =
+        runTest(dispatcher) {
+            val suggestionRepository = mockk<SuggestionRepository>(relaxed = true)
+            // The user dismissed (rejected) this line's popup — it must stay ignored even under /Q.
+            coEvery { todoRepository.existingContents() } returns emptySet()
+            coEvery { suggestionRepository.dismissedContents("page-1") } returns setOf("buy milk")
+            val vm = viewModel(listOf(ExtractedTask("Buy milk")), suggestionRepository)
+
+            vm.onStrokesFinished(listOf(mockk<Stroke>()))
+            advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+            runCurrent()
+
+            assertNull(vm.pendingExtraction.value) // no re-offer sheet
+            assertEquals(CanvasViewModel.ALREADY_EXISTS_MESSAGE, vm.transientMessage.value)
+            coVerify(exactly = 0) { suggestionRepository.claimPendingTodos(any(), any()) }
         }
 
     @Test

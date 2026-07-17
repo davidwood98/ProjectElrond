@@ -326,15 +326,25 @@ interface PendingSuggestionDao {
     suspend fun contentsForPage(pageId: String): List<String>
 
     /**
-     * Dismiss the still-pending TODO suggestions for a page whose normalized content matches
-     * [contents] — a manual `/Q` claims the on-canvas popups for items it is re-offering, so the
-     * same item can't be added twice (once via the popup, once via the `/Q` sheet).
+     * Contents of suggestions the user has *decided on* (dismissed = accepted or rejected) for a
+     * page. The manual `/Q` path de-dups against these — a rejected line stays ignored even under an
+     * explicit `/Q` — but NOT against still-pending suggestions, which `/Q` re-offers. `dismissed` is
+     * only ever set by a genuine accept/reject, so merely offering an item can't land it here.
+     */
+    @Query("SELECT content FROM pending_suggestions WHERE pageId = :pageId AND dismissed = 1")
+    suspend fun dismissedContentsForPage(pageId: String): List<String>
+
+    /**
+     * Delete the still-pending TODO popups for a page whose normalized content matches [contents] —
+     * a manual `/Q` re-offering those items removes their on-canvas popups so the same task can't be
+     * added twice (once via the popup, once via the `/Q` sheet). Deleting (not dismissing) keeps the
+     * dismissed set meaning "the user decided", never "was offered".
      */
     @Query(
-        "UPDATE pending_suggestions SET dismissed = 1 WHERE pageId = :pageId AND dismissed = 0 " +
+        "DELETE FROM pending_suggestions WHERE pageId = :pageId AND dismissed = 0 " +
             "AND type = 'TODO' AND lower(trim(content)) IN (:contents)",
     )
-    suspend fun dismissPendingTodos(pageId: String, contents: List<String>)
+    suspend fun deletePendingTodos(pageId: String, contents: List<String>)
 
     /** Type + content for every suggestion on a page (incl. dismissed) — type-namespaced de-dup. */
     @Query("SELECT type, content FROM pending_suggestions WHERE pageId = :pageId")

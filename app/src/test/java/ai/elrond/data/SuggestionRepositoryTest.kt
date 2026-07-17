@@ -72,14 +72,26 @@ class SuggestionRepositoryTest {
     }
 
     @Test
-    fun `claimPendingTodos dismisses the matching pending popup so it cannot double-add`() = runTest {
+    fun `dismissedContents reports only decided suggestions, not still-pending ones`() = runTest {
+        repo.add(listOf(todo("Buy milk"), todo("Call bank")))
+        val bankId = repo.observePending("p1").first().single { it.content == "Call bank" }.id
+        repo.dismiss(bankId) // user rejected "Call bank"
+
+        // Pending "Buy milk" is NOT reported as decided; rejected "Call bank" is.
+        assertEquals(setOf("call bank"), repo.dismissedContents("p1"))
+    }
+
+    @Test
+    fun `claimPendingTodos deletes the matching pending popup so it cannot double-add or poison dedup`() = runTest {
         repo.add(listOf(todo("Buy milk"), todo("Call bank")))
 
         repo.claimPendingTodos("p1", listOf("buy milk"))
 
-        // The claimed item leaves the popup queue (so /Q's sheet is the only way to add it); the
-        // other stays pending.
+        // The claimed item leaves the popup queue (so /Q's sheet is the only way to add it)...
         assertEquals(setOf("Call bank"), repo.observePending("p1").first().map { it.content }.toSet())
+        // ...and is fully removed — NOT counted as a decided (dismissed) item, so a later /Q re-offers it.
+        assertFalse("buy milk" in repo.existingContents("p1"))
+        assertFalse("buy milk" in repo.dismissedContents("p1"))
     }
 
     @Test

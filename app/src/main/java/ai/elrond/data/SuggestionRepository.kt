@@ -28,12 +28,21 @@ class SuggestionRepository(
         dao.contentsForPage(pageId).map { it.trim().lowercase() }.toSet()
 
     /**
-     * Claims the pending TODO popups for [contents] (already-normalized) by dismissing them, so a
-     * manual `/Q` re-offering the same items via its sheet can't lead to a double-add.
+     * Normalized contents of suggestions the user has *decided on* (dismissed = accepted or
+     * rejected) for this page. The manual `/Q` path de-dups against these so a rejected line stays
+     * ignored, but re-offers still-pending ones.
+     */
+    suspend fun dismissedContents(pageId: String): Set<String> =
+        dao.dismissedContentsForPage(pageId).map { it.trim().lowercase() }.toSet()
+
+    /**
+     * Removes the pending TODO popups for [contents] (already-normalized) so a manual `/Q`
+     * re-offering the same items via its sheet can't lead to a double-add. Deletes (not dismisses)
+     * so this never lands the item in the "decided" set that [dismissedContents] reports.
      */
     suspend fun claimPendingTodos(pageId: String, contents: Collection<String>) {
         if (contents.isEmpty()) return
-        dao.dismissPendingTodos(pageId, contents.toList())
+        dao.deletePendingTodos(pageId, contents.toList())
     }
 
     /** Type-namespaced keys ("TODO:content" / "EVENT:content") already suggested for this page. */
