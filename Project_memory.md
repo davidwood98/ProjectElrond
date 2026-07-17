@@ -1867,6 +1867,21 @@ its own tests — left in place as the coherent counterpart. Tests: `CanvasViewM
 (dismissed stays ignored; pending re-offered + popup claimed), `SuggestionRepositoryTest`
 (dismissed-only contents; `claimPendingTodos` removes the matching popup). No schema change (still v19).
 
+**Follow-up (commit `8ab5623`, device pass 2 — logcat `…235217`): `decd96c` was insufficient.**
+It de-duped `/Q` against *dismissed* suggestions, but `offerExtraction` marks offered items
+dismissed **at offer time** (`recordHandled`) and `claimPendingTodos` flips the same flag — so the
+first `/Q`/lasso **poisoned its own dedup set**, and every later trigger on the same line (the user hit
+it via **lasso**) reported "Already on your to-do list" with **no confirmation sheet**, empty list.
+Root cause: conflating "was offered/suggested" with "user actioned it". Final fix: **the to-do list is
+the sole source of truth for the manual path** — `offerExtraction` now de-dups extracted items ONLY
+against `todoRepository.existingContents()`; an explicit `/Q` or lasso re-offers anything not already
+on the list, regardless of suggestion state. The background worker keeps its own passive suggestion
+de-dup (`existingTypedContents`) unchanged; the manual path consults **no** suggestion rows, so it can
+never falsely mark an un-added item as existing. `claimPendingTodos` still dismisses a matching pending
+popup (double-add guard). Removed the now-unused `dismissedContents`/`dismissedContentsForPage`. A
+poisoned test page needs no cleanup — todos-only dedup ignores the stale dismissed rows. Toast
+"Already on your to-do list" is now always literally true.
+
 The problem (audit 2026-07-01, FA-22): every AI feature re-derived page text from raw ink — the
 extraction worker re-recognized **every line** on every autosave, and every `/Q` re-recognized all
 context lines pre-network. Nothing was reused. FA-24b adds a persistent, incrementally-invalidated
