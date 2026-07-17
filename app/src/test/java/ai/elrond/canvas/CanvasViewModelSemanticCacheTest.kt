@@ -3,6 +3,8 @@ package ai.elrond.canvas
 import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.RecognitionCache
 import ai.elrond.data.RecognitionCandidate
+import ai.elrond.domain.PrefixTriggerState
+import ai.elrond.domain.TriggerMode
 import ai.elrond.presentation.CanvasViewModel
 import ai.elrond.aibackend.AIInput
 import ai.elrond.aibackend.AIProvider
@@ -12,9 +14,12 @@ import androidx.ink.strokes.Stroke
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -84,6 +89,16 @@ class CanvasViewModelSemanticCacheTest {
         }
     }
 
+    /** Cache keyed by the exact ordered id list, so a test can cache some lines but not others. */
+    private class KeyedFakeCache : RecognitionCache {
+        val byIds = mutableMapOf<List<String>, String>()
+        val lookups = mutableListOf<List<String>>()
+        override suspend fun textForLine(pageId: String, orderedStrokeIds: List<String>): String? {
+            lookups += orderedStrokeIds
+            return byIds[orderedStrokeIds]
+        }
+    }
+
     // Page = one context line, one question line, one bare-trigger line.
     private val notesStroke = mockk<Stroke>()
     private val questionStroke = mockk<Stroke>()
@@ -147,5 +162,85 @@ class CanvasViewModelSemanticCacheTest {
         assertTrue("context degrades to live recognition on a miss", sent.contains("LIVE budget notes"))
         assertTrue("the context line hit the recognizer on the miss", notesStroke in recognizer.recognizedStrokes)
         assertTrue("the cache was still consulted first", cache.lookups.isNotEmpty())
+    }
+
+    // ── Prefix `/Q` activation (TriggerMode.PREFIX_COMMAND) ─────────────────────────────────────
+
+    /** Each stroke is its own handwriting line (so the prefix scan sees per-stroke lines). */
+    private val perStrokeLines: (List<Stroke>) -> List<List<Stroke>> = { it.map { s -> listOf(s) } }
+
+    private fun prefixViewModel(recognizer: HandwritingRecognizer, provider: AIProvider, cache: RecognitionCache) =
+        CanvasViewModel(
+            recognizer = recognizer,
+            aiProvider = provider,
+            lineSplitter = perStrokeLines,
+            notePlacer = fixedPlacement,
+            pageId = "page-1",
+            recognitionCache = cache,
+            triggerModeFlow = flowOf(TriggerMode.PREFIX_COMMAND),
+        )
+
+    /** The id the VM assigned to the [CanvasStroke] wrapping [stroke]. */
+    private fun CanvasViewModel.idOf(stroke: Stroke): String =
+        finishedStrokes.value.single { it.stroke === stroke }.id
+
+    @Test
+    fun `prefix scan detects a standalone trigger from cached text without recognizing it`() =
+        runTest(dispatcher) {
+            val trigger = mockk<Stroke>()
+            // Recognizer would return "/Q" live, but the cache must satisfy the scan first.
+            val recognizer = RecordingRecognizer { "/Q" }
+            val cache = KeyedFakeCache()
+            val vm = prefixViewModel(recognizer, FakeProvider("ok"), cache)
+
+            vm.onStrokesFinished(listOf(trigger))
+            cache.byIds[listOf(vm.idOf(trigger))] = "/Q"
+            advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+            runCurrent()
+
+            assertTrue("cached /Q enters listening", vm.prefixTriggerState.value is PrefixTriggerState.Listening)
+            assertFalse("the trigger line was not recognized live", trigger in recognizer.recognizedStrokes)
+            assertTrue("the trigger line was looked up in the cache", cache.lookups.isNotEmpty())
+        }
+
+    @Test
+    fun `prefix query builds context from the cache while the prompt stays live`() = runTest(dispatcher) {
+        val notes = mockk<Stroke>() // context line — cached
+        val trigger = mockk<Stroke>() // the standalone /Q — cached
+        val prompt = mockk<Stroke>() // the question — must be recognized live
+        val recognizer = RecordingRecognizer { strokes ->
+            when (strokes.single()) {
+                prompt -> "the question"
+                trigger -> "/Q"
+                else -> "LIVE notes" // context must never be re-recognized
+            }
+        }
+        val cache = KeyedFakeCache()
+        val provider = FakeProvider("an answer")
+        val vm = prefixViewModel(recognizer, provider, cache)
+
+        // Context line first, cached so the scan skips it.
+        vm.onStrokesFinished(listOf(notes))
+        cache.byIds[listOf(vm.idOf(notes))] = "cached notes"
+        advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+        runCurrent()
+
+        // Then the cached standalone /Q → listening.
+        vm.onStrokesFinished(listOf(trigger))
+        cache.byIds[listOf(vm.idOf(trigger))] = "/Q"
+        advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
+        runCurrent()
+        assertTrue(vm.prefixTriggerState.value is PrefixTriggerState.Listening)
+
+        // The question stroke, then the inactivity timer fires the query.
+        vm.onStrokesFinished(listOf(prompt))
+        advanceUntilIdle()
+
+        val sent = provider.prompts.single()
+        assertTrue("prompt stays live", sent.contains("Handwritten question: the question"))
+        assertTrue("context comes from the cache", sent.contains("cached notes"))
+        assertFalse("context was not re-recognized live", sent.contains("LIVE notes"))
+        assertTrue("the question was recognized live", prompt in recognizer.recognizedStrokes)
+        assertFalse("the context line was not recognized live", notes in recognizer.recognizedStrokes)
     }
 }

@@ -2613,7 +2613,20 @@ class CanvasViewModel(
             if (lines[i].size > MAX_PREFIX_TRIGGER_STROKES) continue
             val ids = lineIds(lines[i])
             if (ids.isEmpty() || ids.all { it in consumedPrefixTriggerIds }) continue
-            val candidates = recognizer.recognizeCandidates(lines[i]).getOrNull().orEmpty().map { it.text }
+            // Cache-first (FA-24b): if every stroke on the line resolves to cached text, test the
+            // trigger against that string instead of re-running ML Kit. The trigger line is content
+            // the user isn't editing at scan time, so its cached text is safe. Lines with an
+            // unresolved id, a cold cache, or no page id fall back to live candidate recognition.
+            val cachedText = if (pageId != null && ids.size == lines[i].size) {
+                recognitionCache?.textForLine(pageId, ids)
+            } else {
+                null
+            }
+            val candidates = if (cachedText != null) {
+                listOf(cachedText)
+            } else {
+                recognizer.recognizeCandidates(lines[i]).getOrNull().orEmpty().map { it.text }
+            }
             if (QueryTriggerDetector.firstStandaloneTriggerCandidate(candidates, trigger) != null) {
                 triggerIndex = i
                 break
@@ -2682,8 +2695,13 @@ class CanvasViewModel(
         val contextStrokes = _finishedStrokes.value.filterNot { it.id in excludedIds }
             .map { it.stroke }
             .filter(recognizableInk)
+        // Context reads from the recognition cache (FA-24b) via each line's CanvasStroke ids,
+        // falling back to live recognition on a miss. The prompt above stays on live recognition.
+        val idByStroke = java.util.IdentityHashMap<Stroke, String>()
+        _finishedStrokes.value.forEach { idByStroke[it.stroke] = it.id }
         val context = lineSplitter(contextStrokes)
-            .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
+            .map { recognizeCached(it, idByStroke) }
+            .filter { it.isNotEmpty() }
             .joinToString("\n")
 
         val userPrompt = if (context.isBlank()) {
