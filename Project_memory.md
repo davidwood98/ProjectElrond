@@ -1897,6 +1897,40 @@ This is the model the user asked for across both device rounds: undecided lines 
 lines stay silent. (Cosmetic note: a rejected-but-not-listed line still shows the "Already on your
 to-do list" toast — behavior is right, wording is imperfect; deferred.)
 
+**Follow-up 3 — the real feature (commit `1d4eb41`, DB v20): device round 4 broke `53bd310` too.**
+Fresh-page test ("take dog to vets"): user *tapped the suggestion sheet away* (thought = "ignore"),
+then lasso → "Already on your to-do list". Root cause: `SuggestionExtractionSheet.onDismissRequest`
+marked **every** row `dismissed=1` on tap-away, and `53bd310`'s dedup treated that as decided — so an
+*ignored* line looked *rejected*. The app had **no way to tell ignore from reject** (one flag), and
+`offerExtraction` didn't know which trigger asked. Fixed by implementing the user's full **3-state ×
+3-trigger matrix** (planned: `~/.claude/plans/frolicking-gliding-clover.md`):
+
+| state | autoextract | `/Q` | lasso |
+|---|---|---|---|
+| accepted (on to-do) | — | "Already on your to-do list" | "Already on your to-do list" |
+| ignored (tap/swipe away) | silent | re-offer | re-offer |
+| rejected (unchecked + Add) | silent | silent (falls through to answer) | re-offer (forces parse) |
+
+- **DB v20** (`MIGRATION_19_20`): `ALTER TABLE pending_suggestions ADD COLUMN rejected …`. States:
+  pending `dismissed=0`; ignored `dismissed=1,rejected=0`; rejected `dismissed=1,rejected=1`; accepted
+  = on the to-do list. Existing `dismissed=1` rows migrate to `rejected=0` (ignored) — **auto-unpoisons
+  the test device**, no manual cleanup. New `20.json` (first migration-test run failed on the missing
+  schema per `[[room-schema-merge-ordering]]`; re-ran green).
+- **Daos/Repo**: `rejectedContentsForPage` + `markRejected`; `reject()` vs `dismiss()`=ignore.
+- **CanvasViewModel**: `ExtractionTrigger{QUERY,LASSO}` threaded through `submitQuery`. `offerExtraction`
+  blocks on to-do list always, **+ rejected only when `QUERY`**; `ALL_EXISTING` (notify) only when on
+  the list, else `NONE` (silent). LASSO sites = `aiPromptSelection` + `handleGestureTrigger`; `/Q` sites
+  = command + prefix. `resolveSuggestions(accept, reject)`: checked→accept, unchecked→reject,
+  still-pending remainder→ignore (so tap-away ignores all).
+- **UI**: `SuggestionExtractionSheet` drops the "Dismiss" button; "Add selected" rejects the unchecked;
+  tap/swipe-away ignores all.
+- **Lasso** = both the loop-gesture (`handleGestureTrigger`) and the selection→AI button
+  (`aiPromptSelection`) — the deliberate override that re-parses even a rejected line.
+- Tests: trigger-matrix VM tests (incl. a real lasso via `selectByLasso`+`aiPromptSelection`),
+  reject-vs-ignore repo tests, `v19→v20` migration. **All app + aibackend JVM/Robolectric tests green.**
+- **Still deferred (cosmetic):** a rejected-but-not-listed line under `/Q` now falls through to a
+  normal answer (silent), not a toast — matches "stay silent". The accepted-line toast wording is fine.
+
 The problem (audit 2026-07-01, FA-22): every AI feature re-derived page text from raw ink — the
 extraction worker re-recognized **every line** on every autosave, and every `/Q` re-recognized all
 context lines pre-network. Nothing was reused. FA-24b adds a persistent, incrementally-invalidated
@@ -2033,7 +2067,7 @@ discipline.)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v19** — most recently the `recognized_lines` recognition cache in `MIGRATION_18_19` (FA-24b); `tags` + `notebook_tags` in `MIGRATION_17_18` and `notebook_links` in `MIGRATION_16_17` (FA-24); before that `strokes.inputs` became a raw binary BLOB in `MIGRATION_15_16` (FA-22 storage-format finish); `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v20** — most recently the `pending_suggestions.rejected` column in `MIGRATION_19_20` (FA-24b ignore-vs-reject states); the `recognized_lines` recognition cache in `MIGRATION_18_19` (FA-24b); `tags` + `notebook_tags` in `MIGRATION_17_18` and `notebook_links` in `MIGRATION_16_17` (FA-24); before that `strokes.inputs` became a raw binary BLOB in `MIGRATION_15_16` (FA-22 storage-format finish); `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
 - **Outlook Azure app registration — required final step before release.** FA-11's Outlook integration is fully coded but ships **inert** until an Azure app is registered and `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` are set (see *Outlook / Microsoft Graph OAuth setup*). This is intentionally deferred to a final pre-release task; until done, Outlook stays NotConfigured and the calendar falls back to the device provider (not a bug). Pairs with the Anthropic-key release blocker above.
