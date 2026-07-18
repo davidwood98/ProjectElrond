@@ -1930,6 +1930,41 @@ marked **every** row `dismissed=1` on tap-away, and `53bd310`'s dedup treated th
   reject-vs-ignore repo tests, `v19→v20` migration. **All app + aibackend JVM/Robolectric tests green.**
 - **Still deferred (cosmetic):** a rejected-but-not-listed line under `/Q` now falls through to a
   normal answer (silent), not a toast — matches "stay silent". The accepted-line toast wording is fine.
+- **Follow-up 4 (commit `43a29c4`):** removed the leftover "Dismiss" button from the **`/Q`/lasso**
+  confirmation sheet (`TaskExtractionSheet`) too — a *second*, distinct sheet from the background
+  `SuggestionExtractionSheet`. Both now close via tap/swipe-away only.
+
+### FA-24b `/Q` dedup saga — learnings (why it took 4 device rounds)
+
+The behavioral bug (`/Q`/lasso wrongly saying "Already on your to-do list", or re-offering rejected
+lines) was fixed four times before it stuck. The wrong turns, in order: (1) dedup against *all*
+suggestions → blocked *pending* items; (2) dedup against *dismissed-only* → but `recordHandled` at
+**offer time** + `claimPendingTodos` both set `dismissed=1`, so the first offer **poisoned its own
+dedup set**; (3) dedup against the *to-do list only* → re-offered *rejected* items; (4) dedup against a
+"decided" set → but tapping the sheet away marked everything `dismissed=1`, so *ignored* looked
+*rejected*. The fix that stuck was the 3-state × 3-trigger model in `1d4eb41` (DB v20).
+
+Learnings — apply these to any stateful suggestion/dedup feature:
+
+1. **Don't overload one boolean for distinct user intents.** "Ignored" and "rejected" needed separate
+   states from the start. Every one-flag patch broke a different case — whack-a-mole across rounds is
+   the signal that the *state model*, not the logic, is wrong. Stop patching; re-model.
+2. **"Offered" ≠ "decided."** Persisting dedup rows at *offer* time (`recordHandled`) silently poisoned
+   the set. Only write a decision when the user actually decides (accept/reject), never on display.
+3. **A persistent flag outlives the code.** Old builds' `dismissed=1` rows kept "confirming" the bug on
+   the reused test page even after the code was correct — a wasted round chasing a ghost. The migration
+   that *reinterprets* old rows (→ ignored) mattered as much as the logic fix. Stateful features need a
+   clean-slate/migration story, and "test on a fresh page with novel text" should be step one.
+4. **The UI action→state mapping IS the spec.** Behavior hinged on *how* the user expresses ignore vs
+   reject (tap-away = ignore; unchecked + "Add selected" = reject). Guessing that wrong cost a round.
+   Pin down the input-affordance mapping before coding the backend.
+5. **Elicit the full matrix early.** Once the user gave the 3×3 grid, the design was obvious. Inferring
+   requirements from single test failures for three rounds was slower than asking for the whole rule up
+   front. For behavior with multiple states × triggers, get the table first.
+6. **Device logcat won't show pure-logic decisions.** The dedup branch emitted no log (only stroke
+   persistence + `/Q` cache HIT/MISS use `ElrondPerf`), so the logcat only ever confirmed *the worker
+   ran* — the code path was the real evidence each round. Add a debug log at the decision point next
+   time, or accept that reasoning-from-code is the tool.
 
 The problem (audit 2026-07-01, FA-22): every AI feature re-derived page text from raw ink — the
 extraction worker re-recognized **every line** on every autosave, and every `/Q` re-recognized all
