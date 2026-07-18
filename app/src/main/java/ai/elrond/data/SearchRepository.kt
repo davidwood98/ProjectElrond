@@ -100,12 +100,13 @@ class SearchRepository(
     }
 
     /**
-     * How many of [lowerTokens] appear in [text] as **whole words** (FA-24c). The line is tokenised the
-     * same way the query is ([SearchQuery.tokenize]), so "is" matches the word "is" but not "consistent"
-     * or "dentist" — closing the substring-match bug. Case-insensitive.
+     * How many of [lowerTokens] match a word in [text] as a **word-start prefix** (FA-24c). The line is
+     * tokenised the same way the query is ([SearchQuery.tokenize]); a token matches when some line word
+     * *starts with* it — so "result" matches "results", while "is" matches "is"/"island" but NOT the
+     * "is" inside "consistent"/"dentist" (word-boundary, not mid-word substring). Case-insensitive.
      */
     private fun wordMatchCount(text: String, lowerTokens: List<String>): Int {
-        val lineWords = SearchQuery.tokenize(text).mapTo(HashSet()) { it.lowercase() }
-        return lowerTokens.count { it in lineWords }
+        val lineWords = SearchQuery.tokenize(text).map { it.lowercase() }
+        return lowerTokens.count { token -> lineWords.any { it.startsWith(token) } }
     }
 }

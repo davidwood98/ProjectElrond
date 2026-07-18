@@ -116,6 +116,17 @@ class SearchRepositoryTest {
     }
 
     @Test
+    fun `content matches a word-start prefix but not a mid-word substring`() = runTest {
+        notebook("nb1", "A"); page("p1", "nb1"); line("p1", "these are the results")   // 'result' -> 'results'
+        notebook("nb2", "B"); page("p2", "nb2"); line("p2", "consistent dentist")       // no word starts with 'result'
+        assertEquals(listOf("nb1"), repo.rankedNotebookIds("result", setOf("nb1", "nb2")))
+
+        // And the prior bug stays fixed: 'is' is a word-start prefix, not a mid-word substring.
+        notebook("nb3", "C"); page("p3", "nb3"); line("p3", "consistent dentist")
+        assertTrue(repo.rankedNotebookIds("is", setOf("nb3")).isEmpty())
+    }
+
+    @Test
     fun `pageHighlights ignores substring-only matches`() = runTest {
         notebook("nb1", "A"); page("p1", "nb1")
         line("p1", "David is here", top = 0f)  // whole word 'is'
