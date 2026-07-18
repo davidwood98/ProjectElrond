@@ -15,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
@@ -61,6 +62,19 @@ class TagViewModel @Inject constructor(
 
     val tags: StateFlow<List<Tag>> = tagRepository.observeTags()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * All tags ordered most-used-first (then by name) — the tag picker's existing-tags list uses this
+     * so adding a tag manually promotes the most common (FA-24d: replaces the removed Level 1
+     * frequency-fallback *suggestion*, keeping the frequency signal where it doesn't duplicate pills).
+     */
+    val tagsByFrequency: StateFlow<List<Tag>> = combine(
+        tagRepository.observeTags(),
+        tagRepository.observeNotebookTags(),
+    ) { tags, notebookTags ->
+        val counts = notebookTags.values.flatten().groupingBy { it.id }.eachCount()
+        tags.sortedWith(compareByDescending<Tag> { counts[it.id] ?: 0 }.thenBy { it.name.lowercase() })
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** notebookId → its tags; the Library grid needs every notebook's tags at once. */
     val notebookTags: StateFlow<Map<String, List<Tag>>> = tagRepository.observeNotebookTags()

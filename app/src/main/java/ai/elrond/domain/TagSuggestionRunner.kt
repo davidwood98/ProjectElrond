@@ -55,22 +55,27 @@ class TagSuggestionRunner(
         saveHash(notebookId, hash)
         if (names.isEmpty()) return 0
 
-        val existingLower = existing.map { it.trim().lowercase() }.toSet()
         val alreadySuggested = suggestionRepository.existingTagContents(notebookId)
-        val seen = mutableSetOf<String>()
+        val accepted = mutableListOf<String>() // names kept this pass, for near-dup within the batch
         val pending = names.mapNotNull { name ->
             val norm = name.trim().lowercase()
             when {
-                norm.isEmpty() || norm in existingLower || norm in alreadySuggested -> null
-                !seen.add(norm) -> null
-                else -> PendingSuggestion(
-                    pageId = anchorPageId,
-                    type = SuggestionType.TAG,
-                    content = name.trim(),
-                    x = 0f,
-                    y = 0f,
-                    notebookId = notebookId,
-                )
+                // Drop empties, exact re-suggestions, and near-duplicates of an existing tag or a
+                // name already kept this pass ("settings" vs "user settings", "revision"/"revisions").
+                norm.isEmpty() || norm in alreadySuggested -> null
+                TagMatching.nearDuplicateOfAny(name, existing) -> null
+                TagMatching.nearDuplicateOfAny(name, accepted) -> null
+                else -> {
+                    accepted += name.trim()
+                    PendingSuggestion(
+                        pageId = anchorPageId,
+                        type = SuggestionType.TAG,
+                        content = name.trim(),
+                        x = 0f,
+                        y = 0f,
+                        notebookId = notebookId,
+                    )
+                }
             }
         }
         suggestionRepository.add(pending)

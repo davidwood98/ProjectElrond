@@ -56,6 +56,23 @@ class TagSuggestionRunnerTest {
     }
 
     @Test
+    fun `near-duplicates of an existing tag are dropped`() = runTest {
+        val repo = mockk<SuggestionRepository>(relaxed = true)
+        coEvery { repo.existingTagContents("nb") } returns emptySet()
+        val added = slot<List<PendingSuggestion>>()
+        coEvery { repo.add(capture(added)) } returns Unit
+
+        runner(
+            text = "content",
+            extractor = extractorReturning("user settings", "revisions", "biology"),
+            repo = repo,
+            existingTags = listOf("settings", "revision"), // subset + plural near-dups
+        ).run("nb", "p1")
+
+        assertEquals(listOf("biology"), added.captured.map { it.content })
+    }
+
+    @Test
     fun `unchanged content skips the model call entirely`() = runTest {
         val repo = mockk<SuggestionRepository>(relaxed = true)
         var extracted = false

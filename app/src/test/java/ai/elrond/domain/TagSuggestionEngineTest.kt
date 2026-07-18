@@ -70,18 +70,16 @@ class TagSuggestionEngineTest {
     }
 
     @Test
-    fun `frequency fallback is used only when relevance signals are empty`() {
+    fun `no relevance signal yields nothing - a blank notebook is not offered the whole registry`() {
         val result = TagSuggestionEngine.suggest(
             allTags = all,
             assignedTagIds = emptySet(),
             sameSubjectTagIds = emptyList(),
             linkedTagIds = emptyList(),
-            usageCounts = mapOf("maths" to 5, "physics" to 2),
+            usageCounts = mapOf("maths" to 5, "physics" to 2), // frequency is NOT a fallback anymore
             contentWords = emptySet(),
         )
-        // Most-used first; the rest by name.
-        assertEquals("maths", result.first().id)
-        assertEquals("physics", result[1].id)
+        assertTrue(result.isEmpty())
     }
 
     @Test

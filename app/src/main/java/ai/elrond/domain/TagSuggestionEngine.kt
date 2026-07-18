@@ -8,15 +8,18 @@ package ai.elrond.domain
  * Signals, in priority order (doc FA-24d):
  *  1. **Same-Subject co-occurrence** — tags on sibling notebooks in this notebook's Subject.
  *  2. **Link-graph co-occurrence** — tags on notebooks this one links to (FA-24a `notebook_links`).
- *  4. **Content-word match** — an existing tag's name appears as a whole word in the notebook's
- *     cached recognised text (FA-24b `recognized_lines`).
- *  3. **Frequency fallback** — most-used tags across the whole app, used ONLY when the relevance
- *     signals above return nothing (an unfiled, unlinked, contentless notebook). Ordered after the
- *     relevance signals precisely because it is the fallback, per the doc's own description.
+ *  3. **Content/title-word match** — an existing tag's name appears as a whole word in the notebook's
+ *     cached recognised text (FA-24b `recognized_lines`) or its title.
+ *
+ * **Relevance-only (FA-24d device feedback):** the original "frequency fallback" (most-used tags when
+ * the signals above were empty) was removed — on a blank, unfiled, untitled, empty notebook it just
+ * dumped the whole registry, duplicating the picker's tag list. A notebook with no identity now gets
+ * NO Level 1 suggestions; frequency instead orders the picker's *existing*-tags list (see
+ * `TagViewModel.tagsByFrequency`). [usageCounts] survives only as a deterministic tie-break.
  *
  * Within a co-occurrence tier, candidates are ordered by how often they co-occur (the repeat count
- * in the id list), then by global [usageCounts], then name — all deterministic. Already-assigned
- * tags are never suggested. The result is de-duplicated across tiers and capped at [limit].
+ * in the id list), then by global [usageCounts], then name. Already-assigned tags are never
+ * suggested. The result is de-duplicated across tiers and capped at [limit].
  */
 object TagSuggestionEngine {
 
@@ -37,12 +40,7 @@ object TagSuggestionEngine {
         relevance += rankByCoOccurrence(linkedTagIds, usageCounts, byId, assignedTagIds)
         relevance += contentMatches(allTags, assignedTagIds, usageCounts, contentWords)
 
-        val ordered = if (relevance.isEmpty()) {
-            frequencyFallback(allTags, assignedTagIds, usageCounts)
-        } else {
-            relevance.toList()
-        }
-        return ordered.mapNotNull { byId[it] }.take(limit)
+        return relevance.toList().mapNotNull { byId[it] }.take(limit)
     }
 
     /** Candidate ids from a co-occurrence list, ranked by co-occurrence count → usage → name. */
@@ -76,23 +74,9 @@ object TagSuggestionEngine {
         ).map { it.id }
     }
 
-    private fun frequencyFallback(
-        allTags: List<Tag>,
-        assignedTagIds: Set<String>,
-        usageCounts: Map<String, Int>,
-    ): List<String> =
-        allTags.filter { it.id !in assignedTagIds }
-            .sortedWith(
-                compareByDescending<Tag> { usageCounts[it.id] ?: 0 }.thenBy { it.name.lowercase() },
-            ).map { it.id }
-
     /** Lowercased word tokens of a tag name (a multi-word tag matches only if all its words appear). */
-    private fun nameTokens(name: String): Set<String> =
-        name.lowercase().split(NON_WORD).filter { it.isNotBlank() }.toSet()
+    private fun nameTokens(name: String): Set<String> = TagMatching.words(name)
 
-    private val NON_WORD = Regex("[^\\p{L}\\p{N}]+")
-
-    /** Whole-word tokens of recognised text, for [contentWords]. Mirrors the tag-name tokeniser. */
-    fun contentWordsOf(text: String): Set<String> =
-        text.lowercase().split(NON_WORD).filter { it.isNotBlank() }.toSet()
+    /** Whole-word tokens of recognised text (+ title), for [contentWords]. */
+    fun contentWordsOf(text: String): Set<String> = TagMatching.words(text)
 }

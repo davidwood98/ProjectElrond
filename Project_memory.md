@@ -2253,6 +2253,43 @@ row a foreign-key "anchor" in a shared table silently enrols it in every query k
 audit sibling queries when you do it. All targeted JVM suites green after the fix; still device-verify
 pending that the pill now persists across the ignored sheet.
 
+### FA-24d device round 2 — Level 1 relevance-only + AI tuning (2026-07-19)
+
+Device feedback after the leak fix. **No schema change — DB stays v22** (all changes are logic +
+settings). **620 JVM/Robolectric tests pass** (app 586 + aibackend 34) + `assembleDebugAndroidTest`
+builds.
+
+- **Bug: a blank/unfiled/untitled/empty notebook was suggested the whole tag registry.** Root cause:
+  Level 1's **frequency fallback** (signal 3) fired whenever the relevance signals were empty and
+  returned the most-used tags — which on a fresh note is the entire (small) registry, duplicating the
+  picker's own tag list. **Fix (user decision):** *removed the frequency fallback as a suggestion
+  entirely* — Level 1 is now **relevance-only** (subject siblings, linked notebooks, content words, +
+  now the notebook's **title** words as a content signal). A notebook with no identity (unfiled, no
+  content, no links, no user title) gets **no** Level 1 suggestions. Frequency didn't vanish though:
+  it now **orders the picker's existing-tags list** most-used-first (`TagViewModel.tagsByFrequency`,
+  used for both pickers' `allTags`), so adding a tag manually promotes the most common — the value of
+  the signal without the duplicative pills.
+- **AI (Level 2) tuning:**
+  - **Full-notebook, confirmed:** `TagSuggestionRunner` aggregates cached `recognized_lines` across
+    ALL of a notebook's pages every run (not the last line/paragraph). A narrow tag like "user
+    settings" surfaced only because that test notebook (`fa24d`) is mostly planning prose about
+    settings — a **prompt** problem, now fixed: the system prompt demands a BROAD whole-notebook
+    subject ("what shelf does this belong on"), explicitly rejects minor/one-off details, tasks,
+    dates, names, and app/UI feature names, and prefers fewer high-confidence tags.
+  - **Near-duplicate suppression** (`domain/TagMatching.kt`, shared by runner + provider): drops an AI
+    name that, after lowercasing + singular/plural fold, equals OR is a word-subset of an existing/
+    assigned/Level-1 tag — "revision"/"revisions", "settings"/"user settings" all collapse. Applied at
+    write time (runner, vs existing tags + within the batch) AND display time (provider, vs
+    existing/assigned/Level-1).
+  - **User setting `Max AI tag suggestions` (1–5, default 3)** — `SettingsRepository.aiTagSuggestionLimit`
+    (`intPreferencesKey`, coerced), a slider under "Suggest tags"; the worker passes it as the runner's
+    `maxSuggestions`. Lowers default AI volume from 5→3.
+- **Tests:** `TagMatchingTest` (near-dup: exact/plural/subset/distinct/blank), engine test flipped
+  (empty relevance ⇒ no suggestions, not the registry), `TagSuggestionRunnerTest` +near-dup case,
+  provider/settings suites updated. **Device-verify pending:** blank note shows no Level 1 pills;
+  naming/filing/writing then surfaces relevant ones; picker existing-tags are most-used-first; the AI
+  limit slider caps Level 2; near-dup AI tags no longer appear.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):

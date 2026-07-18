@@ -315,6 +315,12 @@ class SettingsViewModel @Inject constructor(
     val suggestTagsEnabled: StateFlow<Boolean> = repository.suggestTagsEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_TRUE)
 
+    val aiTagSuggestionLimit: StateFlow<Int> = repository.aiTagSuggestionLimit
+        .stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            SettingsRepository.DEFAULT_AI_TAG_SUGGESTIONS,
+        )
+
     fun setAutoExtractionEnabled(enabled: Boolean) {
         viewModelScope.launch { repository.setAutoExtractionEnabled(enabled) }
     }
@@ -333,6 +339,10 @@ class SettingsViewModel @Inject constructor(
 
     fun setSuggestTagsEnabled(enabled: Boolean) {
         viewModelScope.launch { repository.setSuggestTagsEnabled(enabled) }
+    }
+
+    fun setAiTagSuggestionLimit(count: Int) {
+        viewModelScope.launch { repository.setAiTagSuggestionLimit(count) }
     }
 
     /** True when background extraction added TODO items without a popup — flairs the to-do tab. */

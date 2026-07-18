@@ -78,6 +78,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 /** App settings: AI activation (command vs gesture), canvas input, AI responses, auto-extraction. */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -107,6 +108,7 @@ fun SettingsScreen(
     val confirmTodo by viewModel.confirmTodoExtraction.collectAsStateWithLifecycle()
     val confirmCalendar by viewModel.confirmCalendarExtraction.collectAsStateWithLifecycle()
     val suggestTags by viewModel.suggestTagsEnabled.collectAsStateWithLifecycle()
+    val aiTagLimit by viewModel.aiTagSuggestionLimit.collectAsStateWithLifecycle()
     val snapBackEnabled by viewModel.lassoSnapBackEnabled.collectAsStateWithLifecycle()
     val snapBackThreshold by viewModel.lassoSnapBackThreshold.collectAsStateWithLifecycle()
     val calendarProvider by viewModel.calendarProvider.collectAsStateWithLifecycle()
@@ -649,6 +651,25 @@ fun SettingsScreen(
                 enabled = autoExtraction,
                 onCheckedChange = viewModel::setSuggestTagsEnabled,
                 indent = 16.dp,
+            )
+            val aiTagsEnabled = autoExtraction && suggestTags
+            Text(
+                "Max AI tag suggestions: $aiTagLimit",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (aiTagsEnabled) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.padding(start = 32.dp),
+            )
+            Slider(
+                value = aiTagLimit.toFloat(),
+                onValueChange = { viewModel.setAiTagSuggestionLimit(it.roundToInt()) },
+                valueRange = 1f..SettingsRepository.MAX_AI_TAG_SUGGESTIONS.toFloat(),
+                steps = SettingsRepository.MAX_AI_TAG_SUGGESTIONS - 2, // 1..5 → 3 inner steps
+                enabled = aiTagsEnabled,
+                modifier = Modifier.padding(start = 32.dp),
             )
         }
     }

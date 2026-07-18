@@ -268,7 +268,8 @@ fun NotesSection(
     var assignCandidate by remember { mutableStateOf<NotebookSummary?>(null) }
     // FA-24: the notebook whose tag picker is open (mirrors the other dialog-candidate states).
     var tagCandidate by remember { mutableStateOf<NotebookSummary?>(null) }
-    val allTags by tagViewModel.tags.collectAsStateWithLifecycle()
+    // FA-24d: picker lists existing tags most-used-first (manual add promotes the most common).
+    val tagsByFrequency by tagViewModel.tagsByFrequency.collectAsStateWithLifecycle()
     val notebookTags by tagViewModel.notebookTags.collectAsStateWithLifecycle()
 
     val callbacks = NoteCardCallbacks(
@@ -472,7 +473,7 @@ fun NotesSection(
         val assignedIds = notebookTags[notebook.notebookId].orEmpty().map { it.id }.toSet()
         val tagSuggestions by tagViewModel.suggestionsFor(notebook.notebookId).collectAsStateWithLifecycle()
         TagPickerDialog(
-            allTags = allTags,
+            allTags = tagsByFrequency,
             assignedTagIds = assignedIds,
             onToggle = { tag ->
                 if (tag.id in assignedIds) tagViewModel.removeTag(notebook.notebookId, tag.id)

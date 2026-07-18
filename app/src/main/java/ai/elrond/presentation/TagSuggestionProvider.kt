@@ -10,6 +10,7 @@ import ai.elrond.domain.PendingSuggestion
 import ai.elrond.domain.SuggestedTag
 import ai.elrond.domain.SuggestionOrigin
 import ai.elrond.domain.Tag
+import ai.elrond.domain.TagMatching
 import ai.elrond.domain.TagSuggestionEngine
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -75,12 +76,15 @@ class TagSuggestionProvider @Inject constructor(
             .mapNotNull { it.targetNotebookId }
             .flatMap { target -> i.notebookTags[target].orEmpty().map { it.id } }
 
-        // Signal 3 fallback: global usage counts. Signal 4: whole-word content match.
+        // Signal 3: whole-word match against the notebook's content AND its (user-given) title, so a
+        // named-but-empty notebook still gets title-relevant suggestions. usageCounts is only a
+        // deterministic tie-break now (the old frequency fallback was removed — see the engine).
         val usageCounts = i.notebookTags.values.flatten().groupingBy { it.id }.eachCount()
         val text = pageIds
             .flatMap { recognitionCache.getForPage(it).map { line -> line.text } }
             .joinToString("\n")
-        val contentWords = TagSuggestionEngine.contentWordsOf(text)
+        val title = noteRepository.getNotebookName(notebookId).orEmpty()
+        val contentWords = TagSuggestionEngine.contentWordsOf("$title\n$text")
 
         val level1 = TagSuggestionEngine.suggest(
             allTags = i.allTags,
@@ -92,14 +96,15 @@ class TagSuggestionProvider @Inject constructor(
             limit = limit,
         ).map { SuggestedTag(origin = SuggestionOrigin.EXISTING, name = it.name, tag = it) }
 
-        // Level 2 can't duplicate an existing tag, an assigned tag, or a Level 1 candidate.
-        val blocked = buildSet {
-            addAll(i.allTags.map { it.name.trim().lowercase() })
-            addAll(assigned.map { it.name.trim().lowercase() })
-            addAll(level1.map { it.name.trim().lowercase() })
+        // Level 2 can't duplicate (or near-duplicate) an existing tag, an assigned tag, or a Level 1
+        // candidate — "settings" vs "user settings", "revision" vs "revisions" all collapse.
+        val blocked = buildList {
+            addAll(i.allTags.map { it.name })
+            addAll(assigned.map { it.name })
+            addAll(level1.map { it.name })
         }
         val level2 = i.aiPending
-            .filter { it.content.trim().lowercase() !in blocked }
+            .filter { !TagMatching.nearDuplicateOfAny(it.content, blocked) }
             .map { SuggestedTag(origin = SuggestionOrigin.AI, name = it.content, suggestionId = it.id) }
 
         // Level 1 first (strong relevance signals), then AI; de-dup by name, cap at [limit].

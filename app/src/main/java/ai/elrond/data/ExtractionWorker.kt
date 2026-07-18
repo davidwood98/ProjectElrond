@@ -102,6 +102,7 @@ class ExtractionWorker @AssistedInject constructor(
             suggestionRepository = suggestionRepository,
             loadHash = { id -> noteRepository.getTagContextHash(id) },
             saveHash = { id, hash -> noteRepository.setTagContextHash(id, hash) },
+            maxSuggestions = settings.aiTagSuggestionLimit.first(),
         ).run(notebookId, anchorPageId = pageId)
     }
 

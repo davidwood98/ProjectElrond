@@ -23,6 +23,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -475,6 +476,17 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[SUGGEST_TAGS_KEY] = enabled }
     }
 
+    /** How many AI (Level 2) tags may be suggested per notebook (FA-24d), in [1, [MAX_AI_TAG_SUGGESTIONS]]. */
+    val aiTagSuggestionLimit: Flow<Int> = context.settingsDataStore.data
+        .map {
+            (it[AI_TAG_LIMIT_KEY] ?: DEFAULT_AI_TAG_SUGGESTIONS)
+                .coerceIn(1, MAX_AI_TAG_SUGGESTIONS)
+        }
+
+    suspend fun setAiTagSuggestionLimit(count: Int) {
+        context.settingsDataStore.edit { it[AI_TAG_LIMIT_KEY] = count.coerceIn(1, MAX_AI_TAG_SUGGESTIONS) }
+    }
+
     /**
      * Set true by the background job when it auto-adds TODO items without a confirmation
      * popup, so the UI can flair the to-do tab; cleared when the user opens the TODO panel.
@@ -492,6 +504,8 @@ class SettingsRepository(private val context: Context) {
         const val DEFAULT_AI_NOTE_SELECTED_ON_CREATE = true
         const val DEFAULT_STYLUS_ONLY = true
         const val DEFAULT_TRUE = true
+        const val DEFAULT_AI_TAG_SUGGESTIONS = 3
+        const val MAX_AI_TAG_SUGGESTIONS = 5
 
         /** FA-19 finger gestures: master on; 1×2 Undo, 1×3 Redo, 2×2 last-tool, 2×3 unbound. */
         const val DEFAULT_FINGER_GESTURES_ENABLED = true
@@ -558,6 +572,7 @@ class SettingsRepository(private val context: Context) {
         private val CONFIRM_TODO_KEY = booleanPreferencesKey("confirm_todo_extraction")
         private val CONFIRM_CALENDAR_KEY = booleanPreferencesKey("confirm_calendar_extraction")
         private val SUGGEST_TAGS_KEY = booleanPreferencesKey("suggest_tags_enabled")
+        private val AI_TAG_LIMIT_KEY = intPreferencesKey("ai_tag_suggestion_limit")
         private val NEW_EXTRACTED_ITEMS_KEY = booleanPreferencesKey("has_new_extracted_items")
         private val EXPANDED_SUBJECTS_KEY = stringSetPreferencesKey("expanded_subject_ids")
         private val SELECTED_SUBJECT_KEY = stringPreferencesKey("selected_subject_id")

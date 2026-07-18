@@ -221,6 +221,9 @@ class NoteRepository(
     /** The notebook a page belongs to — lets the per-page save-job trigger a notebook-level run. */
     suspend fun notebookIdForPage(pageId: String): String? = pageDao.notebookIdForPage(pageId)
 
+    /** The notebook's user-given name (blank when it still uses its cover-page fallback title). */
+    suspend fun getNotebookName(notebookId: String): String? = notebookDao.getById(notebookId)?.name
+
     /** Aggregated-content hash at the last AI tag-suggestion run (FA-24d Level 2 refresh gate). */
     suspend fun getTagContextHash(notebookId: String): String? =
         notebookDao.getTagContextHash(notebookId)

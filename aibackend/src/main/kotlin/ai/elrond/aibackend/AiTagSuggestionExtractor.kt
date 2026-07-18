@@ -70,12 +70,16 @@ class AiTagSuggestionExtractor(
 
             Return ONLY a JSON array of strings (no prose, no markdown, no code fences), e.g.
             ["physics", "revision", "term 2"].
-            - Each tag: 1-2 words, a topic/subject/category the whole notebook is about — NOT a task,
-              a date, a person's stray name, or a verbatim sentence.
-            - Lowercase unless it is a proper noun.
-            - Never repeat a tag that already exists (you are given that list).
-            - Only suggest tags you are confident genuinely describe the notebook. If none fit,
-              return [].
+            - Each tag names a BROAD subject/theme the WHOLE notebook is about — the kind of label you
+              would file it under. Think "what shelf does this belong on", not "what is on this line".
+            - Do NOT tag a minor detail, aside, or one-off phrase even if it appears verbatim — if a
+              topic only shows up in a sentence or two, it is NOT a tag for the notebook.
+            - NEVER a task, a date, a person's stray name, an app/UI feature name, or a verbatim
+              sentence fragment.
+            - 1-2 words, lowercase unless a proper noun.
+            - Never repeat or lightly reword a tag that already exists (you are given that list) —
+              e.g. if "settings" exists, do not suggest "user settings".
+            - Prefer FEWER, high-confidence tags. If nothing broadly describes the notebook, return [].
         """.trimIndent()
     }
 }

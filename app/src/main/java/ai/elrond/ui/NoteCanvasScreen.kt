@@ -225,7 +225,8 @@ fun NoteCanvasScreen(
     val pendingRemovalTagIds by remember(headerNotebookId) {
         headerNotebookId?.let { tagViewModel.pendingRemovalTagIdsFor(it) } ?: flowOf(emptySet())
     }.collectAsStateWithLifecycle(initialValue = emptySet())
-    val allTags by tagViewModel.tags.collectAsStateWithLifecycle()
+    // FA-24d: picker lists existing tags most-used-first (manual add promotes the most common).
+    val tagsByFrequency by tagViewModel.tagsByFrequency.collectAsStateWithLifecycle()
     // FA-24d: Level 1 + Level 2 tag suggestions for this notebook (shared by header row + picker).
     val tagSuggestions by remember(headerNotebookId) {
         headerNotebookId?.let { tagViewModel.suggestionsFor(it) } ?: flowOf(emptyList())
@@ -530,7 +531,7 @@ fun NoteCanvasScreen(
         val pickerNotebookId = headerNotebookId
         if (tagPickerOpen && pickerNotebookId != null) {
             TagPickerDialog(
-                allTags = allTags,
+                allTags = tagsByFrequency,
                 assignedTagIds = headerTags.map { it.id }.toSet(),
                 onToggle = { tag ->
                     if (tag.id in headerTags.map { it.id }.toSet()) {
