@@ -369,12 +369,21 @@ interface PendingSuggestionDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(items: List<PendingSuggestionEntity>)
 
-    /** Active (not-dismissed) suggestions for a page — drives the on-canvas popups. */
-    @Query("SELECT * FROM pending_suggestions WHERE pageId = :pageId AND dismissed = 0 ORDER BY createdAt")
+    // NB: TAG suggestions (FA-24d) are notebook-scoped but carry the triggering page's id only to
+    // satisfy the page FK. Every PAGE-scoped query below therefore excludes type = 'TAG' so TAG rows
+    // never leak into the TODO/EVENT confirmation sheet or its de-dup sets (a leak would show a tag in
+    // that sheet AND let dismissing the sheet silently kill the tag pill). TAG has its own
+    // notebook-scoped queries (observeTagsForNotebook / tagContentsForNotebook).
+
+    /** Active (not-dismissed) TODO/EVENT suggestions for a page — drives the on-canvas popups. */
+    @Query(
+        "SELECT * FROM pending_suggestions WHERE pageId = :pageId AND dismissed = 0 " +
+            "AND type != 'TAG' ORDER BY createdAt",
+    )
     fun observeForPage(pageId: String): Flow<List<PendingSuggestionEntity>>
 
-    /** All suggestion contents for a page (incl. dismissed) — for de-dup against re-suggestion. */
-    @Query("SELECT content FROM pending_suggestions WHERE pageId = :pageId")
+    /** All TODO/EVENT suggestion contents for a page (incl. dismissed) — de-dup against re-suggestion. */
+    @Query("SELECT content FROM pending_suggestions WHERE pageId = :pageId AND type != 'TAG'")
     suspend fun contentsForPage(pageId: String): List<String>
 
     /**
@@ -383,7 +392,7 @@ interface PendingSuggestionDao {
      * *ignored* (tapped-away, `dismissed=1, rejected=0`) line is NOT here, so `/Q` re-offers it. A
      * lasso ignores this set entirely and re-parses regardless.
      */
-    @Query("SELECT content FROM pending_suggestions WHERE pageId = :pageId AND rejected = 1")
+    @Query("SELECT content FROM pending_suggestions WHERE pageId = :pageId AND rejected = 1 AND type != 'TAG'")
     suspend fun rejectedContentsForPage(pageId: String): List<String>
 
     /**
@@ -398,8 +407,8 @@ interface PendingSuggestionDao {
     )
     suspend fun deletePendingTodos(pageId: String, contents: List<String>)
 
-    /** Type + content for every suggestion on a page (incl. dismissed) — type-namespaced de-dup. */
-    @Query("SELECT type, content FROM pending_suggestions WHERE pageId = :pageId")
+    /** Type + content for every TODO/EVENT suggestion on a page (incl. dismissed) — type-namespaced de-dup. */
+    @Query("SELECT type, content FROM pending_suggestions WHERE pageId = :pageId AND type != 'TAG'")
     suspend fun typedContentsForPage(pageId: String): List<PendingTypeContent>
 
     /** Active (not-yet-decided) TAG suggestions for a notebook (FA-24d Level 2) — drives the pills. */

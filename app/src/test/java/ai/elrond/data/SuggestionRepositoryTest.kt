@@ -147,6 +147,19 @@ class SuggestionRepositoryTest {
     }
 
     @Test
+    fun `TAG rows never leak into the page-scoped TODO-EVENT sheet or its de-dup`() = runTest {
+        // A TAG row carries the triggering page's id (FK), but must stay out of every page-scoped query
+        // so it can't appear in the extraction sheet or be killed by dismissing it (device bug FA-24d).
+        repo.add(listOf(tag("physics"), todo("Buy milk")))
+
+        assertEquals(setOf("Buy milk"), repo.observePending("p1").first().map { it.content }.toSet())
+        assertEquals(setOf("buy milk"), repo.existingContents("p1"))
+        assertEquals(setOf("TODO:buy milk"), repo.existingTypedContents("p1"))
+        // ...but it IS visible on the notebook-scoped TAG channel.
+        assertEquals(setOf("physics"), repo.observeTagSuggestions("nb1").first().map { it.content }.toSet())
+    }
+
+    @Test
     fun `clearActiveTagSuggestions drops un-actioned rows but keeps handled ones`() = runTest {
         repo.add(listOf(tag("physics"), tag("revision")))
         val physicsId = repo.observeTagSuggestions("nb1").first().first { it.content == "physics" }.id

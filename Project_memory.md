@@ -2233,6 +2233,26 @@ already shipped (FA-24b, 2026-07-17), so Level 1 signal 4 + Level 2 were both bu
   cross-trigger); AI suggestions appear a few seconds after writing on a notebook with content; the
   `suggestTagsEnabled` toggle silences Level 2.
 
+### FA-24d device-found bug: TAG rows leaked into the TODO/EVENT sheet (fixed 2026-07-18)
+
+First on-device pass. **Bug:** AI tag suggestions appeared as items in the TODO/EVENT "AI found these —
+add to your list" confirmation sheet ("triggering as an event classifier"), and *ignoring/dismissing
+that sheet deleted the tag pill* — it should persist until content changes. Present even with TODO/EVENT
+confirmation off.
+
+**Root cause:** the FA-24d FK-anchor decision. TAG rows are notebook-scoped but carry the triggering
+save's `pageId` purely to satisfy the `pending_suggestions` page FK — so the PAGE-scoped
+`observeForPage` (which drives the confirmation sheet) matched them, and dismissing the sheet set
+`dismissed=1`, removing the row from the `dismissed=0` `observeTagSuggestions` pill query. **Fix:** every
+page-scoped `PendingSuggestionDao` query now excludes `type = 'TAG'` (`observeForPage`,
+`contentsForPage`, `rejectedContentsForPage`, `typedContentsForPage`); TAG has its own notebook-scoped
+queries. **DAO-query-only — no schema change, DB stays v22.** Regression test added
+(`SuggestionRepositoryTest`: a TAG row for a page is absent from `observePending`/`existingContents`/
+`existingTypedContents` but present on `observeTagSuggestions`). **Lesson:** giving a differently-scoped
+row a foreign-key "anchor" in a shared table silently enrols it in every query keyed on that anchor —
+audit sibling queries when you do it. All targeted JVM suites green after the fix; still device-verify
+pending that the pill now persists across the ignored sheet.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
