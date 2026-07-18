@@ -28,17 +28,17 @@ class SuggestionRepository(
         dao.contentsForPage(pageId).map { it.trim().lowercase() }.toSet()
 
     /**
-     * Normalized contents of suggestions the user has *decided on* (dismissed = accepted or
-     * rejected) for this page. The manual `/Q` path de-dups against these so a rejected line stays
-     * ignored, but re-offers still-pending ones.
+     * Normalized contents of suggestions the user *explicitly rejected* for this page. A written
+     * `/Q` de-dups against these so a rejected line stays silent, but re-offers *ignored* (not-now)
+     * and still-pending ones. A lasso ignores this set entirely.
      */
-    suspend fun dismissedContents(pageId: String): Set<String> =
-        dao.dismissedContentsForPage(pageId).map { it.trim().lowercase() }.toSet()
+    suspend fun rejectedContents(pageId: String): Set<String> =
+        dao.rejectedContentsForPage(pageId).map { it.trim().lowercase() }.toSet()
 
     /**
-     * Removes the pending TODO popups for [contents] (already-normalized) so a manual `/Q`
+     * Removes the pending TODO popups for [contents] (already-normalized) so a `/Q`/lasso
      * re-offering the same items via its sheet can't lead to a double-add. Deletes (not dismisses)
-     * so this never lands the item in the "decided" set that [dismissedContents] reports.
+     * so this never lands the item in the rejected set that [rejectedContents] reports.
      */
     suspend fun claimPendingTodos(pageId: String, contents: Collection<String>) {
         if (contents.isEmpty()) return
@@ -78,8 +78,11 @@ class SuggestionRepository(
      */
     suspend fun markHandled(id: String) = dao.markDismissed(id)
 
-    /** Rejected — keep the row (dismissed) so the same item isn't re-suggested next save. */
+    /** Ignore (not-now) — hide the popup but keep it re-offerable by an explicit `/Q`/lasso. */
     suspend fun dismiss(id: String) = dao.markDismissed(id)
+
+    /** Reject (never) — hide the popup and keep it silent under `/Q` (a lasso still re-offers). */
+    suspend fun reject(id: String) = dao.markRejected(id)
 
     private fun PendingSuggestionEntity.toDomain() = PendingSuggestion(
         id = id,

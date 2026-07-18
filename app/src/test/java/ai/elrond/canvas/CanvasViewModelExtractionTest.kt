@@ -12,13 +12,16 @@ import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
+import ai.elrond.domain.GestureTriggerDetector
 import ai.elrond.domain.NotePage
+import ai.elrond.domain.SelectionBounds
 import androidx.ink.strokes.Stroke
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -65,9 +68,11 @@ class CanvasViewModelExtractionTest {
     private fun viewModel(
         tasks: List<ExtractedTask>,
         suggestionRepository: SuggestionRepository? = null,
+        // Recognizer text drives both the `/Q` command detection AND lasso selection recognition.
+        recognizerText: String = "buy milk /Q",
     ) = CanvasViewModel(
         recognizer = object : HandwritingRecognizer {
-            override suspend fun recognize(strokes: List<Stroke>) = Result.success("buy milk /Q")
+            override suspend fun recognize(strokes: List<Stroke>) = Result.success(recognizerText)
         },
         aiProvider = object : AIProvider {
             override suspend fun generate(request: AIRequest) = Result.success(
@@ -81,6 +86,12 @@ class CanvasViewModelExtractionTest {
         todoRepository = todoRepository,
         suggestionRepository = suggestionRepository,
         pageId = "page-1",
+        // Geometry-free ink seams so selectByLasso/aiPromptSelection work with mockk strokes.
+        centroidOf = { GestureTriggerDetector.Point(10f, 10f) },
+        strokeTransformer = { stroke, _ -> stroke },
+        strokeBoundsOf = { SelectionBounds(0f, 0f, 10f, 10f) },
+        lassoSnapBackThresholdFlow = MutableStateFlow(0f),
+        lassoSnapBackEnabledFlow = MutableStateFlow(false),
     )
 
     @Test
@@ -171,12 +182,12 @@ class CanvasViewModelExtractionTest {
         }
 
     @Test
-    fun `a pending (undecided) background suggestion is re-offered by manual extraction and its popup claimed`() =
+    fun `an ignored (not-now) background suggestion is re-offered by a written Q and its popup claimed`() =
         runTest(dispatcher) {
             val suggestionRepository = mockk<SuggestionRepository>(relaxed = true)
-            // Suggested by the background run but still undecided (dismissedContents empty): /Q re-offers.
+            // Ignored, not rejected → rejectedContents empty → a written /Q re-offers it.
             coEvery { todoRepository.existingContents() } returns emptySet()
-            coEvery { suggestionRepository.dismissedContents("page-1") } returns emptySet()
+            coEvery { suggestionRepository.rejectedContents("page-1") } returns emptySet()
             val vm = viewModel(listOf(ExtractedTask("Buy milk")), suggestionRepository)
 
             vm.onStrokesFinished(listOf(mockk<Stroke>()))
@@ -189,22 +200,44 @@ class CanvasViewModelExtractionTest {
         }
 
     @Test
-    fun `a rejected suggestion is not re-offered by manual extraction`() =
+    fun `a rejected line stays silent under a written Q — no sheet, no toast, normal answer`() =
         runTest(dispatcher) {
             val suggestionRepository = mockk<SuggestionRepository>(relaxed = true)
-            // The user dismissed (rejected) this line's popup — it must stay ignored even under /Q.
+            // Explicitly rejected and not on the to-do list → /Q stays silent (falls through to answer).
             coEvery { todoRepository.existingContents() } returns emptySet()
-            coEvery { suggestionRepository.dismissedContents("page-1") } returns setOf("buy milk")
+            coEvery { suggestionRepository.rejectedContents("page-1") } returns setOf("buy milk")
             val vm = viewModel(listOf(ExtractedTask("Buy milk")), suggestionRepository)
 
             vm.onStrokesFinished(listOf(mockk<Stroke>()))
-            advanceTimeBy(CanvasViewModel.TRIGGER_DEBOUNCE_MILLIS + 1)
-            runCurrent()
+            advanceUntilIdle()
 
             assertNull(vm.pendingExtraction.value) // no re-offer sheet
-            assertEquals(CanvasViewModel.ALREADY_EXISTS_MESSAGE, vm.transientMessage.value)
+            assertNull(vm.transientMessage.value) // silent — NOT "Already on your to-do list"
+            assertTrue(vm.aiNotes.value.isNotEmpty()) // fell through to a normal /Q answer
             coVerify(exactly = 0) { suggestionRepository.claimPendingTodos(any(), any()) }
         }
+
+    @Test
+    fun `a lasso forces a re-offer even for a rejected line`() =
+        runTest(dispatcher) {
+            val suggestionRepository = mockk<SuggestionRepository>(relaxed = true)
+            // Rejected under /Q, but a lasso is a deliberate override → it re-offers regardless.
+            coEvery { todoRepository.existingContents() } returns emptySet()
+            coEvery { suggestionRepository.rejectedContents("page-1") } returns setOf("buy milk")
+            // recognizerText has no "/Q", so onStrokesFinished won't auto-trigger; the lasso drives it.
+            val vm = viewModel(listOf(ExtractedTask("Buy milk")), suggestionRepository, recognizerText = "buy milk")
+
+            vm.onStrokesFinished(listOf(mockk<Stroke>()))
+            vm.selectByLasso(listOf(p(0f, 0f), p(100f, 0f), p(100f, 100f), p(0f, 100f)))
+            vm.aiPromptSelection()
+            advanceUntilIdle()
+
+            assertEquals(listOf("Buy milk"), vm.pendingExtraction.value?.tasks) // re-offered despite reject
+            // rejectedContents must NOT be consulted for a lasso.
+            coVerify(exactly = 0) { suggestionRepository.rejectedContents(any()) }
+        }
+
+    private fun p(x: Float, y: Float) = GestureTriggerDetector.Point(x, y)
 
     @Test
     fun `dismissing does not persist anything`() = runTest(dispatcher) {

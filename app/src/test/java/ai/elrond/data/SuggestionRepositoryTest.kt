@@ -50,14 +50,26 @@ class SuggestionRepositoryTest {
     }
 
     @Test
-    fun `dismiss hides from the popup list but keeps the content for de-dup`() = runTest {
+    fun `dismiss (ignore) hides from the popup list but is NOT counted as rejected`() = runTest {
         repo.add(listOf(todo("Buy milk")))
         val id = repo.observePending("p1").first().single().id
 
-        repo.dismiss(id)
+        repo.dismiss(id) // ignore / not-now
 
-        assertTrue(repo.observePending("p1").first().isEmpty())
-        assertTrue("buy milk" in repo.existingContents("p1"))
+        assertTrue(repo.observePending("p1").first().isEmpty()) // no popup
+        assertTrue("buy milk" in repo.existingContents("p1")) // still known to the background de-dup
+        assertFalse("buy milk" in repo.rejectedContents("p1")) // ignored != rejected → /Q re-offers
+    }
+
+    @Test
+    fun `reject hides the popup AND is counted as rejected so a written Q stays silent`() = runTest {
+        repo.add(listOf(todo("Buy milk")))
+        val id = repo.observePending("p1").first().single().id
+
+        repo.reject(id)
+
+        assertTrue(repo.observePending("p1").first().isEmpty()) // no popup
+        assertTrue("buy milk" in repo.rejectedContents("p1")) // /Q de-dups against this
     }
 
     @Test
@@ -72,13 +84,14 @@ class SuggestionRepositoryTest {
     }
 
     @Test
-    fun `dismissedContents reports only decided suggestions, not still-pending ones`() = runTest {
-        repo.add(listOf(todo("Buy milk"), todo("Call bank")))
-        val bankId = repo.observePending("p1").first().single { it.content == "Call bank" }.id
-        repo.dismiss(bankId) // user rejected "Call bank"
+    fun `rejectedContents reports only rejected suggestions, not ignored or pending ones`() = runTest {
+        repo.add(listOf(todo("Buy milk"), todo("Call bank"), todo("Email Sam")))
+        val pending = repo.observePending("p1").first()
+        repo.dismiss(pending.single { it.content == "Call bank" }.id) // ignored (not-now)
+        repo.reject(pending.single { it.content == "Email Sam" }.id) // rejected
 
-        // Pending "Buy milk" is NOT reported as decided; rejected "Call bank" is.
-        assertEquals(setOf("call bank"), repo.dismissedContents("p1"))
+        // Only the rejected item is reported; pending "Buy milk" and ignored "Call bank" are not.
+        assertEquals(setOf("email sam"), repo.rejectedContents("p1"))
     }
 
     @Test
@@ -89,9 +102,9 @@ class SuggestionRepositoryTest {
 
         // The claimed item leaves the popup queue (so /Q's sheet is the only way to add it)...
         assertEquals(setOf("Call bank"), repo.observePending("p1").first().map { it.content }.toSet())
-        // ...and is fully removed — NOT counted as a decided (dismissed) item, so a later /Q re-offers it.
+        // ...and is fully removed — NOT counted as rejected, so a later /Q re-offers it.
         assertFalse("buy milk" in repo.existingContents("p1"))
-        assertFalse("buy milk" in repo.dismissedContents("p1"))
+        assertFalse("buy milk" in repo.rejectedContents("p1"))
     }
 
     @Test

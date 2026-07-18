@@ -46,6 +46,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_16_17,
         ElrondDatabase.MIGRATION_17_18,
         ElrondDatabase.MIGRATION_18_19,
+        ElrondDatabase.MIGRATION_19_20,
     )
 
     /**
@@ -69,11 +70,37 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v19_and_validates_final_schema() {
+    fun migrates_v1_to_v20_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v19 schema (FA-24b adds the
-        // recognized_lines cache on top of FA-24's notebook_links + tags/notebook_tags).
-        helper.runMigrationsAndValidate(TEST_DB, 19, true, *allMigrations).close()
+        // Throws if the migrated schema doesn't match the exported v20 schema (FA-24b adds the
+        // pending_suggestions.rejected column on top of the v19 recognized_lines cache).
+        helper.runMigrationsAndValidate(TEST_DB, 20, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_19_to_20_adds_rejected_column_defaulting_existing_rows_to_ignored() {
+        helper.createDatabase(TEST_DB, 19).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt, modifiedAt) VALUES ('nb1', 'N', 1, 1)")
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, " +
+                    "lastOpenedAt, tags, contextSummary, pageNumber, isBookmarked) " +
+                    "VALUES ('p1', 'nb1', NULL, 1, 1, 1, '', NULL, 1, 0)",
+            )
+            // A pre-existing decided (dismissed) suggestion from before the split.
+            execSQL(
+                "INSERT INTO pending_suggestions (id, pageId, type, content, priority, x, y, dismissed, createdAt) " +
+                    "VALUES ('s1', 'p1', 'TODO', 'buy milk', 0, 0, 0, 1, 1)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 20, true, *allMigrations)
+
+        // The old dismissed row becomes rejected = 0 = *ignored* (re-offerable), not a hard reject.
+        db.query("SELECT rejected FROM pending_suggestions WHERE id = 's1'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
+        }
+        db.close()
     }
 
     @Test

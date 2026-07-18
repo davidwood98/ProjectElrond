@@ -326,13 +326,13 @@ interface PendingSuggestionDao {
     suspend fun contentsForPage(pageId: String): List<String>
 
     /**
-     * Contents of suggestions the user has *decided on* (dismissed = accepted or rejected) for a
-     * page. The manual `/Q` path de-dups against these — a rejected line stays ignored even under an
-     * explicit `/Q` — but NOT against still-pending suggestions, which `/Q` re-offers. `dismissed` is
-     * only ever set by a genuine accept/reject, so merely offering an item can't land it here.
+     * Contents of suggestions the user *explicitly rejected* (left unchecked on "Add selected") for
+     * a page. A written `/Q` de-dups against these — a rejected line stays silent under `/Q` — but an
+     * *ignored* (tapped-away, `dismissed=1, rejected=0`) line is NOT here, so `/Q` re-offers it. A
+     * lasso ignores this set entirely and re-parses regardless.
      */
-    @Query("SELECT content FROM pending_suggestions WHERE pageId = :pageId AND dismissed = 1")
-    suspend fun dismissedContentsForPage(pageId: String): List<String>
+    @Query("SELECT content FROM pending_suggestions WHERE pageId = :pageId AND rejected = 1")
+    suspend fun rejectedContentsForPage(pageId: String): List<String>
 
     /**
      * Delete the still-pending TODO popups for a page whose normalized content matches [contents] —
@@ -356,8 +356,13 @@ interface PendingSuggestionDao {
     @Query("DELETE FROM pending_suggestions WHERE id = :id")
     suspend fun deleteById(id: String)
 
+    /** Ignore (not-now): hide from the popup list but keep it re-offerable by an explicit `/Q`. */
     @Query("UPDATE pending_suggestions SET dismissed = 1 WHERE id = :id")
     suspend fun markDismissed(id: String)
+
+    /** Reject (never): hide from the popup list AND keep silent under `/Q` (a lasso still re-offers). */
+    @Query("UPDATE pending_suggestions SET dismissed = 1, rejected = 1 WHERE id = :id")
+    suspend fun markRejected(id: String)
 }
 
 @Dao

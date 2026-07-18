@@ -427,5 +427,11 @@ data class PendingSuggestionEntity(
     val x: Float,
     val y: Float,
     val dismissed: Boolean = false,
+    /**
+     * True only when the user *explicitly rejected* this suggestion (left it unchecked on "Add
+     * selected"). `dismissed = 1, rejected = 0` is an *ignored* (not-now) row. Rejected lines stay
+     * silent under `/Q`; ignored lines are re-offered. See [PendingSuggestionDao.rejectedContentsForPage].
+     */
+    val rejected: Boolean = false,
     val createdAt: Long,
 )

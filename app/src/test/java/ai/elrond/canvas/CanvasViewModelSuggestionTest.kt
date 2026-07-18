@@ -103,14 +103,14 @@ class CanvasViewModelSuggestionTest {
     }
 
     @Test
-    fun `rejecting a suggestion dismisses it`() = runTest(dispatcher) {
+    fun `rejecting a suggestion marks it rejected (silent under a written Q)`() = runTest(dispatcher) {
         val vm = viewModel()
         advanceUntilIdle()
 
         vm.rejectSuggestion("s3")
         advanceUntilIdle()
 
-        coVerify { suggestionRepository.dismiss("s3") }
+        coVerify { suggestionRepository.reject("s3") }
     }
 
     @Test

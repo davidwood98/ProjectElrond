@@ -111,6 +111,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -2313,7 +2314,7 @@ class CanvasViewModel(
                 .mapNotNull { recognizer.recognize(it).getOrNull()?.trim()?.ifEmpty { null } }
                 .joinToString(" ")
                 .ifBlank { null } ?: return@launch
-            submitQuery(question, question, notePlacer(selected), bypassDedup = true)
+            submitQuery(question, question, notePlacer(selected), bypassDedup = true, trigger = ExtractionTrigger.LASSO)
         }
     }
 
@@ -2590,8 +2591,9 @@ class CanvasViewModel(
         _finishedStrokes.update { current -> current.filterNot { it.stroke === lassoStroke } }
 
         // A lasso is a deliberate, explicit request (like pressing a button): re-circling the
-        // same selection must always re-run, so it bypasses the unchanged-content de-dupe guard.
-        submitQuery(question, question, notePlacer(enclosed), bypassDedup = true)
+        // same selection must always re-run, so it bypasses the unchanged-content de-dupe guard —
+        // and forces a re-parse even for a previously-rejected line (LASSO trigger).
+        submitQuery(question, question, notePlacer(enclosed), bypassDedup = true, trigger = ExtractionTrigger.LASSO)
     }
 
     /**
@@ -2753,6 +2755,7 @@ class CanvasViewModel(
         position: NotePosition,
         bypassDedup: Boolean = false,
         suppressGuess: Boolean = false,
+        trigger: ExtractionTrigger = ExtractionTrigger.QUERY,
     ) {
         // The de-dupe guard stops the debounced detector re-firing on unchanged content. A
         // deliberate, explicit trigger (a lasso, or a re-send) opts out so it always runs.
@@ -2774,7 +2777,7 @@ class CanvasViewModel(
         // (confirmation sheet) and DO NOT write a /Q answer. If it holds ONLY items that
         // already exist, tell the user with a self-clearing toast (also no answer). Only a
         // genuine question (no actionable items) falls through to a rendered answer.
-        when (offerExtraction(pageText = userPrompt)) {
+        when (offerExtraction(pageText = userPrompt, trigger = trigger)) {
             ExtractionOffer.NEW_ITEMS -> {
                 _aiState.value = AiUiState.Idle
                 return
@@ -2897,31 +2900,40 @@ class CanvasViewModel(
             ?.trim()?.trimEnd('?')?.trim()
             ?.ifBlank { null }
 
+    /** Which trigger asked for extraction — decides how prior reject decisions are honored (FA-24b). */
+    private enum class ExtractionTrigger {
+        /** Written `/Q`: re-offers *ignored* lines, but stays silent on *rejected* ones. */
+        QUERY,
+
+        /** Lasso/loop selection: a deliberate override — re-parses and re-offers even rejected lines. */
+        LASSO,
+    }
+
     /** Outcome of [offerExtraction], so [submitQuery] can suppress the answer and/or notify. */
     private enum class ExtractionOffer {
         /** New action items found — confirmation sheet raised; suppress the answer. */
         NEW_ITEMS,
 
-        /** Items found, but all already exist — notify the user; suppress the answer. */
+        /** Items found, but all already on the to-do list — notify the user; suppress the answer. */
         ALL_EXISTING,
 
-        /** Nothing actionable — fall through to a normal answer. */
+        /** Nothing to offer (none actionable, or all rejected under `/Q`) — fall through to a normal answer. */
         NONE,
     }
 
     /**
-     * Detects action items on the page and routes them:
-     *  - any NEW item → raises the confirmation sheet ([ExtractionOffer.NEW_ITEMS]);
-     *  - items found but all already captured → [ExtractionOffer.ALL_EXISTING] (the caller shows
-     *    a self-clearing "already exists" notification);
-     *  - nothing actionable / no extractor → [ExtractionOffer.NONE].
+     * Detects action items on the page and routes them per the [trigger] (FA-24b):
+     *  - any re-offerable item → raises the confirmation sheet ([ExtractionOffer.NEW_ITEMS]);
+     *  - items found but all already on the to-do list → [ExtractionOffer.ALL_EXISTING] (the caller
+     *    shows the "Already on your to-do list" notification);
+     *  - nothing to offer (none actionable, or all rejected under `/Q`) → [ExtractionOffer.NONE].
      *
-     * De-dupes against both the to-do list AND items already suggested for this page (so the
-     * manual `/Q` path and the background auto-extraction never propose the same item twice —
-     * in either order). New items are also recorded as handled suggestions for this page, so a
-     * later background run de-dupes them. Independent of `/Q`, so a save-job can reuse it.
+     * The to-do list always blocks a re-offer (and notifies). A written `/Q` additionally stays
+     * silent on lines the user explicitly *rejected*; a lasso ignores that and re-parses. *Ignored*
+     * (not-now) lines are re-offered by both. The background auto-extraction has its own de-dup and
+     * doesn't come through here.
      */
-    private suspend fun offerExtraction(pageText: String): ExtractionOffer {
+    private suspend fun offerExtraction(pageText: String, trigger: ExtractionTrigger): ExtractionOffer {
         val extractor = taskExtractor ?: return ExtractionOffer.NONE
         val todoRepository = todoRepository ?: return ExtractionOffer.NONE
         val pageId = pageId ?: return ExtractionOffer.NONE
@@ -2935,20 +2947,24 @@ class CanvasViewModel(
         val extracted = extractor.extract(pageText, referenceDate).getOrNull().orEmpty()
         if (extracted.isEmpty()) return ExtractionOffer.NONE
 
-        // De-dup against what the user has actually DECIDED on: items already on the to-do list, and
-        // suggestions the user explicitly accepted/rejected (dismissed) for this page — a rejected
-        // line stays ignored even under an explicit /Q. A still-*pending* (undecided) background
-        // suggestion is NOT dedup'd, so /Q re-offers it. Crucially, an item is only ever marked
-        // dismissed by a genuine accept/reject — never merely by being offered — so an offer can't
-        // poison this set and turn later triggers into a false "already on your to-do list".
-        val existing = buildSet {
-            addAll(runCatching { todoRepository.existingContents() }.getOrDefault(emptySet()))
-            suggestionRepository?.let {
-                addAll(runCatching { it.dismissedContents(pageId) }.getOrDefault(emptySet()))
-            }
+        // Items already on the to-do list always block a re-offer (and trigger the notify below).
+        val onTodoList = runCatching { todoRepository.existingContents() }.getOrDefault(emptySet())
+        // A written `/Q` also suppresses lines the user explicitly rejected; a lasso does not.
+        val rejected = if (trigger == ExtractionTrigger.QUERY) {
+            suggestionRepository?.let { runCatching { it.rejectedContents(pageId) }.getOrDefault(emptySet()) }.orEmpty()
+        } else {
+            emptySet()
         }
-        val newTasks = extracted.filter { it.content.trim().lowercase() !in existing }
-        if (newTasks.isEmpty()) return ExtractionOffer.ALL_EXISTING // found, but all already decided
+        val newTasks = extracted.filter {
+            val key = it.content.trim().lowercase()
+            key !in onTodoList && key !in rejected
+        }
+        if (newTasks.isEmpty()) {
+            // All blocked: notify only if it's because they're on the list; a silently-rejected
+            // line (nothing on the list) just falls through to the normal answer.
+            val anyOnList = extracted.any { it.content.trim().lowercase() in onTodoList }
+            return if (anyOnList) ExtractionOffer.ALL_EXISTING else ExtractionOffer.NONE
+        }
 
         // Any of these items may still have a pending on-canvas popup from the background worker;
         // remove those popups so the same task can't be added twice — once via the popup, once here.
@@ -3013,17 +3029,38 @@ class CanvasViewModel(
     /** "Yes" on a single background suggestion. */
     fun acceptSuggestion(id: String) = acceptSuggestions(listOf(id))
 
-    /** "No" on a single background suggestion. */
-    fun rejectSuggestion(id: String) = dismissSuggestions(listOf(id))
+    /** "Never" on a single background suggestion — rejected, stays silent under `/Q`. */
+    fun rejectSuggestion(id: String) = rejectSuggestions(listOf(id))
 
     /**
-     * The collated confirmation sheet's "Add selected" action: commit the chosen suggestions
-     * and dismiss the rest in one go. Both outcomes mark each row *handled* (kept), so the same
-     * item is never re-suggested for this page on a later save.
+     * Resolve the collated confirmation sheet. "Add selected" passes checked → [acceptIds] (→ to-do
+     * list) and unchecked → [rejectIds] (rejected: silent under `/Q`, only a lasso re-offers).
+     * Tapping the sheet away passes both empty, so every still-shown item is *ignored* (not-now):
+     * hidden but re-offerable by an explicit `/Q`/lasso. After accept/reject, whatever is still
+     * pending was shown-but-undecided → ignore it.
      */
-    fun resolveSuggestions(acceptIds: List<String>, dismissIds: List<String>) {
-        acceptSuggestions(acceptIds)
-        dismissSuggestions(dismissIds)
+    fun resolveSuggestions(acceptIds: List<String>, rejectIds: List<String>) {
+        val suggestionRepo = suggestionRepository ?: return
+        val pageId = pageId ?: return
+        viewModelScope.launch {
+            val title = repository?.getPage(pageId)?.displayTitle() ?: "Note"
+            acceptIds.forEach { id ->
+                val suggestion = suggestionRepo.get(id) ?: return@forEach
+                commitSuggestion(suggestion, pageId, title)
+                suggestionRepo.markHandled(id)
+            }
+            rejectIds.forEach { suggestionRepo.reject(it) }
+            // Neither accepted nor rejected → ignored (tap-away / not-now). After the two passes
+            // above, the still-pending rows for this page are exactly those undecided items.
+            suggestionRepo.observePending(pageId).first().forEach { suggestionRepo.dismiss(it.id) }
+        }
+    }
+
+    /** Reject (never) each suggestion: keep the row so a written `/Q` stays silent on that line. */
+    fun rejectSuggestions(ids: List<String>) {
+        if (ids.isEmpty()) return
+        val suggestionRepo = suggestionRepository ?: return
+        viewModelScope.launch { ids.forEach { suggestionRepo.reject(it) } }
     }
 
     /** Commit each suggestion (TODO item / calendar suggestion) and mark its row handled. */

@@ -902,6 +902,7 @@ fun NoteCanvasScreen(
 
         // FA-2 background-extracted items: one collated sheet for all of them (handle each).
         if (pendingSuggestions.isNotEmpty()) {
+            // onResolve(accept, reject): checked items are accepted (→ lists), unchecked are rejected.
             SuggestionExtractionSheet(
                 suggestions = pendingSuggestions,
                 onResolve = viewModel::resolveSuggestions,
@@ -1212,11 +1213,10 @@ private fun AiErrorInk(
 private val ERROR_INK_MAX_WIDTH = 380.dp
 
 /**
- * One collated confirmation sheet for all background-extracted items (FA-2). Each item has a
- * checkbox (on by default) so the user handles every detected to-do/event in a single place:
- * "Add selected" commits the checked items and dismisses the unchecked ones; "Dismiss" (or
- * swiping the sheet away) dismisses them all. Either way every row is marked handled, so the
- * same items never re-surface on a later save.
+ * One collated confirmation sheet for all background-extracted items (FA-2 / FA-24b). Each item has
+ * a checkbox (on by default). "Add selected" commits the checked items to their lists and *rejects*
+ * the unchecked ones (rejected = silent under a written `/Q`; only a lasso re-offers). Swiping/tapping
+ * the sheet away *ignores* them all (not-now: hidden, but re-offerable by an explicit `/Q`/lasso).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1228,10 +1228,10 @@ private fun SuggestionExtractionSheet(
         mutableStateListOf<Boolean>().apply { repeat(suggestions.size) { add(true) } }
     }
     val sheetState = rememberModalBottomSheetState()
-    val allIds = suggestions.map { it.id }
 
     ModalBottomSheet(
-        onDismissRequest = { onResolve(emptyList(), allIds) },
+        // Tap/swipe away = ignore all (not-now): neither accepted nor rejected.
+        onDismissRequest = { onResolve(emptyList(), emptyList()) },
         sheetState = sheetState,
     ) {
         Column(
@@ -1271,14 +1271,12 @@ private fun SuggestionExtractionSheet(
                     .padding(top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
             ) {
-                TextButton(onClick = { onResolve(emptyList(), allIds) }) { Text("Dismiss") }
                 FilledTonalButton(
                     onClick = {
                         val accept = suggestions.filterIndexed { i, _ -> checked.getOrElse(i) { false } }.map { it.id }
-                        val dismiss = suggestions.filterIndexed { i, _ -> !checked.getOrElse(i) { false } }.map { it.id }
-                        onResolve(accept, dismiss)
+                        val reject = suggestions.filterIndexed { i, _ -> !checked.getOrElse(i) { false } }.map { it.id }
+                        onResolve(accept, reject)
                     },
-                    enabled = checked.any { it },
                 ) { Text("Add selected") }
             }
         }
