@@ -100,9 +100,27 @@ class SearchRepositoryTest {
     }
 
     @Test
-    fun `content is matched case-insensitively and mid-word`() = runTest {
+    fun `content is matched case-insensitively`() = runTest {
         notebook("nb1", "Untitled"); page("p1", "nb1"); line("p1", "Hello there")
         assertEquals(listOf("nb1"), repo.rankedNotebookIds("hello", setOf("nb1")))
+    }
+
+    @Test
+    fun `content matches whole words only, not substrings`() = runTest {
+        // The bug: 'is' must match the word "is", not the "is" inside "consistent"/"dentist".
+        notebook("nb1", "A"); page("p1", "nb1"); line("p1", "Hello my name is David")
+        notebook("nb2", "B"); page("p2", "nb2"); line("p2", "we dont seem to be getting consistent AI results")
+        notebook("nb3", "C"); page("p3", "nb3"); line("p3", "Book dentist appointment")
+
+        assertEquals(listOf("nb1"), repo.rankedNotebookIds("is", setOf("nb1", "nb2", "nb3")))
+    }
+
+    @Test
+    fun `pageHighlights ignores substring-only matches`() = runTest {
+        notebook("nb1", "A"); page("p1", "nb1")
+        line("p1", "David is here", top = 0f)  // whole word 'is'
+        line("p1", "consistent", top = 20f)    // 'is' only as a substring — must not highlight
+        assertEquals(1, repo.pageHighlights("p1", "is").size)
     }
 
     @Test

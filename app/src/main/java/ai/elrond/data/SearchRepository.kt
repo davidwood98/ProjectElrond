@@ -52,13 +52,14 @@ class SearchRepository(
             .mapTo(HashSet()) { it.notebookId }
 
         // 3. Content: best per-notebook relevance from the matching lines (scored in Kotlin — count of
-        // distinct tokens present, +1 if a line contains the whole phrase, so the closest match ranks top).
+        // distinct WHOLE-WORD tokens present, +1 if a line contains the whole phrase, so the closest
+        // match ranks top). LIKE is only a cheap prefilter; whole-word matching is enforced here.
         val contentRelevance = HashMap<String, Double>()
         recognizedLineDao.searchContent(SearchQueries.contentInNotebooks(tokens, scopeIds.toList()))
             .forEach { row ->
-                val lower = row.text.lowercase()
-                val score = lowerTokens.count { lower.contains(it) } +
-                    (if (phrase.isNotEmpty() && lower.contains(phrase)) 1 else 0)
+                val words = wordMatchCount(row.text, lowerTokens)
+                if (words == 0) return@forEach // LIKE hit was only a substring (e.g. "is" in "consistent")
+                val score = words + (if (phrase.isNotEmpty() && row.text.lowercase().contains(phrase)) 1 else 0)
                 contentRelevance.merge(row.notebookId, score.toDouble()) { a, b -> maxOf(a, b) }
             }
 
@@ -79,18 +80,32 @@ class SearchRepository(
     suspend fun matchingPageIds(notebookId: String, query: String): Set<String> {
         val tokens = SearchQuery.tokenize(query)
         if (tokens.isEmpty()) return emptySet()
+        val lowerTokens = tokens.map { it.lowercase() }
         return recognizedLineDao.searchContent(SearchQueries.contentInNotebooks(tokens, listOf(notebookId)))
+            .filter { wordMatchCount(it.text, lowerTokens) > 0 }
             .mapTo(HashSet()) { it.pageId }
     }
 
     /**
-     * The highlight boxes for one page (FA-24c on-canvas search-result mode): one box per matching
-     * line, page-space bounds ready for `pageToScreen` positioning. Empty query → empty.
+     * The highlight boxes for one page (FA-24c on-canvas search-result mode): one box per line that
+     * contains a query word (whole-word, not a substring), page-space bounds ready for `pageToScreen`.
      */
     suspend fun pageHighlights(pageId: String, query: String): List<SearchHighlight> {
         val tokens = SearchQuery.tokenize(query)
         if (tokens.isEmpty()) return emptyList()
+        val lowerTokens = tokens.map { it.lowercase() }
         return recognizedLineDao.searchContent(SearchQueries.contentOnPage(tokens, pageId))
+            .filter { wordMatchCount(it.text, lowerTokens) > 0 }
             .map { SearchHighlight(it.minX, it.minY, it.maxX, it.maxY) }
+    }
+
+    /**
+     * How many of [lowerTokens] appear in [text] as **whole words** (FA-24c). The line is tokenised the
+     * same way the query is ([SearchQuery.tokenize]), so "is" matches the word "is" but not "consistent"
+     * or "dentist" — closing the substring-match bug. Case-insensitive.
+     */
+    private fun wordMatchCount(text: String, lowerTokens: List<String>): Int {
+        val lineWords = SearchQuery.tokenize(text).mapTo(HashSet()) { it.lowercase() }
+        return lowerTokens.count { it in lineWords }
     }
 }
