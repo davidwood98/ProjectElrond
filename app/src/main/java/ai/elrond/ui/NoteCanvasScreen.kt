@@ -1115,7 +1115,7 @@ private fun TaskExtractionSheet(
                     .padding(top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
             ) {
-                TextButton(onClick = onDismiss) { Text("Dismiss") }
+                // No "Dismiss" button — tapping/swiping the sheet away closes it (onDismissRequest).
                 FilledTonalButton(
                     onClick = {
                         onConfirm(checked.indices.filter { checked[it] }.toSet())
