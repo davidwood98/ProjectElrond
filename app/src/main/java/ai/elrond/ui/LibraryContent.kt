@@ -100,7 +100,7 @@ import kotlinx.coroutines.delay
 
 /** Library top-level tabs of the Notes section (FA-14). Favorites/Unfiled are placeholders. */
 private enum class NotesTab(val label: String) {
-    ALL("All Notes"), RECENTS("Recents"), TIMELINE("Timeline"), FAVORITES("Favorites"), UNFILED("Unfiled")
+    ALL("All Notes"), RECENTS("Recents"), TIMELINE("Timeline"), FAVORITES("Favourites"), UNFILED("Unfiled")
 }
 
 private val NOTE_DATE = DateTimeFormatter.ofPattern("d MMM yyyy")
@@ -124,6 +124,8 @@ private fun LibraryActionBar(
     // section only). Null keeps the old static placeholder for the sections without search yet.
     query: String? = null,
     onQueryChange: (String) -> Unit = {},
+    // Instruction text shown when the field is empty — varies by tab to signal the search scope.
+    searchPlaceholder: String = "Search notes",
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp),
@@ -155,7 +157,7 @@ private fun LibraryActionBar(
                 Icon(Icons.Outlined.Search, contentDescription = null, tint = Neutral500, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
                 if (query == null) {
-                    Text("Search notes", color = Neutral500)
+                    Text(searchPlaceholder, color = Neutral500)
                 } else {
                     BasicTextField(
                         value = query,
@@ -165,7 +167,7 @@ private fun LibraryActionBar(
                         textStyle = LocalTextStyle.current.copy(color = LeapGrey),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         decorationBox = { inner ->
-                            if (query.isEmpty()) Text("Search notes", color = Neutral500)
+                            if (query.isEmpty()) Text(searchPlaceholder, color = Neutral500)
                             inner()
                         },
                     )
@@ -314,12 +316,23 @@ fun NotesSection(
         matchingIds = noteListViewModel.searchNotebooks(q, scopeIds, notebooks.map { it.notebookId })
     }
 
+    // FA-24c: the placeholder names the search scope so tab-scoped search reads clearly. A subject
+    // view (breadcrumb shown, no tab) keeps the default; All/Timeline search the whole library.
+    val searchPlaceholder = when {
+        selectedSubjectId != null -> "Search notes"
+        tab == NotesTab.RECENTS -> "Search recents"
+        tab == NotesTab.FAVORITES -> "Search favourites"
+        tab == NotesTab.UNFILED -> "Search unfiled"
+        else -> "Search notes"
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         LibraryActionBar(
             onToggleSidebar = onToggleSidebar,
             onOpenSettings = onOpenSettings,
             query = query,
             onQueryChange = { query = it },
+            searchPlaceholder = searchPlaceholder,
         )
 
         // Header (subject breadcrumb or tab row) stays visible while searching — for context + exit.
