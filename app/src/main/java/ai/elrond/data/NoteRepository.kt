@@ -214,6 +214,21 @@ class NoteRepository(
         pageDao.setContextSummary(pageId, summary)
     }
 
+    /** Page ids of a notebook in page order — FA-24d notebook-level content aggregation. */
+    suspend fun pageIdsForNotebook(notebookId: String): List<String> =
+        pageDao.pageIdsForNotebook(notebookId)
+
+    /** The notebook a page belongs to — lets the per-page save-job trigger a notebook-level run. */
+    suspend fun notebookIdForPage(pageId: String): String? = pageDao.notebookIdForPage(pageId)
+
+    /** Aggregated-content hash at the last AI tag-suggestion run (FA-24d Level 2 refresh gate). */
+    suspend fun getTagContextHash(notebookId: String): String? =
+        notebookDao.getTagContextHash(notebookId)
+
+    suspend fun setTagContextHash(notebookId: String, hash: String) {
+        notebookDao.setTagContextHash(notebookId, hash)
+    }
+
     /** Deletes the page; its strokes cascade-delete via the foreign key. */
     suspend fun deletePage(pageId: String) {
         pageDao.deleteById(pageId)

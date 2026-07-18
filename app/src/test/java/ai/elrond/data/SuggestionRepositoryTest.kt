@@ -119,4 +119,44 @@ class SuggestionRepositoryTest {
             "TODO:buy milk" in repo.existingTypedContents("p1"),
         )
     }
+
+    // ── FA-24d Level 2: notebook-scoped TAG suggestions ────────────────────────────────────────
+
+    // pageId "p1" is a real page (see setUp) — it only satisfies the page FK; TAG queries key off notebookId.
+    private fun tag(name: String) = PendingSuggestion(
+        pageId = "p1", type = SuggestionType.TAG, content = name, x = 0f, y = 0f, notebookId = "nb1",
+    )
+
+    @Test
+    fun `TAG suggestions are observed by notebook, not page`() = runTest {
+        repo.add(listOf(tag("physics"), tag("revision")))
+        assertEquals(
+            setOf("physics", "revision"),
+            repo.observeTagSuggestions("nb1").first().map { it.content }.toSet(),
+        )
+    }
+
+    @Test
+    fun `existingTagContents spans handled rows for de-dup`() = runTest {
+        repo.add(listOf(tag("physics")))
+        val id = repo.observeTagSuggestions("nb1").first().single().id
+        repo.markHandled(id) // accepted → leaves the active queue but still blocks re-suggestion
+
+        assertTrue(repo.observeTagSuggestions("nb1").first().isEmpty())
+        assertTrue("physics" in repo.existingTagContents("nb1"))
+    }
+
+    @Test
+    fun `clearActiveTagSuggestions drops un-actioned rows but keeps handled ones`() = runTest {
+        repo.add(listOf(tag("physics"), tag("revision")))
+        val physicsId = repo.observeTagSuggestions("nb1").first().first { it.content == "physics" }.id
+        repo.markHandled(physicsId)
+
+        repo.clearActiveTagSuggestions("nb1")
+
+        // The un-actioned "revision" is gone; the handled "physics" still de-dups future runs.
+        assertTrue(repo.observeTagSuggestions("nb1").first().isEmpty())
+        assertTrue("physics" in repo.existingTagContents("nb1"))
+        assertFalse("revision" in repo.existingTagContents("nb1"))
+    }
 }

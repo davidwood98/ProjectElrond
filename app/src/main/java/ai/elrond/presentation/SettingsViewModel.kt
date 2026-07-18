@@ -312,6 +312,9 @@ class SettingsViewModel @Inject constructor(
     val confirmCalendarExtraction: StateFlow<Boolean> = repository.confirmCalendarExtraction
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_TRUE)
 
+    val suggestTagsEnabled: StateFlow<Boolean> = repository.suggestTagsEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_TRUE)
+
     fun setAutoExtractionEnabled(enabled: Boolean) {
         viewModelScope.launch { repository.setAutoExtractionEnabled(enabled) }
     }
@@ -326,6 +329,10 @@ class SettingsViewModel @Inject constructor(
 
     fun setConfirmCalendarExtraction(enabled: Boolean) {
         viewModelScope.launch { repository.setConfirmCalendarExtraction(enabled) }
+    }
+
+    fun setSuggestTagsEnabled(enabled: Boolean) {
+        viewModelScope.launch { repository.setSuggestTagsEnabled(enabled) }
     }
 
     /** True when background extraction added TODO items without a popup — flairs the to-do tab. */

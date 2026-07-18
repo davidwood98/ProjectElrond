@@ -1,0 +1,120 @@
+package ai.elrond.domain
+
+import ai.elrond.aibackend.TagSuggestionExtractor
+import ai.elrond.data.SuggestionRepository
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.mockk
+import io.mockk.slot
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class TagSuggestionRunnerTest {
+
+    private fun extractorReturning(vararg names: String) = object : TagSuggestionExtractor {
+        override suspend fun extract(noteContent: String, existingTags: List<String>, maxSuggestions: Int) =
+            Result.success(names.toList())
+    }
+
+    private fun runner(
+        text: String,
+        extractor: TagSuggestionExtractor?,
+        repo: SuggestionRepository,
+        existingTags: List<String> = emptyList(),
+        lastHash: String? = null,
+        onSaveHash: (String) -> Unit = {},
+    ) = TagSuggestionRunner(
+        aggregateNotebookText = { text },
+        tagExtractor = extractor,
+        existingTagNames = { existingTags },
+        suggestionRepository = repo,
+        loadHash = { lastHash },
+        saveHash = { _, h -> onSaveHash(h) },
+    )
+
+    @Test
+    fun `writes new suggestions, excluding existing tags and already-suggested`() = runTest {
+        val repo = mockk<SuggestionRepository>(relaxed = true)
+        coEvery { repo.existingTagContents("nb") } returns setOf("waves")
+        val added = slot<List<PendingSuggestion>>()
+        coEvery { repo.add(capture(added)) } returns Unit
+
+        val count = runner(
+            text = "physics revision",
+            extractor = extractorReturning("physics", "waves", "revision"),
+            repo = repo,
+            existingTags = listOf("physics"), // existing tag → excluded
+        ).run("nb", "p1")
+
+        assertEquals(1, count)
+        assertEquals(listOf("revision"), added.captured.map { it.content })
+        val row = added.captured.single()
+        assertEquals(SuggestionType.TAG, row.type)
+        assertEquals("nb", row.notebookId)
+    }
+
+    @Test
+    fun `unchanged content skips the model call entirely`() = runTest {
+        val repo = mockk<SuggestionRepository>(relaxed = true)
+        var extracted = false
+        val extractor = object : TagSuggestionExtractor {
+            override suspend fun extract(noteContent: String, existingTags: List<String>, maxSuggestions: Int): Result<List<String>> {
+                extracted = true
+                return Result.success(listOf("x"))
+            }
+        }
+        val hash = "physics".hashCode().toString()
+        val count = runner(text = "physics", extractor = extractor, repo = repo, lastHash = hash).run("nb", "p1")
+
+        assertEquals(0, count)
+        assertTrue(!extracted)
+        coVerify(exactly = 0) { repo.clearActiveTagSuggestions(any()) }
+        coVerify(exactly = 0) { repo.add(any()) }
+    }
+
+    @Test
+    fun `changed content clears un-actioned suggestions before re-running`() = runTest {
+        val repo = mockk<SuggestionRepository>(relaxed = true)
+        coEvery { repo.existingTagContents("nb") } returns emptySet()
+
+        runner(
+            text = "new content",
+            extractor = extractorReturning("biology"),
+            repo = repo,
+            lastHash = "stale-hash",
+        ).run("nb", "p1")
+
+        coVerify(exactly = 1) { repo.clearActiveTagSuggestions("nb") }
+    }
+
+    @Test
+    fun `blank text does nothing`() = runTest {
+        val repo = mockk<SuggestionRepository>(relaxed = true)
+        val count = runner(text = "   ", extractor = extractorReturning("x"), repo = repo).run("nb", "p1")
+        assertEquals(0, count)
+        coVerify(exactly = 0) { repo.add(any()) }
+    }
+
+    @Test
+    fun `null extractor does nothing`() = runTest {
+        val repo = mockk<SuggestionRepository>(relaxed = true)
+        val count = runner(text = "content", extractor = null, repo = repo).run("nb", "p1")
+        assertEquals(0, count)
+    }
+
+    @Test
+    fun `hash is saved after a run so the next unchanged save skips`() = runTest {
+        val repo = mockk<SuggestionRepository>(relaxed = true)
+        coEvery { repo.existingTagContents(any()) } returns emptySet()
+        var saved: String? = null
+        runner(
+            text = "content",
+            extractor = extractorReturning("tag"),
+            repo = repo,
+            onSaveHash = { saved = it },
+        ).run("nb", "p1")
+        assertEquals("content".hashCode().toString(), saved)
+    }
+}

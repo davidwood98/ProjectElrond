@@ -2172,6 +2172,67 @@ build on the WSL SDK. Device re-verify pending.
   multi-page library result opens the filtered Pages menu → tap a page → lands in on-canvas mode; a
   single-page result still jumps straight to the page.
 
+## FA-24d — tag suggestions (2026-07-18)
+
+Two-tier tag suggestion on branch **FA-24** (spec: `docs/FA-24d-tag-suggestions.md`), surfaced as
+"+"-prefixed pills in BOTH the editor header `TagRow` and the shared `TagPickerDialog` (Library card
+⋮ + editor `+`). Tapping a pill commits via the SAME `createTag`/`assignTag` path manual entry uses,
+so an accepted suggestion is indistinguishable afterward. **DB now v22** (`MIGRATION_21_22`).
+**578 app + 34 aibackend JVM/Robolectric tests pass** (0 failures; was 574+? — +new suites) plus
+`assembleDebugAndroidTest` builds. **Note:** the spec's FA-24b sequencing is obsolete — `recognized_lines`
+already shipped (FA-24b, 2026-07-17), so Level 1 signal 4 + Level 2 were both built in this one pass.
+
+- **Product decisions (user-clarified up front):** full feature (Level 1 signals 1–4 + Level 2 AI);
+  suggestions in BOTH surfaces; Level 1 **stateless** (re-suggest freely); Level 2 **background on
+  save**, **refreshed when content changes**; **cap 5**; gated on the `autoExtractionEnabled` master +
+  new `suggestTagsEnabled` sub-toggle. **Visuals (user pick):** Level 1 (existing tag) = flat neutral
+  `Neutral200` pill; Level 2 (AI new tag) = low-opacity Leap-brand gradient wash (blue/green/navy/pink
+  @ 0.18α, `AiSuggestionBrush` in `ui/TagComponents.kt`) — its own identity dissolves the doc's flagged
+  "grey suggestion vs grey pending-removal, same look/opposite action" clash. A leading "+" on every
+  suggestion pill is the one cue vs. the identical-neutral pending-removal pill. Tap = accept; there is
+  deliberately **no explicit dismiss** this pass (Level 1 restates freely; un-actioned Level 2 refreshes
+  on content change) — revisit only if device use shows it's needed.
+- **Level 1 — pure `domain/TagSuggestionEngine.kt`** (JVM, no DB, live/stateless). Priority: (1)
+  same-Subject co-occurrence → (2) link-graph co-occurrence (this notebook's pages' `notebook_links`
+  targets' tags) → (4) whole-word content match against `recognized_lines` → (3) frequency fallback,
+  used ONLY when the relevance signals are all empty (ordered last precisely because it's the fallback,
+  per the doc's own text — a subtlety that first bit a test that assumed content-miss ⇒ no suggestion).
+  Excludes assigned tags, de-dups across tiers, caps at limit.
+- **Level 2 — `domain/TagSuggestionRunner.kt`** (JVM, decoupled from the trigger like
+  `AutoExtractionRunner`) + `:aibackend/TagSuggestionExtractor` (provider-agnostic, JSON string array,
+  existing tags passed as vocabulary so it proposes NEW names; drops existing-name dupes itself).
+  Notebook-scoped: aggregates cached `recognized_lines` across ALL the notebook's pages (no extra ML
+  Kit). **Skip/refresh gate** = `notebooks.tagContextHash` (hashCode of the aggregate): unchanged →
+  skip the Anthropic call; changed → `clearActiveTagSuggestions` (drops un-actioned rows, KEEPS handled
+  ones) then re-run. Writes `PendingSuggestion(type=TAG, notebookId=…)` rows.
+- **Trigger + future-proofing (user note):** `ExtractionWorker.maybeSuggestTags(pageId)` runs the
+  notebook pass after the per-page TODO/EVENT run (gated on `suggestTagsEnabled`). The runner is
+  trigger-agnostic, so switching to on-demand (run when the picker opens, if the AI cost is too high)
+  is a call-site change only — a `// FA-24d: on-demand alternative` seam is noted.
+- **Storage (DB v22, `MIGRATION_21_22`):** `pending_suggestions.notebookId TEXT` scopes TAG rows
+  (TODO/EVENT stay page-anchored, notebookId NULL); `notebooks.tagContextHash TEXT` backs the gate.
+  `SuggestionType` gains `TAG` (string-stored → no converter change; the one non-exhaustive
+  `when(type)` in `CanvasViewModel.commitSuggestion` got a no-op TAG branch — TAG never commits via the
+  per-page canvas sheet). **FK gotcha:** `pending_suggestions.pageId` has a NOT NULL page FK, so TAG
+  rows carry the triggering save's page as an **anchor pageId** purely to satisfy the FK — all TAG
+  queries key off `notebookId`, so the value is otherwise unused (`run(notebookId, anchorPageId)`).
+- **Merge/UI:** `presentation/TagSuggestionProvider.kt` (injectable, keeps `TagViewModel` thin +
+  independently testable) combines Level 1 (live engine query) + Level 2 (`observeTagSuggestions`)
+  flows, drops Level 2 names duplicating an existing/assigned/Level-1 tag, caps at 5. `TagViewModel`
+  exposes `suggestionsFor(notebookId)` (cached per notebook) + `acceptSuggestion`; the picker shows a
+  visually separated "Suggested" section (label + divider, `FlowRow` of pills) above the manual tags.
+- **Tests:** `TagSuggestionEngineTest` (each signal, ranking, cap, exclude-assigned, whole-word match),
+  `TagSuggestionRunnerTest` (aggregation dedup, hash skip-gate, refresh-on-change clears un-actioned),
+  `AiTagSuggestionExtractorTest` (parse/fences/dedup/cap, mocked provider), `TagSuggestionProviderTest`
+  (L1+L2 merge + dedup, accept == manual path for both tiers), `SuggestionRepositoryTest` (+3:
+  notebook-scoped TAG observe/de-dup/clear-keeps-handled), `ElrondMigrationTest` (v1→v22 + the
+  notebookId/tagContextHash columns). The header/picker suggestion pills + gradient are
+  device/manual-verified like the other Compose flows.
+- **Device-verify pending:** suggestion pills render (neutral L1 / gradient L2) in header + picker; tap
+  commits (moves into the confirmed row) and a pending-removal tap still cancels (the two don't
+  cross-trigger); AI suggestions appear a few seconds after writing on a notebook with content; the
+  `suggestTagsEnabled` toggle silences Level 2.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
@@ -2255,7 +2316,7 @@ discipline.)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v21** — but `MIGRATION_20_21` is a **no-op**: FA-24c's FTS5 search tables were abandoned (FTS5 unavailable on the device — content search uses `LIKE` over `recognized_lines`), and the FTS tables were never Room entities, so v21's entity schema equals v20's. Before that: the `pending_suggestions.rejected` column in `MIGRATION_19_20` (FA-24b ignore-vs-reject states); the `recognized_lines` recognition cache in `MIGRATION_18_19` (FA-24b); `tags` + `notebook_tags` in `MIGRATION_17_18` and `notebook_links` in `MIGRATION_16_17` (FA-24); before that `strokes.inputs` became a raw binary BLOB in `MIGRATION_15_16` (FA-22 storage-format finish); `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v22** — `MIGRATION_21_22` (FA-24d) adds `pending_suggestions.notebookId` (scopes `SuggestionType.TAG` rows to a notebook) + `notebooks.tagContextHash` (the Level-2 tag-suggestion refresh/skip gate). Before that: `MIGRATION_20_21` is a **no-op**: FA-24c's FTS5 search tables were abandoned (FTS5 unavailable on the device — content search uses `LIKE` over `recognized_lines`), and the FTS tables were never Room entities, so v21's entity schema equals v20's. Before that: the `pending_suggestions.rejected` column in `MIGRATION_19_20` (FA-24b ignore-vs-reject states); the `recognized_lines` recognition cache in `MIGRATION_18_19` (FA-24b); `tags` + `notebook_tags` in `MIGRATION_17_18` and `notebook_links` in `MIGRATION_16_17` (FA-24); before that `strokes.inputs` became a raw binary BLOB in `MIGRATION_15_16` (FA-22 storage-format finish); `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
 - **Outlook Azure app registration — required final step before release.** FA-11's Outlook integration is fully coded but ships **inert** until an Azure app is registered and `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` are set (see *Outlook / Microsoft Graph OAuth setup*). This is intentionally deferred to a final pre-release task; until done, Outlook stays NotConfigured and the calendar falls back to the device provider (not a bug). Pairs with the Anthropic-key release blocker above.

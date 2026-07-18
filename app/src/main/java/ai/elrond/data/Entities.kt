@@ -23,6 +23,12 @@ data class NotebookEntity(
     val templateId: String? = null,
     /** Last time the notebook (or one of its pages) changed; for recency ordering. */
     val modifiedAt: Long = 0,
+    /**
+     * Hash of the notebook's aggregated recognised text at the last AI tag-suggestion run (FA-24d
+     * Level 2). When the aggregate changes, un-actioned TAG suggestions are refreshed; an unchanged
+     * aggregate skips the Anthropic call. Null = never run.
+     */
+    val tagContextHash: String? = null,
 )
 
 @Entity(
@@ -433,5 +439,11 @@ data class PendingSuggestionEntity(
      * silent under `/Q`; ignored lines are re-offered. See [PendingSuggestionDao.rejectedContentsForPage].
      */
     val rejected: Boolean = false,
+    /**
+     * Notebook scope for TAG suggestions (FA-24d Level 2): a suggested tag applies to the whole
+     * notebook and has no page/x/y anchor, so TAG rows carry this and leave [pageId] blank. Null
+     * for TODO/EVENT rows, which stay page-anchored.
+     */
+    val notebookId: String? = null,
     val createdAt: Long,
 )

@@ -31,6 +31,7 @@ class TagViewModelTest {
 
     private val dispatcher = StandardTestDispatcher()
     private val repository = mockk<TagRepository>(relaxed = true)
+    private val suggestionProvider = mockk<TagSuggestionProvider>(relaxed = true)
 
     @Before
     fun setUp() = Dispatchers.setMain(dispatcher)
@@ -40,7 +41,7 @@ class TagViewModelTest {
 
     @Test
     fun `cancel before the window elapses leaves the tag assigned (no DB write)`() = runTest(dispatcher) {
-        val vm = TagViewModel(repository)
+        val vm = TagViewModel(repository, suggestionProvider)
         vm.beginUntag("nb1", "t1")
         runCurrent()
         assertTrue(vm.pendingRemovalKeys.value.contains("nb1:t1"))
@@ -56,7 +57,7 @@ class TagViewModelTest {
 
     @Test
     fun `an uncancelled window removes the tag after 2 seconds`() = runTest(dispatcher) {
-        val vm = TagViewModel(repository)
+        val vm = TagViewModel(repository, suggestionProvider)
         vm.beginUntag("nb1", "t1")
         advanceTimeBy(TagViewModel.UNTAG_WINDOW_MS + 1)
         runCurrent()
@@ -67,7 +68,7 @@ class TagViewModelTest {
 
     @Test
     fun `beginUntag is idempotent while a window is already pending`() = runTest(dispatcher) {
-        val vm = TagViewModel(repository)
+        val vm = TagViewModel(repository, suggestionProvider)
         vm.beginUntag("nb1", "t1")
         advanceTimeBy(500L)
         vm.beginUntag("nb1", "t1") // must NOT restart or double the countdown
@@ -79,7 +80,7 @@ class TagViewModelTest {
 
     @Test
     fun `windows for different pills are independent`() = runTest(dispatcher) {
-        val vm = TagViewModel(repository)
+        val vm = TagViewModel(repository, suggestionProvider)
         vm.beginUntag("nb1", "t1")
         vm.beginUntag("nb1", "t2")
         advanceTimeBy(1_000L)
@@ -93,7 +94,7 @@ class TagViewModelTest {
 
     @Test
     fun `construction sweeps orphans and repairs unreadable colours`() = runTest(dispatcher) {
-        TagViewModel(repository)
+        TagViewModel(repository, suggestionProvider)
         runCurrent()
         coVerify(exactly = 1) { repository.pruneOrphans() }
         coVerify(exactly = 1) { repository.repairUnreadableColors() }
@@ -107,7 +108,7 @@ class TagViewModelTest {
                 "nb2" to listOf(Tag("t1", "a", 0)), // the same tag on another notebook
             ),
         )
-        val vm = TagViewModel(repository)
+        val vm = TagViewModel(repository, suggestionProvider)
         vm.beginUntag("nb1", "t1")
         runCurrent()
 

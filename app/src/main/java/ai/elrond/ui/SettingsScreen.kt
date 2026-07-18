@@ -106,6 +106,7 @@ fun SettingsScreen(
     val confirmEnabled by viewModel.extractionConfirmationEnabled.collectAsStateWithLifecycle()
     val confirmTodo by viewModel.confirmTodoExtraction.collectAsStateWithLifecycle()
     val confirmCalendar by viewModel.confirmCalendarExtraction.collectAsStateWithLifecycle()
+    val suggestTags by viewModel.suggestTagsEnabled.collectAsStateWithLifecycle()
     val snapBackEnabled by viewModel.lassoSnapBackEnabled.collectAsStateWithLifecycle()
     val snapBackThreshold by viewModel.lassoSnapBackThreshold.collectAsStateWithLifecycle()
     val calendarProvider by viewModel.calendarProvider.collectAsStateWithLifecycle()
@@ -639,6 +640,15 @@ fun SettingsScreen(
                 enabled = autoExtraction && confirmEnabled,
                 onCheckedChange = viewModel::setConfirmCalendarExtraction,
                 indent = 32.dp,
+            )
+            SettingRow(
+                title = "Suggest tags",
+                subtitle = "Suggest topical tags for a notebook from its handwritten content. " +
+                    "Tap a suggested tag to add it.",
+                checked = suggestTags,
+                enabled = autoExtraction,
+                onCheckedChange = viewModel::setSuggestTagsEnabled,
+                indent = 16.dp,
             )
         }
     }

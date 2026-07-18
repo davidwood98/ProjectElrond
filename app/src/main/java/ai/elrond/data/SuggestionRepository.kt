@@ -49,6 +49,18 @@ class SuggestionRepository(
     suspend fun existingTypedContents(pageId: String): Set<String> =
         dao.typedContentsForPage(pageId).map { "${it.type}:${it.content.trim().lowercase()}" }.toSet()
 
+    /** Active (not-yet-decided) TAG suggestions for a notebook (FA-24d Level 2). */
+    fun observeTagSuggestions(notebookId: String): Flow<List<PendingSuggestion>> =
+        dao.observeTagsForNotebook(notebookId).map { rows -> rows.map { it.toDomain() } }
+
+    /** Normalized TAG contents ever suggested for a notebook (incl. handled) — for de-dup. */
+    suspend fun existingTagContents(notebookId: String): Set<String> =
+        dao.tagContentsForNotebook(notebookId).map { it.trim().lowercase() }.toSet()
+
+    /** Refresh-on-change: drop a notebook's un-actioned TAG suggestions before a re-run (FA-24d). */
+    suspend fun clearActiveTagSuggestions(notebookId: String) =
+        dao.deleteActiveTagsForNotebook(notebookId)
+
     suspend fun add(suggestions: List<PendingSuggestion>) {
         if (suggestions.isEmpty()) return
         val now = clock()
@@ -96,6 +108,7 @@ class SuggestionRepository(
         startMillis = startMillis,
         endMillis = endMillis,
         location = location,
+        notebookId = notebookId,
     )
 
     private fun PendingSuggestion.toEntity(now: Long) = PendingSuggestionEntity(
@@ -111,6 +124,7 @@ class SuggestionRepository(
         x = x,
         y = y,
         dismissed = false,
+        notebookId = notebookId,
         createdAt = now,
     )
 }

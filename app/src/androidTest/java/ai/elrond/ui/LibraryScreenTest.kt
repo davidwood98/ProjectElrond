@@ -4,8 +4,11 @@ import ai.elrond.data.CalendarProviderType
 import ai.elrond.data.ElrondDatabase
 import ai.elrond.data.NoOpOutlookAuthProvider
 import ai.elrond.data.NoteRepository
+import ai.elrond.data.NotebookLinkRepository
+import ai.elrond.data.RecognitionCacheRepository
 import ai.elrond.data.SettingsRepository
 import ai.elrond.data.SubjectRepository
+import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TagRepository
 import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.TodoRepository
@@ -14,6 +17,7 @@ import ai.elrond.presentation.EventsViewModel
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.presentation.SettingsViewModel
 import ai.elrond.presentation.SubjectViewModel
+import ai.elrond.presentation.TagSuggestionProvider
 import ai.elrond.presentation.TagViewModel
 import ai.elrond.presentation.TodoViewModel
 import android.content.Context
@@ -81,7 +85,18 @@ class LibraryScreenTest {
             SubjectRepository(db.subjectDao(), db.noteSubjectDao()),
             settingsRepository,
         )
-        tagViewModel = TagViewModel(TagRepository(db.tagDao(), db.notebookTagDao()))
+        val tagRepository = TagRepository(db.tagDao(), db.notebookTagDao())
+        tagViewModel = TagViewModel(
+            tagRepository,
+            TagSuggestionProvider(
+                tagRepository = tagRepository,
+                subjectRepository = SubjectRepository(db.subjectDao(), db.noteSubjectDao()),
+                notebookLinkRepository = NotebookLinkRepository(db.notebookLinkDao()),
+                noteRepository = repository,
+                recognitionCache = RecognitionCacheRepository(db.recognizedLineDao()),
+                suggestionRepository = SuggestionRepository(db.pendingSuggestionDao()),
+            ),
+        )
         calendarViewModel = CalendarViewModel(repository)
         eventsViewModel = EventsViewModel(
             providerTypeFlow = flowOf(CalendarProviderType.DEVICE),

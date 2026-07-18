@@ -9,6 +9,7 @@ import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
 import ai.elrond.domain.QuickNavSearch
 import ai.elrond.domain.SubjectNode
+import ai.elrond.domain.SuggestedTag
 import ai.elrond.domain.Tag
 import ai.elrond.presentation.NoteListViewModel
 import ai.elrond.ui.icons.ElrondIcons
@@ -422,6 +423,8 @@ fun EditorHeader(
     onBeginUntag: (Tag) -> Unit = {},
     onCancelUntag: (Tag) -> Unit = {},
     onAddTag: (() -> Unit)? = null,
+    tagSuggestions: List<SuggestedTag> = emptyList(),
+    onAcceptTagSuggestion: (SuggestedTag) -> Unit = {},
 ) {
     val titleMaxWidth = if (landscape) TITLE_MAX_WIDTH_LANDSCAPE else TITLE_MAX_WIDTH_PORTRAIT
     var editing by remember { mutableStateOf(false) }
@@ -504,6 +507,8 @@ fun EditorHeader(
                 onCancelUntag = onCancelUntag,
                 onAddTag = onAddTag,
                 fadeColor = HeaderBandColor,
+                suggestions = tagSuggestions,
+                onAcceptSuggestion = onAcceptTagSuggestion,
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(10.dp))

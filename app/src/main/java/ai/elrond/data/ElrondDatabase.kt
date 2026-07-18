@@ -25,7 +25,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NotebookTagEntity::class,
         RecognizedLineEntity::class,
     ],
-    version = 21,
+    version = 22,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -523,6 +523,18 @@ abstract class ElrondDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) = Unit
         }
 
+        /**
+         * v22 (FA-24d tag suggestions): `pending_suggestions.notebookId` scopes the new
+         * `SuggestionType.TAG` rows to a notebook (TODO/EVENT stay page-anchored, notebookId NULL);
+         * `notebooks.tagContextHash` backs the Level-2 refresh/skip gate.
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pending_suggestions ADD COLUMN notebookId TEXT")
+                db.execSQL("ALTER TABLE notebooks ADD COLUMN tagContextHash TEXT")
+            }
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -537,7 +549,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                     MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                     MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                     MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20,
-                    MIGRATION_20_21,
+                    MIGRATION_20_21, MIGRATION_21_22,
                 ).build().also { instance = it }
             }
     }

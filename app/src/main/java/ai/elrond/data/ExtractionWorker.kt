@@ -1,7 +1,9 @@
 package ai.elrond.data
 
 import ai.elrond.domain.AutoExtractionRunner
+import ai.elrond.domain.TagSuggestionRunner
 import ai.elrond.aibackend.CalendarEventExtractor
+import ai.elrond.aibackend.TagSuggestionExtractor
 import ai.elrond.aibackend.TaskExtractor
 import android.content.Context
 import android.os.PowerManager
@@ -30,6 +32,8 @@ class ExtractionWorker @AssistedInject constructor(
     private val suggestionRepository: SuggestionRepository,
     private val taskExtractor: TaskExtractor?,
     private val eventExtractor: CalendarEventExtractor?,
+    private val tagExtractor: TagSuggestionExtractor?,
+    private val tagRepository: TagRepository,
     private val recognizer: HandwritingRecognizer,
     private val recognitionCache: RecognitionCacheRepository,
 ) : CoroutineWorker(appContext, params) {
@@ -66,6 +70,7 @@ class ExtractionWorker @AssistedInject constructor(
 
         return try {
             runner.run(pageId, confirmTodo = confirmTodo, confirmCalendar = confirmCalendar)
+            maybeSuggestTags(pageId)
             Result.success()
         } catch (e: CancellationException) {
             throw e
@@ -75,6 +80,29 @@ class ExtractionWorker @AssistedInject constructor(
         } finally {
             recognizer.close()
         }
+    }
+
+    /**
+     * FA-24d Level 2: after the per-page TODO/EVENT run, suggest AI new tags for the whole notebook
+     * this page belongs to. Notebook-scoped (tag relevance needs more context than one page) and
+     * trigger-decoupled — [TagSuggestionRunner] can later be driven on-demand instead of on save.
+     * Aggregates only ALREADY-cached recognised lines across the notebook's pages (no extra ML Kit).
+     */
+    private suspend fun maybeSuggestTags(pageId: String) {
+        if (tagExtractor == null || !settings.suggestTagsEnabled.first()) return
+        val notebookId = noteRepository.notebookIdForPage(pageId) ?: return
+        TagSuggestionRunner(
+            aggregateNotebookText = { id ->
+                noteRepository.pageIdsForNotebook(id)
+                    .flatMap { recognitionCache.getForPage(it).map { line -> line.text } }
+                    .joinToString("\n")
+            },
+            tagExtractor = tagExtractor,
+            existingTagNames = { tagRepository.allTagNames() },
+            suggestionRepository = suggestionRepository,
+            loadHash = { id -> noteRepository.getTagContextHash(id) },
+            saveHash = { id, hash -> noteRepository.setTagContextHash(id, hash) },
+        ).run(notebookId, anchorPageId = pageId)
     }
 
     companion object {

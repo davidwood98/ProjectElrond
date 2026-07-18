@@ -1,6 +1,7 @@
 package ai.elrond.presentation
 
 import ai.elrond.data.TagRepository
+import ai.elrond.domain.SuggestedTag
 import ai.elrond.domain.Tag
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -39,6 +40,7 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class TagViewModel @Inject constructor(
     private val tagRepository: TagRepository,
+    private val tagSuggestionProvider: TagSuggestionProvider,
 ) : ViewModel() {
 
     init {
@@ -67,6 +69,23 @@ class TagViewModel @Inject constructor(
     /** Single-notebook view for the editor header. */
     fun tagsFor(notebookId: String): Flow<List<Tag>> =
         notebookTags.map { it[notebookId].orEmpty() }
+
+    /**
+     * Level 1 + Level 2 tag suggestions for a notebook (FA-24d), cached per notebook so both the
+     * editor header and the picker share one live query. Tapping a pill calls [acceptSuggestion].
+     */
+    private val suggestionFlows = mutableMapOf<String, StateFlow<List<SuggestedTag>>>()
+
+    fun suggestionsFor(notebookId: String): StateFlow<List<SuggestedTag>> =
+        suggestionFlows.getOrPut(notebookId) {
+            tagSuggestionProvider.observe(notebookId)
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        }
+
+    /** Commit a suggested tag (both tiers) via the same get-or-create/assign path as manual entry. */
+    fun acceptSuggestion(notebookId: String, suggestion: SuggestedTag) {
+        viewModelScope.launch { tagSuggestionProvider.accept(notebookId, suggestion) }
+    }
 
     /** Pills currently greyed-out/counting down (as "$notebookId:$tagId" keys). */
     private val pendingJobs = mutableMapOf<String, Job>()

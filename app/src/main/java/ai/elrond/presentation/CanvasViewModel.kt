@@ -3227,6 +3227,9 @@ class CanvasViewModel(
                 ),
                 sourcePageId = pageId,
             )
+            // FA-24d: TAG suggestions are notebook-scoped and committed via the tag picker
+            // (TagSuggestionProvider), never through this per-page canvas extraction sheet.
+            SuggestionType.TAG -> Unit
         }
     }
 

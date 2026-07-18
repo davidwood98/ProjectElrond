@@ -1,7 +1,13 @@
 package ai.elrond.ui
 
+import ai.elrond.domain.SuggestedTag
+import ai.elrond.domain.SuggestionOrigin
 import ai.elrond.domain.Tag
+import ai.elrond.ui.theme.LeapBlue
+import ai.elrond.ui.theme.LeapGreen
 import ai.elrond.ui.theme.LeapGrey
+import ai.elrond.ui.theme.LeapNavy
+import ai.elrond.ui.theme.LeapPink
 import ai.elrond.ui.theme.Neutral100
 import ai.elrond.ui.theme.Neutral200
 import ai.elrond.ui.theme.Neutral500
@@ -15,6 +21,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -31,6 +38,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -70,7 +78,11 @@ private const val TAG_COLLAPSE_ANIM_MS = 250
  * unassigned tag assigns it, tapping an assigned one removes it immediately (a modal checkbox
  * list is an explicit action — the 2s undo window belongs to the always-visible header row).
  * The field below creates-and-assigns a new tag (get-or-create by unique name).
+ *
+ * FA-24d: an optional "Suggested" section (visually separated by a label + divider) sits above the
+ * existing/manual tags — tapping a suggested pill commits it via [onAcceptSuggestion].
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun TagPickerDialog(
     allTags: List<Tag>,
@@ -78,6 +90,8 @@ fun TagPickerDialog(
     onToggle: (Tag) -> Unit,
     onCreateAndAssign: (String) -> Unit,
     onDismiss: () -> Unit,
+    suggestions: List<SuggestedTag> = emptyList(),
+    onAcceptSuggestion: (SuggestedTag) -> Unit = {},
 ) {
     var newTagName by remember { mutableStateOf("") }
     Dialog(onDismissRequest = onDismiss) {
@@ -94,6 +108,31 @@ fun TagPickerDialog(
                     color = LeapGrey,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                 )
+                if (suggestions.isNotEmpty()) {
+                    Text(
+                        "Suggested",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = Neutral500,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+                    ) {
+                        suggestions.forEach { suggestion ->
+                            SuggestionPill(
+                                suggestion = suggestion,
+                                onTap = { onAcceptSuggestion(suggestion) },
+                            )
+                        }
+                    }
+                    HorizontalDivider(
+                        color = Neutral200,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                    )
+                }
                 if (allTags.isEmpty()) {
                     Text(
                         "No tags yet — create one below.",
@@ -199,6 +238,8 @@ fun TagRow(
     onAddTag: () -> Unit,
     modifier: Modifier = Modifier,
     fadeColor: Color = Neutral100,
+    suggestions: List<SuggestedTag> = emptyList(),
+    onAcceptSuggestion: (SuggestedTag) -> Unit = {},
 ) {
     // Ghost bookkeeping so a removed tag collapses instead of jump-cutting: keep every seen tag
     // (and a stable order); prune ghosts after the exit animation has played. Unseen ids are
@@ -233,6 +274,11 @@ fun TagRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Suggestions sit at the LEFT (leading) end so they never push the right-anchored
+                // confirmed pills; tapping one commits it (it then reappears as a confirmed tag).
+                suggestions.forEach { suggestion ->
+                    SuggestionPill(suggestion = suggestion, onTap = { onAcceptSuggestion(suggestion) })
+                }
                 order.forEach { id ->
                     val tag = known[id] ?: return@forEach
                     AnimatedVisibility(
@@ -292,6 +338,54 @@ private fun FadeEdge(color: Color, leftEdge: Boolean, modifier: Modifier = Modif
  * One tag pill. [pendingRemoval] renders it greyed in place AND lifts the max-width cap so the
  * full name shows — the user sees exactly what's being removed during the correction window.
  */
+// Low-opacity Leap-brand wash marking an AI (Level 2) suggestion — distinct from the flat neutral
+// of a Level 1 (existing-tag) suggestion and from a confirmed tag's solid colour. Kept a light tint
+// so LeapGrey pill text stays readable in both themes (FA-24d).
+private val AiSuggestionBrush = Brush.linearGradient(
+    listOf(
+        LeapBlue.copy(alpha = 0.18f),
+        LeapGreen.copy(alpha = 0.18f),
+        LeapNavy.copy(alpha = 0.18f),
+        LeapPink.copy(alpha = 0.18f),
+    ),
+)
+
+/**
+ * A tag SUGGESTION pill (FA-24d): a leading "+" marks "not yet added, tap to add" — the one cue that
+ * distinguishes it from an identically-neutral pending-removal pill. [SuggestionOrigin.AI] tags get
+ * the Leap-gradient wash; [SuggestionOrigin.EXISTING] (Level 1) tags are flat neutral.
+ */
+@Composable
+private fun SuggestionPill(
+    suggestion: SuggestedTag,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val ai = suggestion.origin == SuggestionOrigin.AI
+    val base = modifier
+        .clip(RoundedCornerShape(999.dp))
+        .let { if (ai) it.background(AiSuggestionBrush) else it.background(Neutral200) }
+        .clickable(onClick = onTap)
+        .padding(horizontal = 10.dp, vertical = 4.dp)
+    Row(base, verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "+ ",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = if (ai) LeapGrey else Neutral500,
+        )
+        Text(
+            text = suggestion.name,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = if (ai) LeapGrey else Neutral500,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = TAG_PILL_MAX_WIDTH),
+        )
+    }
+}
+
 @Composable
 private fun TagPill(
     tag: Tag,

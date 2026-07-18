@@ -226,6 +226,10 @@ fun NoteCanvasScreen(
         headerNotebookId?.let { tagViewModel.pendingRemovalTagIdsFor(it) } ?: flowOf(emptySet())
     }.collectAsStateWithLifecycle(initialValue = emptySet())
     val allTags by tagViewModel.tags.collectAsStateWithLifecycle()
+    // FA-24d: Level 1 + Level 2 tag suggestions for this notebook (shared by header row + picker).
+    val tagSuggestions by remember(headerNotebookId) {
+        headerNotebookId?.let { tagViewModel.suggestionsFor(it) } ?: flowOf(emptyList())
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
     var tagPickerOpen by remember { mutableStateOf(false) }
     // Quick Nav lists NOTEBOOKS (one per notebook, titled by the notebook name so renames show), never
     // individual pages (FA-20).
@@ -500,6 +504,10 @@ fun NoteCanvasScreen(
             } else {
                 null
             },
+            tagSuggestions = tagSuggestions,
+            onAcceptTagSuggestion = { suggestion ->
+                headerNotebookId?.let { tagViewModel.acceptSuggestion(it, suggestion) }
+            },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
@@ -533,6 +541,8 @@ fun NoteCanvasScreen(
                 },
                 onCreateAndAssign = { tagViewModel.createAndAssignTag(pickerNotebookId, it) },
                 onDismiss = { tagPickerOpen = false },
+                suggestions = tagSuggestions,
+                onAcceptSuggestion = { tagViewModel.acceptSuggestion(pickerNotebookId, it) },
             )
         }
 

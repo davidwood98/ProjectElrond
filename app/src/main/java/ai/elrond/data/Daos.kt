@@ -42,6 +42,13 @@ interface NotebookDao {
     /** Snapshot of every notebook's id + title — FA-24c title search. */
     @Query("SELECT id, name FROM notebooks")
     suspend fun idsAndNames(): List<NotebookIdName>
+
+    /** Aggregated-content hash at the last AI tag-suggestion run (FA-24d Level 2 refresh gate). */
+    @Query("SELECT tagContextHash FROM notebooks WHERE id = :id")
+    suspend fun getTagContextHash(id: String): String?
+
+    @Query("UPDATE notebooks SET tagContextHash = :hash WHERE id = :id")
+    suspend fun setTagContextHash(id: String, hash: String)
 }
 
 /** A notebook's id + title, for FA-24c title search. */
@@ -85,6 +92,14 @@ interface NotePageDao {
 
     @Query("UPDATE note_pages SET customTitle = :title, modifiedAt = :modifiedAt WHERE id = :id")
     suspend fun rename(id: String, title: String?, modifiedAt: Long)
+
+    /** Page ids in a notebook, page order — for FA-24d notebook-level content aggregation. */
+    @Query("SELECT id FROM note_pages WHERE notebookId = :notebookId ORDER BY pageNumber, createdAt")
+    suspend fun pageIdsForNotebook(notebookId: String): List<String>
+
+    /** The notebook a page belongs to — lets the per-page save-job trigger a notebook-level run. */
+    @Query("SELECT notebookId FROM note_pages WHERE id = :id")
+    suspend fun notebookIdForPage(id: String): String?
 
     /** Cached page text used by the FA-24b extraction skip-gate. */
     @Query("SELECT contextSummary FROM note_pages WHERE id = :id")
@@ -386,6 +401,25 @@ interface PendingSuggestionDao {
     /** Type + content for every suggestion on a page (incl. dismissed) — type-namespaced de-dup. */
     @Query("SELECT type, content FROM pending_suggestions WHERE pageId = :pageId")
     suspend fun typedContentsForPage(pageId: String): List<PendingTypeContent>
+
+    /** Active (not-yet-decided) TAG suggestions for a notebook (FA-24d Level 2) — drives the pills. */
+    @Query(
+        "SELECT * FROM pending_suggestions WHERE notebookId = :notebookId " +
+            "AND type = 'TAG' AND dismissed = 0 ORDER BY createdAt",
+    )
+    fun observeTagsForNotebook(notebookId: String): Flow<List<PendingSuggestionEntity>>
+
+    /** Every TAG content ever suggested for a notebook (incl. handled) — de-dup against re-suggestion. */
+    @Query("SELECT content FROM pending_suggestions WHERE notebookId = :notebookId AND type = 'TAG'")
+    suspend fun tagContentsForNotebook(notebookId: String): List<String>
+
+    /**
+     * Delete a notebook's un-actioned TAG suggestions (FA-24d refresh-on-change): when the content
+     * changes, stale un-tapped suggestions are cleared before re-running. Accepted/dismissed rows
+     * (dismissed = 1) are kept so handled-once de-dup still holds.
+     */
+    @Query("DELETE FROM pending_suggestions WHERE notebookId = :notebookId AND type = 'TAG' AND dismissed = 0")
+    suspend fun deleteActiveTagsForNotebook(notebookId: String)
 
     @Query("SELECT * FROM pending_suggestions WHERE id = :id")
     suspend fun getById(id: String): PendingSuggestionEntity?

@@ -6,7 +6,9 @@ import ai.elrond.data.MlKitHandwritingRecognizer
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.AiCalendarEventExtractor
 import ai.elrond.aibackend.AiTaskExtractor
+import ai.elrond.aibackend.AiTagSuggestionExtractor
 import ai.elrond.aibackend.CalendarEventExtractor
+import ai.elrond.aibackend.TagSuggestionExtractor
 import ai.elrond.aibackend.TaskExtractor
 import ai.elrond.aibackend.anthropic.AnthropicConfig
 import ai.elrond.aibackend.anthropic.AnthropicProvider
@@ -43,4 +45,8 @@ object AiModule {
     @Provides
     fun provideCalendarEventExtractor(provider: AIProvider?): CalendarEventExtractor? =
         provider?.let { AiCalendarEventExtractor(it) }
+
+    @Provides
+    fun provideTagSuggestionExtractor(provider: AIProvider?): TagSuggestionExtractor? =
+        provider?.let { AiTagSuggestionExtractor(it) }
 }

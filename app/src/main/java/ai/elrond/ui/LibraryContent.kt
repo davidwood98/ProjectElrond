@@ -470,6 +470,7 @@ fun NotesSection(
     }
     tagCandidate?.let { notebook ->
         val assignedIds = notebookTags[notebook.notebookId].orEmpty().map { it.id }.toSet()
+        val tagSuggestions by tagViewModel.suggestionsFor(notebook.notebookId).collectAsStateWithLifecycle()
         TagPickerDialog(
             allTags = allTags,
             assignedTagIds = assignedIds,
@@ -479,6 +480,8 @@ fun NotesSection(
             },
             onCreateAndAssign = { tagViewModel.createAndAssignTag(notebook.notebookId, it) },
             onDismiss = { tagCandidate = null },
+            suggestions = tagSuggestions,
+            onAcceptSuggestion = { tagViewModel.acceptSuggestion(notebook.notebookId, it) },
         )
     }
 }

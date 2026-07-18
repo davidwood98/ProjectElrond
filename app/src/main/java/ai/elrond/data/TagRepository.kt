@@ -21,6 +21,9 @@ class TagRepository(
     fun observeTags(): Flow<List<Tag>> =
         tagDao.observeAll().map { rows -> rows.map(TagEntity::toDomain) }
 
+    /** All tag names — passed to the AI tag-suggester as vocabulary so it proposes NEW tags (FA-24d). */
+    suspend fun allTagNames(): List<String> = tagDao.getAll().map { it.name }
+
     /** notebookId → its assigned tags (name-ordered); a missing key means untagged. */
     fun observeNotebookTags(): Flow<Map<String, List<Tag>>> =
         notebookTagDao.observeAllWithTag()

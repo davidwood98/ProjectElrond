@@ -48,6 +48,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_18_19,
         ElrondDatabase.MIGRATION_19_20,
         ElrondDatabase.MIGRATION_20_21,
+        ElrondDatabase.MIGRATION_21_22,
     )
 
     /**
@@ -71,11 +72,39 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v21_and_validates_final_schema() {
+    fun migrates_v1_to_v22_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // v21 is a no-op (FA-24c dropped the FTS5 attempt — content search uses LIKE), so the entity
-        // schema equals v20's; this just asserts the whole chain still migrates + validates cleanly.
-        helper.runMigrationsAndValidate(TEST_DB, 21, true, *allMigrations).close()
+        helper.runMigrationsAndValidate(TEST_DB, 22, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_21_to_22_adds_tag_suggestion_columns() {
+        helper.createDatabase(TEST_DB, 21).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt, modifiedAt) VALUES ('nb1', 'N', 1, 1)")
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, " +
+                    "lastOpenedAt, tags, contextSummary, pageNumber, isBookmarked) " +
+                    "VALUES ('p1', 'nb1', NULL, 1, 1, 1, '', NULL, 1, 0)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 22, true, *allMigrations)
+
+        // A TAG suggestion scoped to the notebook (new notebookId column) round-trips.
+        db.execSQL(
+            "INSERT INTO pending_suggestions (id, pageId, type, content, priority, x, y, dismissed, rejected, notebookId, createdAt) " +
+                "VALUES ('t1', '', 'TAG', 'physics', 0, 0, 0, 0, 0, 'nb1', 1)",
+        )
+        db.query("SELECT notebookId FROM pending_suggestions WHERE id = 't1'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("nb1", cursor.getString(0))
+        }
+        // The notebooks.tagContextHash column exists and defaults to NULL for pre-existing rows.
+        db.query("SELECT tagContextHash FROM notebooks WHERE id = 'nb1'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(true, cursor.isNull(0))
+        }
+        db.close()
     }
 
     @Test

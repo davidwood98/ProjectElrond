@@ -467,6 +467,14 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[CONFIRM_CALENDAR_KEY] = enabled }
     }
 
+    /** Suggest AI-generated new tags for a notebook in the background (FA-24d Level 2). */
+    val suggestTagsEnabled: Flow<Boolean> = context.settingsDataStore.data
+        .map { it[SUGGEST_TAGS_KEY] ?: DEFAULT_TRUE }
+
+    suspend fun setSuggestTagsEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[SUGGEST_TAGS_KEY] = enabled }
+    }
+
     /**
      * Set true by the background job when it auto-adds TODO items without a confirmation
      * popup, so the UI can flair the to-do tab; cleared when the user opens the TODO panel.
@@ -549,6 +557,7 @@ class SettingsRepository(private val context: Context) {
         private val EXTRACTION_CONFIRM_KEY = booleanPreferencesKey("extraction_confirmation_enabled")
         private val CONFIRM_TODO_KEY = booleanPreferencesKey("confirm_todo_extraction")
         private val CONFIRM_CALENDAR_KEY = booleanPreferencesKey("confirm_calendar_extraction")
+        private val SUGGEST_TAGS_KEY = booleanPreferencesKey("suggest_tags_enabled")
         private val NEW_EXTRACTED_ITEMS_KEY = booleanPreferencesKey("has_new_extracted_items")
         private val EXPANDED_SUBJECTS_KEY = stringSetPreferencesKey("expanded_subject_ids")
         private val SELECTED_SUBJECT_KEY = stringPreferencesKey("selected_subject_id")

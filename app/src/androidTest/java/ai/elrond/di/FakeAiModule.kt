@@ -3,6 +3,7 @@ package ai.elrond.di
 import ai.elrond.data.HandwritingRecognizer
 import ai.elrond.aibackend.AIProvider
 import ai.elrond.aibackend.CalendarEventExtractor
+import ai.elrond.aibackend.TagSuggestionExtractor
 import ai.elrond.aibackend.TaskExtractor
 import androidx.ink.strokes.Stroke
 import dagger.Module
@@ -33,4 +34,7 @@ object FakeAiModule {
 
     @Provides
     fun provideCalendarEventExtractor(): CalendarEventExtractor? = null
+
+    @Provides
+    fun provideTagSuggestionExtractor(): TagSuggestionExtractor? = null
 }
