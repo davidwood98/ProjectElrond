@@ -2,7 +2,9 @@ package ai.elrond.presentation
 
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.NotebookSummary
+import ai.elrond.data.SearchRepository
 import ai.elrond.data.SessionNotesTracker
+import ai.elrond.data.SettingsRepository
 import ai.elrond.data.ThumbnailCache
 import ai.elrond.data.NoteRepository
 import android.graphics.Bitmap
@@ -24,6 +26,9 @@ class NoteListViewModel @Inject constructor(
     private val thumbnailCache: ThumbnailCache,
     // Defaulted so existing direct constructions in tests still compile; Hilt injects the singleton.
     private val sessionNotesTracker: SessionNotesTracker = SessionNotesTracker(),
+    // Nullable-defaulted for the same reason; Hilt provides the real SearchRepository (FA-24c).
+    private val searchRepository: SearchRepository? = null,
+    private val settings: SettingsRepository? = null,
 ) : ViewModel() {
 
     /** All pages, most recently edited first. */
@@ -86,6 +91,33 @@ class NoteListViewModel @Inject constructor(
             repository.deleteNotebook(notebookId)
             thumbnailCache.delete(coverPageId)
         }
+    }
+
+    /**
+     * FA-24c: the relevance-ranked notebook ids matching [query] within [scopeIds] (title/tag/content),
+     * for filtering the tile grid. The caller computes [scopeIds] from the active tab/subject and
+     * passes the tab's own order as [naturalOrder] for stable ties. Empty where search is unavailable.
+     */
+    suspend fun searchNotebooks(
+        query: String,
+        scopeIds: Set<String>,
+        naturalOrder: List<String>,
+    ): List<String> = searchRepository?.rankedNotebookIds(query, scopeIds, naturalOrder) ?: emptyList()
+
+    /**
+     * FA-24c: opening a content search result puts its notebook into on-canvas search-result mode
+     * (persisted, so the editor highlights survive a background→resume). Called on a search-result tap.
+     */
+    fun enterSearchMode(notebookId: String, query: String) {
+        viewModelScope.launch { settings?.setSearchMode(notebookId, query) }
+    }
+
+    /**
+     * Clears any active search-result mode — called when the Library home is entered, so returning to
+     * the library (or relaunching after a swipe-kill, which starts at the library) ends the mode.
+     */
+    fun clearSearchMode() {
+        viewModelScope.launch { settings?.clearSearchMode() }
     }
 
     /** Cached WebP thumbnail for the card (decoded off the main thread), or null if none exists yet. */

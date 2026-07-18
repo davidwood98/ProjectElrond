@@ -103,4 +103,62 @@ class SubjectTreeTest {
         // Clamped at the bottom.
         assertEquals(listOf("a", "b", "c"), SubjectTree.move(siblings, "c", up = false).map { it.id })
     }
+
+    // --- FA-24c search scoping: rootAncestorId + descendantsOf ---
+
+    private fun byId(vararg subjects: Subject) = subjects.associateBy { it.id }
+
+    @Test
+    fun `descendantsOf a leaf subject is itself only`() {
+        val map = byId(subject("a"))
+        assertEquals(setOf("a"), SubjectTree.descendantsOf("a", map))
+    }
+
+    @Test
+    fun `descendantsOf a multi-level subtree is inclusive of every level`() {
+        // a > b > c ; a > d
+        val map = byId(
+            subject("a"),
+            subject("b", parentId = "a"),
+            subject("c", parentId = "b"),
+            subject("d", parentId = "a"),
+            subject("z"), // unrelated sibling tree — must not leak in
+        )
+        assertEquals(setOf("a", "b", "c", "d"), SubjectTree.descendantsOf("a", map))
+        assertEquals(setOf("b", "c"), SubjectTree.descendantsOf("b", map))
+    }
+
+    @Test
+    fun `descendantsOf a null or unknown subject is empty`() {
+        val map = byId(subject("a"))
+        assertEquals(emptySet<String>(), SubjectTree.descendantsOf(null, map))
+        assertEquals(emptySet<String>(), SubjectTree.descendantsOf("ghost", map))
+    }
+
+    @Test
+    fun `rootAncestorId walks up to the top of the tree from any depth`() {
+        // a > b > c
+        val map = byId(
+            subject("a"),
+            subject("b", parentId = "a"),
+            subject("c", parentId = "b"),
+        )
+        assertEquals("a", SubjectTree.rootAncestorId("c", map))
+        assertEquals("a", SubjectTree.rootAncestorId("b", map))
+        assertEquals("a", SubjectTree.rootAncestorId("a", map))
+        assertEquals(null, SubjectTree.rootAncestorId("ghost", map))
+    }
+
+    @Test
+    fun `search scope from deep in a tree covers the whole tree from its root`() {
+        // The FA-24c rule: searching while inside a>b>c scopes to all of a's tree.
+        val map = byId(
+            subject("a"),
+            subject("b", parentId = "a"),
+            subject("c", parentId = "b"),
+            subject("d", parentId = "a"),
+        )
+        val scope = SubjectTree.descendantsOf(SubjectTree.rootAncestorId("c", map), map)
+        assertEquals(setOf("a", "b", "c", "d"), scope)
+    }
 }

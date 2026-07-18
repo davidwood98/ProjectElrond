@@ -3,6 +3,7 @@ package ai.elrond.ui
 import ai.elrond.data.CalendarProviderType
 import ai.elrond.domain.NotePage
 import ai.elrond.domain.NotebookSummary
+import ai.elrond.domain.SubjectTree
 import ai.elrond.domain.TodoItem
 import ai.elrond.domain.TodoPriority
 import ai.elrond.domain.TodoStatus
@@ -24,6 +25,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,6 +48,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Email
@@ -62,6 +65,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -69,6 +73,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,6 +85,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -90,6 +96,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 
 /** Library top-level tabs of the Notes section (FA-14). Favorites/Unfiled are placeholders. */
 private enum class NotesTab(val label: String) {
@@ -113,6 +120,10 @@ internal const val LIBRARY_NOTE_CARD_TAG = "library-note-card"
 private fun LibraryActionBar(
     onToggleSidebar: (() -> Unit)?,
     onOpenSettings: () -> Unit,
+    // FA-24c: a non-null [query] makes the search field editable and filters the tile grid (Notes
+    // section only). Null keeps the old static placeholder for the sections without search yet.
+    query: String? = null,
+    onQueryChange: (String) -> Unit = {},
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp),
@@ -143,7 +154,30 @@ private fun LibraryActionBar(
             ) {
                 Icon(Icons.Outlined.Search, contentDescription = null, tint = Neutral500, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
-                Text("Search notes", color = Neutral500)
+                if (query == null) {
+                    Text("Search notes", color = Neutral500)
+                } else {
+                    BasicTextField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        textStyle = LocalTextStyle.current.copy(color = LeapGrey),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        decorationBox = { inner ->
+                            if (query.isEmpty()) Text("Search notes", color = Neutral500)
+                            inner()
+                        },
+                    )
+                    if (query.isNotEmpty()) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Clear search",
+                            tint = Neutral500,
+                            modifier = Modifier.size(18.dp).clickable { onQueryChange("") },
+                        )
+                    }
+                }
             }
         }
         // Import (placeholder) — soft-accent tile, matching the handoff.
@@ -193,7 +227,7 @@ private fun ViewOptionsButton() {
 // ─────────────────────────────────── Notes ───────────────────────────────────
 
 /** Per-card actions, bundled to keep [NotesGrid]/[NotebookCardItem] signatures small (FA-16). */
-private class NoteCardCallbacks(
+private data class NoteCardCallbacks(
     val onOpenNote: (String) -> Unit,
     val onRename: (NotebookSummary) -> Unit,
     val onMove: (NotebookSummary) -> Unit,
@@ -247,12 +281,49 @@ fun NotesSection(
         },
     )
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        LibraryActionBar(onToggleSidebar = onToggleSidebar, onOpenSettings = onOpenSettings)
+    var query by rememberSaveable(key = "library.searchQuery") { mutableStateOf("") }
+    var matchingIds by remember { mutableStateOf<List<String>?>(null) }
+    val notebooksById = remember(notebooks) { notebooks.associateBy { it.notebookId } }
 
+    // FA-24c: landing on the library home ends any on-canvas search-result mode — so returning here
+    // (or relaunching after a swipe-kill, which starts at the library) clears the editor highlights.
+    LaunchedEffect(Unit) { noteListViewModel.clearSearchMode() }
+
+    // FA-24c: debounced tile-filter search. Scope is computed in-memory from the active tab/subject
+    // (the subject case expands to the whole tree via SubjectTree — broader than the direct-children
+    // grid); SearchRepository returns the ranked notebook ids. Blank query → no filter (null).
+    LaunchedEffect(query, tab, selectedSubjectId, notebooks, noteSubjects, subjectsById, recents) {
+        val q = query.trim()
+        if (q.isEmpty()) {
+            matchingIds = null
+            return@LaunchedEffect
+        }
+        delay(180) // debounce: the effect restarts (cancels) on each keystroke/scope change
+        val scopeIds: Set<String> = when {
+            selectedSubjectId != null -> {
+                val subtree = SubjectTree.descendantsOf(
+                    SubjectTree.rootAncestorId(selectedSubjectId, subjectsById), subjectsById,
+                )
+                notebooks.filter { noteSubjects[it.notebookId] in subtree }.mapTo(HashSet()) { it.notebookId }
+            }
+            tab == NotesTab.RECENTS -> recents.mapTo(HashSet()) { it.notebookId }
+            tab == NotesTab.UNFILED -> notebooks.filter { it.notebookId !in noteSubjects }.mapTo(HashSet()) { it.notebookId }
+            tab == NotesTab.FAVORITES -> emptySet() // no backing yet (placeholder tab)
+            else -> notebooks.mapTo(HashSet()) { it.notebookId } // ALL + TIMELINE = entire library
+        }
+        matchingIds = noteListViewModel.searchNotebooks(q, scopeIds, notebooks.map { it.notebookId })
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        LibraryActionBar(
+            onToggleSidebar = onToggleSidebar,
+            onOpenSettings = onOpenSettings,
+            query = query,
+            onQueryChange = { query = it },
+        )
+
+        // Header (subject breadcrumb or tab row) stays visible while searching — for context + exit.
         if (selectedSubjectId != null) {
-            // Subject view (a subject is selected): the breadcrumb path replaces the tab row and the
-            // grid shows only the notes filed directly in this subject.
             SubjectPathTabs(
                 path = selectedPath,
                 onSelectAll = { subjectViewModel.selectSubject(null) },
@@ -260,15 +331,6 @@ fun NotesSection(
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp),
             )
             HorizontalDivider(modifier = Modifier.padding(top = 10.dp))
-            val shown = notebooks.filter { noteSubjects[it.notebookId] == selectedSubjectId }
-            if (shown.isEmpty()) {
-                PlaceholderState(
-                    "No notes in this subject yet",
-                    "Move notes here from a note card's ⋮ menu, or open a note and assign it to this subject.",
-                )
-            } else {
-                NotesGrid(shown, noteListViewModel, subjectsById, noteSubjects, callbacks)
-            }
         } else {
             UnderlineTabRow(
                 tabs = NotesTab.entries,
@@ -277,8 +339,43 @@ fun NotesSection(
                 onSelect = { tab = it },
                 trailing = { ViewOptionsButton() },
             )
+        }
 
-            when (tab) {
+        val ids = matchingIds
+        when {
+            ids != null -> {
+                // Search active: ranked matches (scope already applied) replace the tab body — even on
+                // Timeline/Favorites, which search the whole library.
+                val displayed = ids.mapNotNull { notebooksById[it] }
+                if (displayed.isEmpty()) {
+                    PlaceholderState("No results", "No notes match “${query.trim()}”.")
+                } else {
+                    // Opening a result puts its notebook into on-canvas search-result mode (the editor
+                    // only shows the pill/highlights when there are content matches). The opened page id
+                    // is a notebook's last-viewed/cover page → resolve which notebook was tapped.
+                    val searchCallbacks = callbacks.copy(
+                        onOpenNote = { pid ->
+                            displayed.firstOrNull { it.lastViewedPageId == pid || it.coverPageId == pid }
+                                ?.let { noteListViewModel.enterSearchMode(it.notebookId, query.trim()) }
+                            callbacks.onOpenNote(pid)
+                        },
+                    )
+                    NotesGrid(displayed, noteListViewModel, subjectsById, noteSubjects, searchCallbacks)
+                }
+            }
+            selectedSubjectId != null -> {
+                // Subject view: the grid shows only the notes filed directly in this subject.
+                val shown = notebooks.filter { noteSubjects[it.notebookId] == selectedSubjectId }
+                if (shown.isEmpty()) {
+                    PlaceholderState(
+                        "No notes in this subject yet",
+                        "Move notes here from a note card's ⋮ menu, or open a note and assign it to this subject.",
+                    )
+                } else {
+                    NotesGrid(shown, noteListViewModel, subjectsById, noteSubjects, callbacks)
+                }
+            }
+            else -> when (tab) {
                 NotesTab.TIMELINE -> CalendarScreen(
                     onOpenNote = onOpenNote,
                     showEvents = false,

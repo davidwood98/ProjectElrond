@@ -5,8 +5,10 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.RawQuery
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.sqlite.db.SupportSQLiteQuery
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -36,7 +38,14 @@ interface NotebookDao {
     /** Deletes a notebook; its pages (and their strokes/ai-notes/edit-events) cascade via FKs (FA-20). */
     @Query("DELETE FROM notebooks WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    /** Snapshot of every notebook's id + title — FA-24c title search. */
+    @Query("SELECT id, name FROM notebooks")
+    suspend fun idsAndNames(): List<NotebookIdName>
 }
+
+/** A notebook's id + title, for FA-24c title search. */
+data class NotebookIdName(val id: String, val name: String)
 
 @Dao
 interface NotePageDao {
@@ -197,7 +206,28 @@ interface RecognizedLineDao {
     /** Cached text for one line key, or null on a cache miss. */
     @Query("SELECT text FROM recognized_lines WHERE id = :id")
     suspend fun textForId(id: String): String?
+
+    // --- FA-24c content search (LIKE over recognized_lines) ---
+    // No FTS: FTS5 isn't dependable on Android system SQLite (device round found `no such module:
+    // fts5`), and LIKE over the already-populated cache needs no index/backfill and is testable under
+    // Robolectric. The SQL is built by [SearchQueries] (dynamic token-OR + notebook IN-clause), so it
+    // goes through @RawQuery; relevance is scored in Kotlin from the returned [ContentLineRow.text].
+
+    @RawQuery
+    suspend fun searchContent(query: SupportSQLiteQuery): List<ContentLineRow>
 }
+
+/** A content line hit: notebook + page + the recognized text (for Kotlin relevance) + page-space bounds. */
+data class ContentLineRow(
+    val notebookId: String,
+    val pageId: String,
+    val lineId: String,
+    val text: String,
+    val minX: Float,
+    val minY: Float,
+    val maxX: Float,
+    val maxY: Float,
+)
 
 @Dao
 interface TagDao {
@@ -261,6 +291,13 @@ interface NotebookTagDao {
             "ORDER BY nt.rowid DESC",
     )
     fun observeAllWithTag(): Flow<List<NotebookTagRow>>
+
+    /** One-shot snapshot of every membership + its tag name — FA-24c tag search. */
+    @Query(
+        "SELECT nt.notebookId AS notebookId, nt.tagId AS tagId, t.name AS name, " +
+            "t.colorArgb AS colorArgb FROM notebook_tags nt JOIN tags t ON t.id = nt.tagId",
+    )
+    suspend fun getAllWithTag(): List<NotebookTagRow>
 }
 
 /** One backlink row: a link on [sourcePageId] (in notebook [sourceNotebookId]) pointing here. */

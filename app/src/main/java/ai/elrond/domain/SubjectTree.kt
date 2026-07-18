@@ -71,6 +71,40 @@ object SubjectTree {
         return chain.asReversed()
     }
 
+    /**
+     * The topmost ancestor of [subjectId] (the root of its tree), or [subjectId] itself if it has no
+     * parent. Returns null if [subjectId] is null or unknown. Cycle-safe. Used by FA-24c search: a
+     * search launched from anywhere inside a subject tree scopes to the whole tree from its root.
+     */
+    fun rootAncestorId(subjectId: String?, byId: Map<String, Subject>): String? {
+        if (subjectId == null) return null
+        val seen = HashSet<String>()
+        var current = byId[subjectId] ?: return null
+        while (seen.add(current.id)) {
+            current = current.parentId?.let { byId[it] } ?: return current.id
+        }
+        return current.id // cycle: stop at the first repeat
+    }
+
+    /**
+     * All subject ids in the subtree rooted at [subjectId], **inclusive** of [subjectId] itself
+     * (a leaf subject → just itself). Empty if [subjectId] is null or unknown. Cycle-safe. FA-24c
+     * search uses `descendantsOf(rootAncestorId(current))` to scope to the current subject's whole
+     * tree, independent of the direct-children-only subject grid.
+     */
+    fun descendantsOf(subjectId: String?, byId: Map<String, Subject>): Set<String> {
+        if (subjectId == null || subjectId !in byId) return emptySet()
+        val byParent = byId.values.groupBy { it.parentId }
+        val result = LinkedHashSet<String>()
+        val stack = ArrayDeque<String>().apply { add(subjectId) }
+        while (stack.isNotEmpty()) {
+            val id = stack.removeLast()
+            if (!result.add(id)) continue // cycle guard
+            byParent[id].orEmpty().forEach { stack.add(it.id) }
+        }
+        return result
+    }
+
     /** Pre-order flatten of the forest (parents before their children); keeps each node's depth. */
     fun flatten(nodes: List<SubjectNode>): List<SubjectNode> = buildList {
         fun visit(list: List<SubjectNode>) {

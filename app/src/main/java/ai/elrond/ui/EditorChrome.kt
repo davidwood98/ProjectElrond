@@ -621,6 +621,9 @@ fun PagesOverlay(
     onReorder: (List<String>) -> Unit,
     onMultiDelete: (Set<String>) -> Unit,
     onDismiss: () -> Unit,
+    // FA-24c: non-null → the overlay is a search-results view showing only these pages (a matching-page
+    // picker for a multi-page search hit). Reorder/add are disabled, like the bookmark filter.
+    searchMatchIds: Set<String>? = null,
 ) {
     var selectMode by remember { mutableStateOf(false) }
     val selectedIds = remember { mutableStateListOf<String>() }
@@ -628,9 +631,17 @@ fun PagesOverlay(
     // disabled while filtered (it's a full-notebook operation); tap still opens the page.
     var filterBookmarks by remember { mutableStateOf(false) }
     val hasBookmarks = pages.any { it.isBookmarked }
+    // FA-24c search-results view takes precedence over the bookmark filter.
+    val searchFiltered = searchMatchIds != null
     // Effective filter: never strand the user on an empty grid if the last bookmark is removed.
-    val bookmarkedOnly = filterBookmarks && hasBookmarks
-    val visiblePages = if (bookmarkedOnly) pages.filter { it.isBookmarked } else pages
+    val bookmarkedOnly = filterBookmarks && hasBookmarks && !searchFiltered
+    // Either filter is a read-only view: reorder + add-page are disabled, tap still opens.
+    val filtered = searchFiltered || bookmarkedOnly
+    val visiblePages = when {
+        searchFiltered -> pages.filter { it.id in searchMatchIds!! }
+        bookmarkedOnly -> pages.filter { it.isBookmarked }
+        else -> pages
+    }
     var draggingId by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     // The pointer's position in grid space at drag start (the dragged card's parent origin + the
@@ -662,7 +673,13 @@ fun PagesOverlay(
                         color = LeapGrey,
                     )
                     Spacer(Modifier.width(10.dp))
-                    Pill(if (pages.size == 1) "1 page" else "${pages.size} pages")
+                    Pill(
+                        when {
+                            searchFiltered -> if (visiblePages.size == 1) "1 match" else "${visiblePages.size} matches"
+                            pages.size == 1 -> "1 page"
+                            else -> "${pages.size} pages"
+                        },
+                    )
                     // Bookmarks filter — show only bookmarked pages (disabled when none exist).
                     Spacer(Modifier.width(4.dp))
                     val accent = LeapTheme.tokens.accent
@@ -723,9 +740,9 @@ fun PagesOverlay(
                         // True page number / neighbours come from the FULL list, so the filtered
                         // view still shows real numbers and reorder math stays whole-notebook.
                         val fullIndex = pages.indexOfFirst { it.id == page.id }
-                        val dragModifier = Modifier.pointerInput(page.id, selectMode, bookmarkedOnly, pages.size) {
-                            // No reorder while filtered to bookmarks (it's a full-notebook operation).
-                            if (selectMode || bookmarkedOnly) return@pointerInput
+                        val dragModifier = Modifier.pointerInput(page.id, selectMode, filtered, pages.size) {
+                            // No reorder while filtered (bookmarks or search) — it's a full-notebook operation.
+                            if (selectMode || filtered) return@pointerInput
                             detectDragGesturesAfterLongPress(
                                 onDragStart = { offset ->
                                     draggingId = page.id
@@ -782,8 +799,8 @@ fun PagesOverlay(
                             number = fullIndex + 1,
                             isCurrent = page.id == currentPageId,
                             canDelete = pages.size > 1,
-                            canMoveEarlier = fullIndex > 0 && !bookmarkedOnly,
-                            canMoveLater = fullIndex < pages.lastIndex && !bookmarkedOnly,
+                            canMoveEarlier = fullIndex > 0 && !filtered,
+                            canMoveLater = fullIndex < pages.lastIndex && !filtered,
                             noteListViewModel = noteListViewModel,
                             selectMode = selectMode,
                             selected = page.id in selectedIds,
@@ -801,7 +818,7 @@ fun PagesOverlay(
                         )
                     }
                     // "Add page" only in the full (unfiltered) view — not while filtered to bookmarks.
-                    if (!selectMode && !bookmarkedOnly) item { AddPageTile(onClick = onAddPage) }
+                    if (!selectMode && !filtered) item { AddPageTile(onClick = onAddPage) }
                 }
             }
         }

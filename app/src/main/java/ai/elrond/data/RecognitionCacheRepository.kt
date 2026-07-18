@@ -16,10 +16,8 @@ interface RecognitionCache {
  * Persistent recognition cache (FA-24b): recognized handwriting lines keyed by their ordered
  * [ai.elrond.domain.CanvasStroke] ids, so AI features assemble page context without re-running
  * ML Kit on unchanged ink. Shared as a `@Singleton` because the background worker and the
- * ViewModel use separate recognizer instances but must see one cache.
- *
- * The write/sync path ([buildRecognizedLinesCached]) drives [getForPage]/[upsertAll]/[deleteByIds];
- * the read path ([textForLine]) is the ViewModel's per-line lookup (via [RecognitionCache]).
+ * ViewModel use separate recognizer instances but must see one cache. FA-24c content search reads
+ * these same rows directly via `LIKE` (see [SearchRepository]) — no separate search index.
  */
 class RecognitionCacheRepository(
     private val dao: RecognizedLineDao,

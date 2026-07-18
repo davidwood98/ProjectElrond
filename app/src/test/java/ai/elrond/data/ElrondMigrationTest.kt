@@ -47,6 +47,7 @@ class ElrondMigrationTest {
         ElrondDatabase.MIGRATION_17_18,
         ElrondDatabase.MIGRATION_18_19,
         ElrondDatabase.MIGRATION_19_20,
+        ElrondDatabase.MIGRATION_20_21,
     )
 
     /**
@@ -70,11 +71,36 @@ class ElrondMigrationTest {
     }
 
     @Test
-    fun migrates_v1_to_v20_and_validates_final_schema() {
+    fun migrates_v1_to_v21_and_validates_final_schema() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Throws if the migrated schema doesn't match the exported v20 schema (FA-24b adds the
-        // pending_suggestions.rejected column on top of the v19 recognized_lines cache).
-        helper.runMigrationsAndValidate(TEST_DB, 20, true, *allMigrations).close()
+        // v21 is a no-op (FA-24c dropped the FTS5 attempt — content search uses LIKE), so the entity
+        // schema equals v20's; this just asserts the whole chain still migrates + validates cleanly.
+        helper.runMigrationsAndValidate(TEST_DB, 21, true, *allMigrations).close()
+    }
+
+    @Test
+    fun migration_20_to_21_is_a_noop_and_keeps_recognized_lines() {
+        // v21 adds nothing (the FTS5 attempt was abandoned); the v19 recognition cache — which content
+        // search now reads directly via LIKE — must survive the chain intact.
+        helper.createDatabase(TEST_DB, 20).apply {
+            execSQL("INSERT INTO notebooks (id, name, createdAt, modifiedAt) VALUES ('nb1', 'N', 1, 1)")
+            execSQL(
+                "INSERT INTO note_pages (id, notebookId, customTitle, createdAt, modifiedAt, " +
+                    "lastOpenedAt, tags, contextSummary, pageNumber, isBookmarked) " +
+                    "VALUES ('p1', 'nb1', NULL, 1, 1, 1, '', NULL, 1, 0)",
+            )
+            execSQL(
+                "INSERT INTO recognized_lines (id, pageId, strokeIds, text, minX, minY, maxX, maxY, recognizedAt) " +
+                    "VALUES ('l1', 'p1', 's1', 'hello', 0, 0, 1, 1, 1)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 21, true, *allMigrations)
+        db.query("SELECT text FROM recognized_lines WHERE id = 'l1'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("hello", cursor.getString(0))
+        }
+        db.close()
     }
 
     @Test

@@ -25,7 +25,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NotebookTagEntity::class,
         RecognizedLineEntity::class,
     ],
-    version = 20,
+    version = 21,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -510,6 +510,19 @@ abstract class ElrondDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v21 is a **no-op** (FA-24c). It originally tried to add FTS5 search tables, but FTS5 is not
+         * dependable on Android's system SQLite — a device round found `no such module: fts5` on a
+         * Galaxy Tab S, and even a `DROP` of the phantom table needs the missing module. So FA-24c
+         * content search moved to a plain `LIKE` over `recognized_lines` (no FTS module — works on
+         * every device, needs no index/backfill), and v21 adds nothing to the schema (the FTS tables
+         * were never Room entities, so the v21 entity schema equals v20's). A device that already ran
+         * the earlier FTS-creating v21 keeps a harmless unused table; Room ignores non-entity tables.
+         */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) = Unit
+        }
+
         @Volatile
         private var instance: ElrondDatabase? = null
 
@@ -524,6 +537,7 @@ abstract class ElrondDatabase : RoomDatabase() {
                     MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                     MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                     MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20,
+                    MIGRATION_20_21,
                 ).build().also { instance = it }
             }
     }

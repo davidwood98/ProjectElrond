@@ -45,6 +45,7 @@ import ai.elrond.domain.NotePage
 import ai.elrond.domain.PageLayer
 import ai.elrond.domain.PageNavigationMode
 import ai.elrond.domain.PageTransform
+import ai.elrond.domain.SearchHighlight
 import ai.elrond.domain.PageViewOrientation
 import ai.elrond.domain.PaperColor
 import ai.elrond.domain.PaperStyle
@@ -71,6 +72,7 @@ import ai.elrond.data.NoteRepository
 import ai.elrond.data.RecognitionCache
 import ai.elrond.data.RecognitionCacheRepository
 import ai.elrond.data.SessionNotesTracker
+import ai.elrond.data.SearchRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TodoRepository
 import ai.elrond.data.ExtractionScheduler
@@ -146,6 +148,8 @@ class CanvasViewModel(
     private val todoRepository: TodoRepository? = null,
     private val calendarRepository: CalendarRepository? = null,
     private val suggestionRepository: SuggestionRepository? = null,
+    /** FA-24c notebook/content search — resolves this page's highlight boxes. Null in tests. */
+    private val searchRepository: SearchRepository? = null,
     private val pageId: String? = null,
     /** Enqueues background auto-extraction for [pageId] after a save (null in tests / when off). */
     private val enqueueExtraction: ((pageId: String) -> Unit)? = null,
@@ -244,6 +248,15 @@ class CanvasViewModel(
     private val thumbnailGenerator: (suspend (pageId: String) -> Unit)? = null,
     /** Records this page as opened this session (FA-16) — feeds the editor's session note tabs. */
     private val sessionNotesTracker: SessionNotesTracker? = null,
+    // FA-24c search-result mode: the persisted {notebook, query} drives this page's highlights; the
+    // writers let ⋮ "Search this notebook" set it and the ✕ pill clear it. Null in JVM tests.
+    searchModeNotebookIdFlow: Flow<String?>? = null,
+    searchModeQueryFlow: Flow<String>? = null,
+    private val setSearchModePref: (suspend (notebookId: String, query: String) -> Unit)? = null,
+    private val clearSearchModePref: (suspend () -> Unit)? = null,
+    // One-shot "landing pending" read+clear: true only for the first page after search mode is set,
+    // so the initial jump / pages-menu happens once and doesn't bounce on later page turns (FA-24c).
+    private val consumeSearchLanding: (suspend () -> Boolean)? = null,
     private val triggerDebounceMillis: Long = TRIGGER_DEBOUNCE_MILLIS,
     private val autoSaveDebounceMillis: Long = AUTOSAVE_DEBOUNCE_MILLIS,
     private val thumbnailIdleMillis: Long = THUMBNAIL_IDLE_MILLIS,
@@ -267,6 +280,7 @@ class CanvasViewModel(
         todoRepository: TodoRepository,
         calendarRepository: CalendarRepository,
         suggestionRepository: SuggestionRepository,
+        searchRepository: SearchRepository,
         enqueueExtraction: @JvmSuppressWildcards (String) -> Unit,
         recognitionCache: RecognitionCacheRepository,
         settings: SettingsRepository,
@@ -281,6 +295,7 @@ class CanvasViewModel(
         todoRepository = todoRepository,
         calendarRepository = calendarRepository,
         suggestionRepository = suggestionRepository,
+        searchRepository = searchRepository,
         pageId = savedStateHandle.get<String>("pageId"),
         enqueueExtraction = enqueueExtraction,
         recognitionCache = recognitionCache,
@@ -322,6 +337,11 @@ class CanvasViewModel(
         persistPencilLineType = { settings.setPencilLineType(it) },
         persistPencilLead = { settings.setPencilLead(it) },
         persistStylusOnly = { settings.setStylusOnly(it) },
+        searchModeNotebookIdFlow = settings.searchModeNotebookId,
+        searchModeQueryFlow = settings.searchModeQuery,
+        setSearchModePref = { nb, q -> settings.setSearchMode(nb, q) },
+        clearSearchModePref = { settings.clearSearchMode() },
+        consumeSearchLanding = { settings.consumeSearchLanding() },
         // Real generator: render the page's normalized polylines (the same data the card draws) to a
         // bitmap off-thread and cache it; an empty page drops any stale file so the card shows blank.
         thumbnailGenerator = { pid ->
@@ -615,6 +635,102 @@ class CanvasViewModel(
     /** The notebook's pages ordered by page number — backs the page indicator + page turns (FA-20). */
     private val _notebookPages = MutableStateFlow<List<NotePage>>(emptyList())
     val notebookPages: StateFlow<List<NotePage>> = _notebookPages.asStateFlow()
+
+    // --- FA-24c search-result mode ---
+    /** This page's search highlight boxes (page-space); empty unless the notebook is in search mode. */
+    private val _searchHighlights = MutableStateFlow<List<SearchHighlight>>(emptyList())
+    val searchHighlights: StateFlow<List<SearchHighlight>> = _searchHighlights.asStateFlow()
+
+    /** Whether this notebook is in search-result mode (drives the "Search | ✕" pill). */
+    private val _searchModeActive = MutableStateFlow(false)
+    val searchModeActive: StateFlow<Boolean> = _searchModeActive.asStateFlow()
+
+    /** Ids of the pages in this notebook that contain a content match (for the filtered Pages menu). */
+    private val _searchMatchingPageIds = MutableStateFlow<Set<String>>(emptySet())
+    val searchMatchingPageIds: StateFlow<Set<String>> = _searchMatchingPageIds.asStateFlow()
+
+    /** Emits when a multi-page search result should open the Pages menu filtered to matching pages (FA-24c). */
+    private val _openSearchPagesEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val openSearchPagesEvents: SharedFlow<Unit> = _openSearchPagesEvents.asSharedFlow()
+
+    /** The active search query (for the ✕-pill / re-search from ⋮). */
+    private var searchQuery: String = ""
+    /** Center-on-topmost-match runs once per page load; setCanvasSize retries if size wasn't ready. */
+    private var searchCentered: Boolean = false
+
+    init {
+        // Observe the persisted search-result mode: when THIS page's notebook is the one being searched,
+        // resolve this page's highlight boxes; if the page has none, jump to the first page that does;
+        // otherwise centre on the topmost match. Each page is its own VM, so it reacts independently and
+        // the ✕ pill (which clears the pref) reactively drops highlights everywhere.
+        if (searchModeNotebookIdFlow != null && searchModeQueryFlow != null) {
+            viewModelScope.launch {
+                combine(searchModeNotebookIdFlow, searchModeQueryFlow, _notebookIdFlow) { searchNb, q, myNb ->
+                    Triple(searchNb, q, myNb)
+                }.collect { (searchNb, q, myNb) ->
+                    val pid = pageId
+                    val repo = searchRepository
+                    val forThisNotebook = searchNb != null && myNb != null && searchNb == myNb && q.isNotBlank()
+                    if (!forThisNotebook || pid == null || repo == null) {
+                        _searchModeActive.value = false
+                        searchQuery = ""
+                        _searchHighlights.value = emptyList()
+                        return@collect
+                    }
+                    val highlights = repo.pageHighlights(pid, q)
+                    val matchPages = repo.matchingPageIds(myNb!!, q)
+                    // A title/tag-only match has no content hits anywhere → no highlight mode / pill.
+                    val hasContent = highlights.isNotEmpty() || matchPages.isNotEmpty()
+                    _searchModeActive.value = hasContent
+                    _searchMatchingPageIds.value = if (hasContent) matchPages else emptySet()
+                    searchQuery = if (hasContent) q else ""
+                    _searchHighlights.value = highlights
+                    if (!hasContent) {
+                        consumeSearchLanding?.invoke() // discard: a title/tag-only match has no page to land on
+                        return@collect
+                    }
+                    if (highlights.isNotEmpty()) maybeCenterOnFirstSearchHighlight()
+                    // One-shot landing (initial entry only, NOT on every page turn — else a non-matching
+                    // page would bounce back). Multi-page result → open the filtered Pages menu; single
+                    // page not already open → jump to it; already on the only match → stay put.
+                    if (consumeSearchLanding?.invoke() == true) {
+                        val ordered = _notebookPages.value.sortedBy { it.pageNumber }.filter { it.id in matchPages }
+                        when {
+                            matchPages.size > 1 -> _openSearchPagesEvents.emit(Unit)
+                            ordered.size == 1 && ordered.first().id != pid -> _pageTurnEvents.emit(ordered.first().id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun maybeCenterOnFirstSearchHighlight() {
+        if (searchCentered) return
+        val top = _searchHighlights.value.minByOrNull { it.minY } ?: return
+        if (canvasHeightPx <= 0f || pageWidthPx <= 0f) return // retried from setCanvasSize once laid out
+        centerOnPageY((top.minY + top.maxY) / 2f)
+        searchCentered = true
+    }
+
+    /** Scrolls so [pageY] (page-space) sits at the viewport's vertical centre, clamped to the page. */
+    private fun centerOnPageY(pageY: Float) {
+        scrollPx = (pageTopInsetPx + pageY * zoomScale - canvasHeightPx / 2f).coerceIn(0f, maxScrollPx())
+        refreshPageTransform()
+    }
+
+    /** ✕ pill: clears the persisted search mode, so every page stops highlighting. */
+    fun exitSearchMode() {
+        viewModelScope.launch { clearSearchModePref?.invoke() }
+    }
+
+    /** ⋮ "Search this notebook": enters search-result mode for this notebook with [query]. */
+    fun searchThisNotebook(query: String) {
+        val nb = _notebookIdFlow.value ?: return
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch { setSearchModePref?.invoke(nb, trimmed) }
+    }
 
     /**
      * The single rendered page layer — the open page (FA-20). Kept as a list so the ink view's render
@@ -1123,6 +1239,8 @@ class CanvasViewModel(
         recomputePageSize()
         // Re-clamp the scroll if the viewport grew (e.g. rotation) and refresh the transform.
         scrollBy(0f)
+        // Search-result mode may have loaded highlights before the canvas was measured — centre now.
+        maybeCenterOnFirstSearchHighlight()
     }
 
     /**

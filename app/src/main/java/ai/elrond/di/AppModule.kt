@@ -7,6 +7,7 @@ import ai.elrond.data.NotebookLinkRepository
 import ai.elrond.data.NoteRepository
 import ai.elrond.data.RecognitionCacheRepository
 import ai.elrond.data.SessionNotesTracker
+import ai.elrond.data.SearchRepository
 import ai.elrond.data.SubjectRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TagRepository
@@ -85,6 +86,11 @@ object AppModule {
     @Singleton
     fun provideSuggestionRepository(db: ElrondDatabase): SuggestionRepository =
         SuggestionRepository(dao = db.pendingSuggestionDao())
+
+    @Provides
+    @Singleton
+    fun provideSearchRepository(db: ElrondDatabase): SearchRepository =
+        SearchRepository(db.notebookDao(), db.notebookTagDao(), db.recognizedLineDao())
 
     @Provides
     @Singleton

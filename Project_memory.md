@@ -2019,6 +2019,159 @@ handwriting search.
   restored to the Windows path after each build; the Opus executors swapped it per build and I
   re-verified/restored it after each stage.
 
+## FA-24c — notebook & content search (2026-07-18)
+
+Search over notebooks by **title + tags + handwritten content**, on branch **FA-24**. Consumes the
+FA-24b `recognized_lines` cache + FA-24 tags (both shipped) — no new recognition work. **DB now v21**
+(`MIGRATION_20_21`). **560 app + 28 aibackend JVM/Robolectric tests pass** (0 failures; was ~554
+pre-batch — app grew from 517 with the search tests) + a new instrumented FTS test; `./gradlew
+:app:testDebugUnitTest` + `:app:compileDebugAndroidTestKotlin` build on the WSL Linux SDK.
+**Device-verify pending** (list at end). Built Stages 0–3, one logical unit each.
+
+**Product model (user-clarified up front, DIFFERS from `docs/FA-24c-search.md`):** results are **not**
+a separate labelled list with snippets — the **Library search bar filters the notebook-tile grid in
+place**, relevance-ranked (closest content match top-left). Scope by tab: All/Timeline → whole DB,
+Recents/Unfiled → that set, **inside a subject → the WHOLE subject tree from its top-level ancestor**
+(broader than the direct-children grid, by design). Search matches title/tags/content, **never
+subjects**. Notebook-scope search is the editor **⋮ → "Search this notebook"**. Confirmed decisions:
+(2) no pill/highlights for title/tag-only matches; (3) **FTS5** (for bm25 ranking + future snippets);
+centering = **topmost match**; Favourites scope wired but empty (still a UI placeholder — no backing).
+
+- **Stage 0 — search domain (pure JVM).** `SubjectTree.descendantsOf` + `rootAncestorId` (subtree
+  scope); `RecognizedBlocks` (paragraph grouping via `StrokeLineGrouper.DEFAULT_PARAGRAPH_GAP_FACTOR`
+  + `recognizedBlockKey` = SHA-256 of ordered line ids, mirroring the line key one level up);
+  `SearchMatch` (line↔block dedupe — drop a block whose constituent line already hit — + ranked merge:
+  full-title › content-bm25 › tag › partial-title, ties broken by natural order); `SearchQuery`
+  (`toFtsMatch` = OR-of-prefix for recall/ranking, `toFtsPhrase` = quoted phrase for spanning; both
+  strip FTS operators so user text can't break the MATCH).
+- **Stage 1 — FTS5 indices (v21).** `recognized_lines_fts` + `recognized_blocks_fts`, **created by raw
+  SQL** (Room has no `@Fts5`) in `MIGRATION_20_21` **and** a fresh-install `RoomDatabase.Callback`, both
+  via one `ElrondDatabase.createSearchFtsTables`. **Sync obligation:** `RecognitionCacheRepository.syncPage`
+  mirrors every `recognized_lines` upsert/evict into the FTS tables (delete-page + reinsert) **in one
+  `withTransaction`**, regrouping blocks each save; `buildRecognizedLinesCached` routes its writes
+  through it. Reads are `@RawQuery` (Room rejects `@Query` against non-entity FTS tables) built by
+  `data/SearchQueries` (the only place the `bm25()`/FTS SQL lives). **KEY GOTCHA: Robolectric's SQLite
+  has no `fts5` module** (`no such module: fts5`) — like ink natives, FTS is **device-only**:
+  `createSearchFtsTables` is `runCatching`-guarded (degrades to no-search where FTS5 is absent) and
+  `syncPage` gates FTS writes on `dao.ftsTableExists()`, so the cache/migration tests stay green under
+  Robolectric; FTS sync/search is covered by the **instrumented** `RecognizedLineFtsSyncInstrumentedTest`.
+- **Stage 2 — matcher + tile filter.** `SearchRepository.rankedNotebookIds(query, scopeIds, naturalOrder)`
+  merges title (`LIKE` full/partial) + tag (name contains a token) + content (line FTS, best bm25 per
+  notebook; blocks add no new tile — every block token is in a line). **Scope is computed in-memory in
+  `LibraryContent.NotesSection`** from the already-observed lists (subtree via `SubjectTree`), so the
+  repo is a pure matcher (its DB scope helpers were removed as redundant). The `LibraryActionBar` search
+  field is now editable (debounced ~180ms `LaunchedEffect`) with an ✕ clear; matches replace the tab
+  body as a ranked grid (even on Timeline/Favorites). `NoteListViewModel.searchNotebooks` delegates to
+  the repo (nullable-injected for test compat).
+- **Stage 3 — on-canvas search-result mode.** Persisted `{searchModeNotebookId, searchModeQuery}` in
+  `SettingsRepository` (DataStore). **Each page is its own `CanvasViewModel`** (FA-20 route
+  `note/{pageId}`), so the VM **observes the pref** and independently resolves THIS page's highlights
+  (`SearchRepository.pageHighlights` → accent boxes over each matching line/block union, page-space,
+  drawn passively over the ink via `pageToScreen` in a `Canvas`); a title/tag-only match (no content
+  anywhere) shows no pill/highlights. On load: if the page has no matches but the notebook does, it
+  **jumps to the first matching page**; otherwise **centres on the topmost match** (`centerOnPageY` via
+  `scrollPx`, retried from `setCanvasSize` once laid out). The **"Search | ✕"** pill (only ✕ pressable)
+  is pinned under the title so the exit stays reachable. **Persistence lifecycle:** the Library home
+  clears the pref on entry (`NoteListViewModel.clearSearchMode` in a `LaunchedEffect(Unit)`), so
+  returning to the library or relaunching after a swipe-kill (which starts at the library) ends the
+  mode, while a background→resume (which resumes into the editor) keeps it. Opening a content-result
+  tile persists the mode (`enterSearchMode`) then opens; the editor ⋮ "Search this notebook" sets it
+  via `searchThisNotebook`.
+- **Deliberate deviations from the spec doc** (driven by the tile-filter model): no merged results
+  list, no `snippet()` excerpts, no per-result breadcrumb chip. Highlights are **line-granular** under
+  OR-match (line hits subsume blocks via the dedupe rule); the block FTS index still backs data-layer
+  spanning-phrase recall + is instrumented-tested, and remains for a future phrase-mode/snippet UI.
+- New/updated tests: `SubjectTreeTest` (+descendantsOf/rootAncestor/whole-tree-scope),
+  `RecognitionKeysTest` (+block key), `RecognizedBlocksTest`, `SearchMatchTest`, `SearchQueryTest`,
+  `SearchRepositoryTest` (Robolectric: title/tag/rank/scope — content is device-only),
+  `CanvasViewModelSearchTest` (active gating, title/tag-only inactive, wrong-notebook inactive,
+  jump-to-first-match, exit clears pref, searchThisNotebook persists), `ElrondMigrationTest`
+  (chain → **v21** + v20→v21 runs-clean/keeps-recognized_lines), and instrumented
+  `RecognizedLineFtsSyncInstrumentedTest` (FTS sync consistency, spanning-phrase block match, scope).
+- **Device-verify pending (Galaxy Tab S):** library tile-filter per tab + subject (subtree expansion),
+  relevance ordering (closest content match top-left), ✕ clears; on-canvas highlight boxes track
+  pan/zoom, land/centre on topmost match, jump to first matching page, "Search | ✕" pill exits;
+  background→resume keeps highlights, back-to-library clears; ⋮ "Search this notebook"; that FTS5 is
+  present on-device (the instrumented test asserts it).
+
+### FA-24c device-feedback round (2026-07-18) — FTS5 unavailable → LIKE
+
+First on-device pass (Galaxy Tab S SM-X510, logcat `…_164709`) found **all content search broken** —
+Library DB search and "Search this notebook" returned nothing (even a fresh 'hello'), so on-canvas
+search-result mode could never activate; only title/tag search (plain SQL) worked. Two trivial UI
+notes too. **No net schema change — DB stays v21** (the v21 migration is now a no-op). All app +
+aibackend JVM/Robolectric tests pass (**553 app**, 0 failures — down from 560 as the FTS/block tests
+were removed and content-search tests added); `:app:testDebugUnitTest` + `:app:compileDebugAndroidTestKotlin`
+build on the WSL SDK.
+
+**Root cause (logcat-confirmed): FTS5 is not available on the device's SQLite.** The logcat showed the
+`ExtractionWorker` running to SUCCESS and ML Kit `tf_recognizer` actively recognizing ink → the
+`recognized_lines` cache **is** populated (recognition works). But content search (the only path
+through the FTS index) returned nothing with **zero SQLite errors** — because `createSearchFtsTables`
+wrapped the `CREATE VIRTUAL TABLE … fts5` in `runCatching` (added for Robolectric) which **silently
+swallowed the identical `no such module: fts5` failure on the real device**. So the FTS tables never
+existed and every content read/write no-oped. (Confirmed further: even `DROP TABLE … fts` needs the
+module — a v22 drop-migration attempt threw `no such module: fts5`.) **Lesson: FTS5 is unreliable on
+Android system SQLite, and guarding the capability check hid the failure — log the decision point.**
+See [[robolectric-no-fts5]].
+
+**Fix — dropped FTS entirely; content search is now `LIKE` over `recognized_lines`:**
+- `SearchQueries` builds `l.text LIKE '%'||?||'%'` (OR of alphanumeric tokens — no wildcard escaping)
+  joined `recognized_lines → note_pages`, scoped by `notebookId IN (…)` (tiles) or `pageId = ?`
+  (highlights). `RecognizedLineDao.searchContent(@RawQuery) → ContentLineRow` (text + bounds).
+- `SearchRepository` scores content **relevance in Kotlin** (count of distinct tokens present in the
+  line text + 1 if the whole phrase is present) → best per notebook → the same
+  `SearchMatch.rankedNotebookIds` merge (title-full › content › tag › title-partial). `pageHighlights`
+  / `matchingPageIds` are LIKE too. No FTS, no index, **no backfill** (reads the already-populated
+  cache), and — crucially — **content search is now Robolectric-testable** (LIKE needs no fts5), so
+  `SearchRepositoryTest` gained real content/rank/highlight/scope cases and the device-only
+  `RecognizedLineFtsSyncInstrumentedTest` was deleted.
+- **Removed** the whole FTS layer: `recognized_lines_fts`/`recognized_blocks_fts`, the create/callback,
+  `RecognitionCacheRepository.syncPage` (reverted to plain `upsertAll`/`deleteByIds`), the block domain
+  (`RecognizedBlocks`, `recognizedBlockKey`, `SearchMatch.dedupeBlockHits`, `ContentHit`), and the FTS
+  match builders (`SearchQuery` is now just `tokenize`). Highlights are line-granular (as they already
+  were under OR-match). **DB stays v21**: `MIGRATION_20_21` is now a **no-op** (the FTS tables were
+  never Room entities, so v21's entity schema equals v20's; a device that already ran the earlier
+  FTS-creating v21 keeps a harmless unused/phantom table — Room ignores non-entity tables — and no
+  version bump / drop is needed).
+- **UI #3 fixed:** the "Search this notebook" prompt placeholder now reads *"I hope you find what
+  you're looking for"*.
+- **Note on recognition latency:** content is searchable only after the background worker recognizes a
+  page (post-save, a few seconds) — writing then immediately searching may miss until recognition
+  completes. Inherent to the async cache, not a search bug.
+- **Device-verify pending (re-test):** Library content search finds handwritten words (e.g.
+  'calculator'/'woodchuck'), relevance order; "Search this notebook" finds content + activates
+  on-canvas mode (highlights, centre, pill, jump-to-first-match); the three lifecycle behaviours.
+
+### FA-24c device round 2 (2026-07-18) — landing fix + multi-page Pages menu
+
+Content search now works (LIKE); this round fixed on-canvas-mode navigation. **No schema change — DB
+stays v21.** **555 app tests, 0 failures**; `:app:testDebugUnitTest` + `:app:compileDebugAndroidTestKotlin`
+build on the WSL SDK. Device re-verify pending.
+
+- **Bug — highlights "blocked" scrolling to non-matching pages.** Root cause was NOT touch-blocking:
+  the collector's jump-to-first-matching-page fired on **every** page load in search mode, so
+  navigating to a non-matching page (e.g. page 1 when the match is on page 2) immediately **bounced
+  back** to the matching page. Fix: the jump is now a **one-shot on initial entry only**, gated by a
+  persisted `SEARCH_LANDING_KEY` read+cleared via `SettingsRepository.consumeSearchLanding()` (set by
+  `setSearchMode`, cleared by `clearSearchMode`; the VM seam is `consumeSearchLanding`). The per-page
+  collector no longer navigates — it just shows that page's highlights + keeps the pill, so the user
+  browses freely; a non-matching page simply shows no boxes.
+- **Feature — multi-page result opens the filtered Pages menu.** On initial landing: a **single**
+  matching page → jump to it (as before); **multiple** matching pages → the VM emits
+  `openSearchPagesEvents` and the editor opens `PagesOverlay` filtered to the matching pages (new
+  `searchMatchIds` param — reuses the bookmark-filter machinery: read-only view, reorder/add disabled,
+  pill shows "N matches"). Tapping a page opens it in on-canvas mode (search mode already persisted).
+  The VM exposes `searchMatchingPageIds` for the filter; the manual **Pages** toolbar button clears the
+  filter so it still shows all pages. Applies to both entry points (library tile tap + ⋮ "Search this
+  notebook"), since both go through `setSearchMode`.
+- Tests: `CanvasViewModelSearchTest` reworked — single-page landing jumps, **no-landing page does NOT
+  jump (bounce regression)**, multi-page landing emits the pages event (no jump) + exposes
+  `searchMatchingPageIds`; `consumeSearchLanding` one-shot seam added to the test VM.
+- **Device-verify pending:** scroll freely across matching + non-matching pages (no bounce); a
+  multi-page library result opens the filtered Pages menu → tap a page → lands in on-canvas mode; a
+  single-page result still jumps straight to the page.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):
@@ -2102,7 +2255,7 @@ discipline.)
 
 - Audit found: clean git history, TLS-only (https enforced via `AnthropicConfig` require + `usesCleartextTraffic=false`), no logging of note content, Room DB sandbox-only, `allowBackup=false`, only MainActivity exported.
 - **Known accepted risk (development only — a hard blocker for release/completion):** the Anthropic API key is embedded via BuildConfig — extractable from any distributed APK. This is accepted *only* during active development; it is **not** acceptable for completion/release. Before any release: move to a server-side proxy holding the key, or per-user runtime keys in Android Keystore/EncryptedSharedPreferences.
-- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v20** — most recently the `pending_suggestions.rejected` column in `MIGRATION_19_20` (FA-24b ignore-vs-reject states); the `recognized_lines` recognition cache in `MIGRATION_18_19` (FA-24b); `tags` + `notebook_tags` in `MIGRATION_17_18` and `notebook_links` in `MIGRATION_16_17` (FA-24); before that `strokes.inputs` became a raw binary BLOB in `MIGRATION_15_16` (FA-22 storage-format finish); `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
+- AI notes (`AiInkNote`) persist in the `ai_notes` table; the schema is now at **v21** — but `MIGRATION_20_21` is a **no-op**: FA-24c's FTS5 search tables were abandoned (FTS5 unavailable on the device — content search uses `LIKE` over `recognized_lines`), and the FTS tables were never Room entities, so v21's entity schema equals v20's. Before that: the `pending_suggestions.rejected` column in `MIGRATION_19_20` (FA-24b ignore-vs-reject states); the `recognized_lines` recognition cache in `MIGRATION_18_19` (FA-24b); `tags` + `notebook_tags` in `MIGRATION_17_18` and `notebook_links` in `MIGRATION_16_17` (FA-24); before that `strokes.inputs` became a raw binary BLOB in `MIGRATION_15_16` (FA-22 storage-format finish); `ai_notes.fontScale` was added in `MIGRATION_14_15` for the FA-21 AI-box ratio-locked resize (FA-20 added the notebook/page-layer columns through `MIGRATION_11_12`…`13_14`; `subjects` + `note_subjects` in `MIGRATION_9_10` for FA-16; `note_pages.lastOpenedAt` in `MIGRATION_8_9` for FA-15; `todo_items.status` in `MIGRATION_7_8` for FA-14; `strokes.groupId` in `MIGRATION_6_7` for FA-9).
 - READ/WRITE_CALENDAR were re-added to the manifest in Phase 5 (the change that ships calendar) and are requested at runtime; `DeviceCalendarProvider` only acts on explicit user action.
 - OAuth: the Outlook client id is sourced from `local.properties` → `BuildConfig` (FA-11, not committed); Google's is still a placeholder. For production, don't embed client ids — use a server-side token exchange (same posture as the Anthropic key). MSAL scopes are read-only-ish `Calendars.ReadWrite` (delegated); calendar writes still require explicit user confirmation (CalendarViewModel).
 - **Outlook Azure app registration — required final step before release.** FA-11's Outlook integration is fully coded but ships **inert** until an Azure app is registered and `outlook.clientId` / `outlook.tenantId` / `outlook.signatureHash` are set (see *Outlook / Microsoft Graph OAuth setup*). This is intentionally deferred to a final pre-release task; until done, Outlook stays NotConfigured and the calendar falls back to the device provider (not a bug). Pairs with the Anthropic-key release blocker above.

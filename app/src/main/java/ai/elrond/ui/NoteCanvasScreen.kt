@@ -23,6 +23,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -63,6 +65,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
@@ -80,6 +83,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -174,6 +179,13 @@ fun NoteCanvasScreen(
     val prefixTriggerState by viewModel.prefixTriggerState.collectAsStateWithLifecycle()
     // The active-tool highlight style (A soft tile / B filled / C underline), from Settings.
     val toolTreatment by settingsViewModel.toolSelectedTreatment.collectAsStateWithLifecycle()
+    // FA-24c search-result mode: this page's highlight boxes + whether the "Search | ✕" pill shows.
+    val searchHighlights by viewModel.searchHighlights.collectAsStateWithLifecycle()
+    val searchModeActive by viewModel.searchModeActive.collectAsStateWithLifecycle()
+    val searchMatchingPageIds by viewModel.searchMatchingPageIds.collectAsStateWithLifecycle()
+    var showNotebookSearch by remember { mutableStateOf(false) }
+    // When non-null, the Pages overlay is showing search results (filtered to the matching pages).
+    var pagesSearchFilter by remember { mutableStateOf<Set<String>?>(null) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var showPageStyle by remember { mutableStateOf(false) }
     // FA-24 notebook links: the Add(+) menu, the target picker (Quick Nav in pick mode — creating
@@ -257,6 +269,14 @@ fun NoteCanvasScreen(
     // pageTurnEvents, which is intra-notebook page navigation.
     LaunchedEffect(viewModel) {
         viewModel.openLinkEvents.collect { id -> if (id != pageId) onOpenNote(id) }
+    }
+    // FA-24c: a multi-page search result opens the Pages menu filtered to the matching pages (once,
+    // on initial landing), so the user picks which page to jump to.
+    LaunchedEffect(viewModel) {
+        viewModel.openSearchPagesEvents.collect {
+            pagesSearchFilter = viewModel.searchMatchingPageIds.value
+            showPages = true
+        }
     }
     // FA-24: press-and-hold on a broken link surfaces its Redefine/Delete menu.
     LaunchedEffect(viewModel) {
@@ -390,6 +410,27 @@ fun NoteCanvasScreen(
         // patterns, so InkCanvas buffers the points and this overlay paints them in the line style.
         LivePatternStrokeOverlay(viewModel = viewModel, modifier = Modifier.fillMaxSize())
 
+        // FA-24c search-result mode: translucent accent boxes over each matching line/block, positioned
+        // in page space (pageToScreen) so they track pan/zoom. Passive (no pointer input) — the pen and
+        // taps pass through to the ink canvas below. pageTransform is observed at composable scope, so
+        // the boxes re-draw as the page moves (they don't freeze — cf. the FA-10 draw-lambda rule).
+        if (searchHighlights.isNotEmpty()) {
+            val highlightColor = MaterialTheme.colorScheme.primary
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                searchHighlights.forEach { h ->
+                    val left = pageTransform.pageToScreenX(h.minX)
+                    val top = pageTransform.pageToScreenY(h.minY)
+                    val right = pageTransform.pageToScreenX(h.maxX)
+                    val bottom = pageTransform.pageToScreenY(h.maxY)
+                    drawRect(
+                        color = highlightColor.copy(alpha = 0.22f),
+                        topLeft = Offset(left, top),
+                        size = Size((right - left).coerceAtLeast(0f), (bottom - top).coerceAtLeast(0f)),
+                    )
+                }
+            }
+        }
+
         // On-canvas AI activity: loading dots while thinking, red ink on failure.
         when (val state = aiState) {
             is AiUiState.Thinking -> AiLoadingIndicator(
@@ -466,6 +507,17 @@ fun NoteCanvasScreen(
                 .onSizeChanged { titleBandHeightPx = it.height }
                 .padding(start = sideStart, end = sideEnd),
         )
+        // FA-24c: the "Search | ✕" pill sits under the title while search-result mode is active; it's
+        // pinned (doesn't scroll off with the page band) so the ✕ — the only way out — stays reachable.
+        if (searchModeActive) {
+            SearchModePill(
+                onExit = viewModel::exitSearchMode,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset { IntOffset(0, (titleTopPx + titleBandHeightPx).roundToInt()) }
+                    .padding(start = sideStart, top = 6.dp),
+            )
+        }
         // FA-24: the shared tag picker (same dialog + repository methods as the Library ⋮ menu).
         val pickerNotebookId = headerNotebookId
         if (tagPickerOpen && pickerNotebookId != null) {
@@ -519,7 +571,7 @@ fun NoteCanvasScreen(
             ToolbarButton(
                 painter = painterResource(ElrondIcons.Pages),
                 contentDescription = "Pages",
-                onClick = { showPages = true },
+                onClick = { pagesSearchFilter = null; showPages = true },
                 selected = showPages,
                 treatment = toolTreatment,
             )
@@ -769,6 +821,14 @@ fun NoteCanvasScreen(
                             showBacklinks = true
                         },
                     )
+                    // FA-24c: search within this notebook (Notebook-scope entry point).
+                    DropdownMenuItem(
+                        text = { Text("Search this notebook") },
+                        onClick = {
+                            showMoreMenu = false
+                            showNotebookSearch = true
+                        },
+                    )
                     // Handoff menu items not yet wired to a backend — shown disabled.
                     DropdownMenuItem(
                         text = { Text("Export") },
@@ -789,14 +849,16 @@ fun NoteCanvasScreen(
                 pages = notebookPages,
                 currentPageId = pageId,
                 noteListViewModel = noteListViewModel,
-                onOpenPage = { id -> showPages = false; if (id != pageId) onOpenNote(id) },
-                onAddPage = { showPages = false; viewModel.addPageAndOpen() },
+                // FA-24c: when opened from a multi-page search result, filter to the matching pages.
+                searchMatchIds = pagesSearchFilter,
+                onOpenPage = { id -> showPages = false; pagesSearchFilter = null; if (id != pageId) onOpenNote(id) },
+                onAddPage = { showPages = false; pagesSearchFilter = null; viewModel.addPageAndOpen() },
                 onDeletePage = viewModel::deletePageFromNotebook,
                 onToggleBookmark = viewModel::setPageBookmark,
                 onMovePage = viewModel::movePage,
                 onReorder = viewModel::reorderPages,
                 onMultiDelete = viewModel::deletePagesFromNotebook,
-                onDismiss = { showPages = false },
+                onDismiss = { showPages = false; pagesSearchFilter = null },
             )
         }
         if (showPageStyle) {
@@ -878,6 +940,16 @@ fun NoteCanvasScreen(
                     if (id != pageId) onOpenNote(id)
                 },
                 onDismiss = { showBacklinks = false },
+            )
+        }
+        // FA-24c: Notebook-scope search — a small prompt that enters on-canvas search-result mode.
+        if (showNotebookSearch) {
+            SearchThisNotebookDialog(
+                onSearch = { q ->
+                    showNotebookSearch = false
+                    viewModel.searchThisNotebook(q)
+                },
+                onDismiss = { showNotebookSearch = false },
             )
         }
 
@@ -1281,4 +1353,64 @@ private fun SuggestionExtractionSheet(
             }
         }
     }
+}
+
+/**
+ * FA-24c "Search | ✕" pill shown while a notebook is in on-canvas search-result mode. The whole pill
+ * reads as a label; only the ✕ segment is pressable ([onExit]) — the single way out of search mode.
+ */
+@Composable
+private fun SearchModePill(onExit: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Search",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 8.dp)
+                    .width(1.dp)
+                    .height(16.dp)
+                    .background(MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.3f)),
+            )
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Exit search",
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(22.dp).clickable(onClick = onExit),
+            )
+        }
+    }
+}
+
+/** FA-24c Notebook-scope search prompt (from the editor ⋮ menu) — enters search-result mode. */
+@Composable
+private fun SearchThisNotebookDialog(onSearch: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Search this notebook") },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                placeholder = { Text("I hope you find what you're looking for") },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onSearch(text) }, enabled = text.isNotBlank()) { Text("Search") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

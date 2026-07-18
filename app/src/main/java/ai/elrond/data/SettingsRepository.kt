@@ -391,6 +391,49 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    // --- FA-24c search-result mode ---
+    // Which notebook is in on-canvas search-result mode + the active query. Persisted (not just held
+    // in a VM) so highlights survive a background→resume while still in the notebook; the Library home
+    // clears it on entry, so returning to the library or relaunching after a swipe-kill ends the mode.
+
+    /** The notebook currently in search-result mode, or null when none. */
+    val searchModeNotebookId: Flow<String?> = context.settingsDataStore.data
+        .map { it[SEARCH_MODE_NOTEBOOK_KEY]?.takeIf { id -> id.isNotEmpty() } }
+
+    /** The active search query backing the on-canvas highlights (empty when not searching). */
+    val searchModeQuery: Flow<String> = context.settingsDataStore.data
+        .map { it[SEARCH_MODE_QUERY_KEY].orEmpty() }
+
+    suspend fun setSearchMode(notebookId: String, query: String) {
+        context.settingsDataStore.edit {
+            it[SEARCH_MODE_NOTEBOOK_KEY] = notebookId
+            it[SEARCH_MODE_QUERY_KEY] = query
+            it[SEARCH_LANDING_KEY] = true // one-shot: the editor lands on the first match / pages menu once
+        }
+    }
+
+    suspend fun clearSearchMode() {
+        context.settingsDataStore.edit {
+            it.remove(SEARCH_MODE_NOTEBOOK_KEY)
+            it.remove(SEARCH_MODE_QUERY_KEY)
+            it.remove(SEARCH_LANDING_KEY)
+        }
+    }
+
+    /**
+     * Reads and clears the one-shot "landing pending" flag (FA-24c). True only for the first editor
+     * page after search mode is set, so the initial jump-to-match / pages-menu happens once and doesn't
+     * re-fire (bounce) when the user then page-turns to a non-matching page.
+     */
+    suspend fun consumeSearchLanding(): Boolean {
+        var pending = false
+        context.settingsDataStore.edit {
+            pending = it[SEARCH_LANDING_KEY] == true
+            if (pending) it.remove(SEARCH_LANDING_KEY)
+        }
+        return pending
+    }
+
     // --- Background auto-extraction (FA-2) ---
 
     /** Master switch: run TODO/calendar extraction in the background after a note is saved. */
@@ -509,5 +552,8 @@ class SettingsRepository(private val context: Context) {
         private val NEW_EXTRACTED_ITEMS_KEY = booleanPreferencesKey("has_new_extracted_items")
         private val EXPANDED_SUBJECTS_KEY = stringSetPreferencesKey("expanded_subject_ids")
         private val SELECTED_SUBJECT_KEY = stringPreferencesKey("selected_subject_id")
+        private val SEARCH_MODE_NOTEBOOK_KEY = stringPreferencesKey("search_mode_notebook_id")
+        private val SEARCH_MODE_QUERY_KEY = stringPreferencesKey("search_mode_query")
+        private val SEARCH_LANDING_KEY = booleanPreferencesKey("search_mode_landing_pending")
     }
 }
