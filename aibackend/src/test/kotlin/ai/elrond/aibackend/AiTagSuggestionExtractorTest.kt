@@ -31,10 +31,10 @@ class AiTagSuggestionExtractorTest {
     }
 
     @Test
-    fun `drops names that duplicate an existing tag (case-insensitive)`() = runTest {
+    fun `keeps existing-tag names - reuse is allowed and the app layer classifies them`() = runTest {
         val names = AiTagSuggestionExtractor(providerReturning("""["Physics","chemistry"]"""))
             .extract("notes", existingTags = listOf("physics")).getOrThrow()
-        assertEquals(listOf("chemistry"), names)
+        assertEquals(listOf("Physics", "chemistry"), names)
     }
 
     @Test

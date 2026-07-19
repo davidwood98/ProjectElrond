@@ -35,7 +35,7 @@ class TagSuggestionRunnerTest {
     )
 
     @Test
-    fun `writes new suggestions, excluding existing tags and already-suggested`() = runTest {
+    fun `writes rows for AI picks, keeping existing-tag endorsements, dropping already-suggested`() = runTest {
         val repo = mockk<SuggestionRepository>(relaxed = true)
         coEvery { repo.existingTagContents("nb") } returns setOf("waves")
         val added = slot<List<PendingSuggestion>>()
@@ -43,20 +43,22 @@ class TagSuggestionRunnerTest {
 
         val count = runner(
             text = "physics revision",
+            // "physics" matches an existing tag but is KEPT now (endorsement, classified downstream);
+            // "waves" was already suggested → dropped.
             extractor = extractorReturning("physics", "waves", "revision"),
             repo = repo,
-            existingTags = listOf("physics"), // existing tag → excluded
+            existingTags = listOf("physics"),
         ).run("nb", "p1")
 
-        assertEquals(1, count)
-        assertEquals(listOf("revision"), added.captured.map { it.content })
-        val row = added.captured.single()
+        assertEquals(2, count)
+        assertEquals(listOf("physics", "revision"), added.captured.map { it.content })
+        val row = added.captured.first()
         assertEquals(SuggestionType.TAG, row.type)
         assertEquals("nb", row.notebookId)
     }
 
     @Test
-    fun `near-duplicates of an existing tag are dropped`() = runTest {
+    fun `near-duplicates within one batch collapse to a single row`() = runTest {
         val repo = mockk<SuggestionRepository>(relaxed = true)
         coEvery { repo.existingTagContents("nb") } returns emptySet()
         val added = slot<List<PendingSuggestion>>()
@@ -64,12 +66,11 @@ class TagSuggestionRunnerTest {
 
         runner(
             text = "content",
-            extractor = extractorReturning("user settings", "revisions", "biology"),
+            extractor = extractorReturning("revision", "revisions", "biology"), // plural near-dup
             repo = repo,
-            existingTags = listOf("settings", "revision"), // subset + plural near-dups
         ).run("nb", "p1")
 
-        assertEquals(listOf("biology"), added.captured.map { it.content })
+        assertEquals(listOf("revision", "biology"), added.captured.map { it.content })
     }
 
     @Test

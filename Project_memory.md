@@ -2290,6 +2290,31 @@ builds.
   naming/filing/writing then surfaces relevant ones; picker existing-tags are most-used-first; the AI
   limit slider caps Level 2; near-dup AI tags no longer appear.
 
+### FA-24d round 3 — AI can endorse existing tags (2026-07-19)
+
+Design gap closed (user request): Level 1 is signal-based (subject/link/literal-word), so a
+semantically-perfect EXISTING tag that no literal signal catches was suggested by neither tier —
+Level 1 missed it, Level 2 was forbidden from proposing existing tags. Now the AI may BOTH reuse an
+existing tag and invent new ones. **No schema change — DB stays v22. 589 app + 34 aibackend tests pass.**
+
+- **Extractor:** prompt changed from "suggest NEW tags, never repeat existing" to "reuse an existing
+  tag verbatim when it's a strong fit (don't invent a near-duplicate), and/or add new ones"; the
+  parse step no longer filters out existing-tag names (only collapses exact repeats within one
+  response).
+- **Runner:** dropped the near-dup-vs-existing filter (existing endorsements must survive); still
+  collapses near-dups **within one batch** and skips already-suggested rows.
+- **Provider classifies** each Level 2 row: near-dup of an existing tag → `SuggestionOrigin.AI_EXISTING`
+  pointing at that tag (also collapses "user settings" → existing "settings"); otherwise → `AI` (new).
+  Still drops rows that duplicate an assigned tag or a Level 1 suggestion (Level 1 wins the tie).
+- **Third pill visual** (user spec): `AI_EXISTING` = neutral existing-tag fill + a **thin Leap-gradient
+  border** — distinct from `AI` (gradient FILL = genuinely new) and `EXISTING` (plain neutral = Level 1).
+  Accept path is unchanged and already correct: an `AI_EXISTING` pill has a real `tag`, so it assigns
+  that tag (no `createTag`) and marks the suggestion handled.
+- **Tests:** extractor keeps-existing; runner keeps-endorsement + within-batch collapse; provider
+  `AI_EXISTING` classification (incl. near-dup collapse) + accept-assigns-without-creating.
+  **Device-verify pending:** an existing tag the content doesn't literally name still gets suggested
+  (bordered pill); tapping it assigns the existing tag.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):

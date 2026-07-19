@@ -96,16 +96,26 @@ class TagSuggestionProvider @Inject constructor(
             limit = limit,
         ).map { SuggestedTag(origin = SuggestionOrigin.EXISTING, name = it.name, tag = it) }
 
-        // Level 2 can't duplicate (or near-duplicate) an existing tag, an assigned tag, or a Level 1
-        // candidate — "settings" vs "user settings", "revision" vs "revisions" all collapse.
-        val blocked = buildList {
-            addAll(i.allTags.map { it.name })
-            addAll(assigned.map { it.name })
-            addAll(level1.map { it.name })
+        // Classify each AI (Level 2) row: if it names (or near-names) an EXISTING tag, it's an
+        // endorsed-existing suggestion pointing at that tag ("user settings" collapses onto an
+        // existing "settings"); otherwise it's a brand-new tag. Drop a row that duplicates a tag the
+        // notebook already has, or one Level 1 is already surfacing (Level 1 wins the tie).
+        val assignedNames = assigned.map { it.name }
+        val level1Names = level1.map { it.name }
+        val level2 = i.aiPending.mapNotNull { row ->
+            when {
+                TagMatching.nearDuplicateOfAny(row.content, assignedNames) -> null
+                TagMatching.nearDuplicateOfAny(row.content, level1Names) -> null
+                else -> {
+                    val existing = i.allTags.firstOrNull { TagMatching.isNearDuplicate(it.name, row.content) }
+                    if (existing != null) {
+                        SuggestedTag(SuggestionOrigin.AI_EXISTING, existing.name, tag = existing, suggestionId = row.id)
+                    } else {
+                        SuggestedTag(SuggestionOrigin.AI, row.content, suggestionId = row.id)
+                    }
+                }
+            }
         }
-        val level2 = i.aiPending
-            .filter { !TagMatching.nearDuplicateOfAny(it.content, blocked) }
-            .map { SuggestedTag(origin = SuggestionOrigin.AI, name = it.content, suggestionId = it.id) }
 
         // Level 1 first (strong relevance signals), then AI; de-dup by name, cap at [limit].
         val seen = mutableSetOf<String>()

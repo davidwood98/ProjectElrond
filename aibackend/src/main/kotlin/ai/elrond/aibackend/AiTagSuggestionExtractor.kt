@@ -5,8 +5,11 @@ import kotlinx.serialization.json.Json
 /**
  * [TagSuggestionExtractor] backed by any [AIProvider]. Asks the model for a strict JSON array of
  * tag-name strings and parses it defensively (the response may include code fences or prose despite
- * the instructions). Names duplicating an existing tag (case-insensitive) are dropped here too, so a
- * lax model can't smuggle a Level-1 candidate into Level 2.
+ * the instructions). The model may BOTH reuse an existing tag (semantic best-fit, where the
+ * deterministic Level 1 signals miss it) AND propose new ones — the app layer classifies each return
+ * as an existing-tag endorsement or a brand-new tag (see TagSuggestionProvider). Only exact
+ * duplicates within a single response are collapsed here; near-duplicate/existing handling is the
+ * app layer's job.
  */
 class AiTagSuggestionExtractor(
     private val provider: AIProvider,
@@ -25,21 +28,21 @@ class AiTagSuggestionExtractor(
             maxTokens = MAX_TOKENS,
         )
         return provider.generate(request).mapCatching { response ->
-            parse(response.text, existingTags, maxSuggestions)
+            parse(response.text, maxSuggestions)
         }
     }
 
-    private fun parse(responseText: String, existingTags: List<String>, maxSuggestions: Int): List<String> {
+    private fun parse(responseText: String, maxSuggestions: Int): List<String> {
         val arrayText = extractJsonArray(responseText) ?: return emptyList()
         val names = try {
             json.decodeFromString<List<String>>(arrayText)
         } catch (e: Exception) {
             throw AIException.Parse("Failed to parse suggested tags", e)
         }
-        val existingLower = existingTags.map { it.trim().lowercase() }.toSet()
+        // Keep existing-tag names (they're valid endorsements now); collapse only exact repeats.
         val seen = mutableSetOf<String>()
         return names.mapNotNull { it.trim().ifEmpty { null } }
-            .filter { it.lowercase() !in existingLower && seen.add(it.lowercase()) }
+            .filter { seen.add(it.lowercase()) }
             .take(maxSuggestions)
     }
 
@@ -54,11 +57,11 @@ class AiTagSuggestionExtractor(
         val vocabulary = if (existingTags.isEmpty()) {
             "There are no existing tags yet.\n\n"
         } else {
-            "Tags that ALREADY EXIST (do NOT repeat any of these): " +
-                existingTags.joinToString(", ") + "\n\n"
+            "EXISTING tags you may REUSE if one is a strong fit (prefer reusing over inventing a " +
+                "near-duplicate): " + existingTags.joinToString(", ") + "\n\n"
         }
-        return "${vocabulary}Suggest up to $maxSuggestions NEW topical tags for this notebook.\n\n" +
-            "NOTEBOOK CONTENT:\n$noteContent"
+        return "${vocabulary}Give up to $maxSuggestions tags for this notebook — reuse the existing " +
+            "tags above where they fit, and/or add new ones.\n\nNOTEBOOK CONTENT:\n$noteContent"
     }
 
     companion object {
@@ -77,8 +80,9 @@ class AiTagSuggestionExtractor(
             - NEVER a task, a date, a person's stray name, an app/UI feature name, or a verbatim
               sentence fragment.
             - 1-2 words, lowercase unless a proper noun.
-            - Never repeat or lightly reword a tag that already exists (you are given that list) —
-              e.g. if "settings" exists, do not suggest "user settings".
+            - You are given the existing tags. If one of them is a strong fit, RETURN IT VERBATIM
+              (reuse it) rather than inventing a near-duplicate — e.g. if "settings" exists, return
+              "settings", not "user settings". Otherwise propose a new tag.
             - Prefer FEWER, high-confidence tags. If nothing broadly describes the notebook, return [].
         """.trimIndent()
     }

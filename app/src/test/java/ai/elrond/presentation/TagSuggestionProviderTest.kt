@@ -61,6 +61,56 @@ class TagSuggestionProviderTest {
     }
 
     @Test
+    fun `an AI pick of an existing tag not surfaced by Level 1 is classified as AI_EXISTING`() = runTest {
+        coEvery { tagRepository.observeTags() } returns
+            flowOf(listOf(tag("physics"), tag("thermo", "thermodynamics")))
+        coEvery { tagRepository.observeNotebookTags() } returns flowOf(mapOf("nb2" to listOf(tag("physics"))))
+        coEvery { subjectRepository.observeNoteSubjects() } returns flowOf(mapOf("nb" to "s", "nb2" to "s"))
+        // AI endorses an existing tag (thermodynamics) that no Level 1 signal caught, plus a new one.
+        coEvery { suggestionRepository.observeTagSuggestions("nb") } returns
+            flowOf(listOf(aiPending("thermodynamics"), aiPending("entropy")))
+        coEvery { noteRepository.pageIdsForNotebook("nb") } returns emptyList()
+
+        val result = provider().observe("nb").first()
+
+        assertEquals(
+            listOf(
+                Triple(SuggestionOrigin.EXISTING, "physics", "physics"),
+                Triple(SuggestionOrigin.AI_EXISTING, "thermodynamics", "thermo"),
+                Triple(SuggestionOrigin.AI, "entropy", null),
+            ),
+            result.map { Triple(it.origin, it.name, it.tag?.id) },
+        )
+    }
+
+    @Test
+    fun `an AI near-duplicate of an existing tag collapses onto that existing tag`() = runTest {
+        coEvery { tagRepository.observeTags() } returns flowOf(listOf(tag("settings")))
+        coEvery { tagRepository.observeNotebookTags() } returns flowOf(emptyMap())
+        coEvery { subjectRepository.observeNoteSubjects() } returns flowOf(emptyMap())
+        coEvery { suggestionRepository.observeTagSuggestions("nb") } returns flowOf(listOf(aiPending("user settings")))
+        coEvery { noteRepository.pageIdsForNotebook("nb") } returns emptyList()
+
+        val result = provider().observe("nb").first()
+
+        assertEquals(1, result.size)
+        assertEquals(SuggestionOrigin.AI_EXISTING, result.single().origin)
+        assertEquals("settings", result.single().name)
+        assertEquals("settings", result.single().tag?.id)
+    }
+
+    @Test
+    fun `accepting an AI-endorsed existing tag assigns it and marks handled, without creating`() = runTest {
+        provider().accept(
+            "nb",
+            SuggestedTag(SuggestionOrigin.AI_EXISTING, "physics", tag = tag("physics"), suggestionId = "sug9"),
+        )
+        coVerify(exactly = 1) { tagRepository.assignTag("nb", "physics") }
+        coVerify(exactly = 0) { tagRepository.createTag(any()) }
+        coVerify(exactly = 1) { suggestionRepository.markHandled("sug9") }
+    }
+
+    @Test
     fun `accepting an existing tag assigns it without creating or marking handled`() = runTest {
         provider().accept("nb", SuggestedTag(SuggestionOrigin.EXISTING, "physics", tag = tag("physics")))
         coVerify(exactly = 1) { tagRepository.assignTag("nb", "physics") }

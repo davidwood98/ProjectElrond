@@ -16,6 +16,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -352,8 +353,10 @@ private val AiSuggestionBrush = Brush.linearGradient(
 
 /**
  * A tag SUGGESTION pill (FA-24d): a leading "+" marks "not yet added, tap to add" — the one cue that
- * distinguishes it from an identically-neutral pending-removal pill. [SuggestionOrigin.AI] tags get
- * the Leap-gradient wash; [SuggestionOrigin.EXISTING] (Level 1) tags are flat neutral.
+ * distinguishes it from an identically-neutral pending-removal pill. Three looks:
+ *  - [SuggestionOrigin.EXISTING] (Level 1) — flat neutral.
+ *  - [SuggestionOrigin.AI] (new AI tag) — Leap-gradient FILL.
+ *  - [SuggestionOrigin.AI_EXISTING] (AI picked one of your tags) — neutral fill + thin gradient BORDER.
  */
 @Composable
 private fun SuggestionPill(
@@ -361,10 +364,14 @@ private fun SuggestionPill(
     onTap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val ai = suggestion.origin == SuggestionOrigin.AI
+    val shape = RoundedCornerShape(999.dp)
+    val newAiTag = suggestion.origin == SuggestionOrigin.AI
+    val aiPickedExisting = suggestion.origin == SuggestionOrigin.AI_EXISTING
+    val textColor = if (newAiTag) LeapGrey else Neutral500
     val base = modifier
-        .clip(RoundedCornerShape(999.dp))
-        .let { if (ai) it.background(AiSuggestionBrush) else it.background(Neutral200) }
+        .clip(shape)
+        .let { if (newAiTag) it.background(AiSuggestionBrush) else it.background(Neutral200) }
+        .let { if (aiPickedExisting) it.border(1.dp, AiSuggestionBrush, shape) else it }
         .clickable(onClick = onTap)
         .padding(horizontal = 10.dp, vertical = 4.dp)
     Row(base, verticalAlignment = Alignment.CenterVertically) {
@@ -372,13 +379,13 @@ private fun SuggestionPill(
             text = "+ ",
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,
-            color = if (ai) LeapGrey else Neutral500,
+            color = textColor,
         )
         Text(
             text = suggestion.name,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,
-            color = if (ai) LeapGrey else Neutral500,
+            color = textColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.widthIn(max = TAG_PILL_MAX_WIDTH),

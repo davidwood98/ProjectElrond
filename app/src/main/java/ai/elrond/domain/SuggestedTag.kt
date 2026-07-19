@@ -2,11 +2,18 @@ package ai.elrond.domain
 
 /** Where a tag suggestion came from — decides how its pill is rendered (FA-24d). */
 enum class SuggestionOrigin {
-    /** Level 1: an existing tag surfaced from Subject/link/frequency/content signals. Flat neutral pill. */
+    /** Level 1: an existing tag surfaced from Subject/link/content signals. Flat neutral pill. */
     EXISTING,
 
-    /** Level 2: an AI-generated brand-new tag name. Low-opacity Leap-gradient pill. */
+    /** Level 2: an AI-generated brand-new tag name. Low-opacity Leap-gradient FILL pill. */
     AI,
+
+    /**
+     * Level 2: the AI judged an EXISTING tag the best fit (semantically, where the deterministic
+     * Level 1 signals didn't catch it). Rendered as a neutral existing-tag pill with a thin Leap
+     * gradient BORDER — distinguishing "AI picked one of your tags" from "AI invented a new one".
+     */
+    AI_EXISTING,
 }
 
 /**
