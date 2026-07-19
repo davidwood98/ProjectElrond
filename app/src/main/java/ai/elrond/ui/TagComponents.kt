@@ -351,6 +351,12 @@ private val AiSuggestionBrush = Brush.linearGradient(
     ),
 )
 
+// Full-opacity Leap gradient for the AI_EXISTING pill's BORDER — it must contrast the neutral fill,
+// unlike the soft fill wash above (FA-24d).
+private val AiBorderBrush = Brush.linearGradient(listOf(LeapBlue, LeapGreen, LeapNavy, LeapPink))
+
+private val AiExistingBorderWidth = 1.5.dp
+
 /**
  * A tag SUGGESTION pill (FA-24d): a leading "+" marks "not yet added, tap to add" — the one cue that
  * distinguishes it from an identically-neutral pending-removal pill. Three looks:
@@ -371,7 +377,7 @@ private fun SuggestionPill(
     val base = modifier
         .clip(shape)
         .let { if (newAiTag) it.background(AiSuggestionBrush) else it.background(Neutral200) }
-        .let { if (aiPickedExisting) it.border(1.dp, AiSuggestionBrush, shape) else it }
+        .let { if (aiPickedExisting) it.border(AiExistingBorderWidth, AiBorderBrush, shape) else it }
         .clickable(onClick = onTap)
         .padding(horizontal = 10.dp, vertical = 4.dp)
     Row(base, verticalAlignment = Alignment.CenterVertically) {
