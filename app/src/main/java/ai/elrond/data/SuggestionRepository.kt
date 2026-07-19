@@ -61,6 +61,12 @@ class SuggestionRepository(
     suspend fun trimActiveTagSuggestions(notebookId: String, limit: Int) =
         dao.trimActiveTagsForNotebook(notebookId, limit)
 
+    /** Forget a removed tag's suggestion rows so the AI may re-propose it later (FA-24d). */
+    suspend fun forgetTagSuggestion(notebookId: String, tagName: String) {
+        val norm = tagName.trim().lowercase()
+        if (norm.isNotEmpty()) dao.deleteTagSuggestionByContent(notebookId, norm)
+    }
+
     suspend fun add(suggestions: List<PendingSuggestion>) {
         if (suggestions.isEmpty()) return
         val now = clock()

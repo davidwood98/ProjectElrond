@@ -59,4 +59,17 @@ class AiTagSuggestionExtractorTest {
         val prompt = (provider.lastRequest?.input as AIInput.Text).text
         assertTrue(prompt.contains("maths"))
     }
+
+    @Test
+    fun `the max-suggestions setting scales the prompt breadth`() = runTest {
+        val selective = providerReturning("[]")
+        AiTagSuggestionExtractor(selective).extract("notes", existingTags = emptyList(), maxSuggestions = 1).getOrThrow()
+        val onePrompt = (selective.lastRequest?.input as AIInput.Text).text
+        assertTrue("N=1 asks for a single, selective tag", onePrompt.contains("single"))
+
+        val broad = providerReturning("[]")
+        AiTagSuggestionExtractor(broad).extract("notes", existingTags = emptyList(), maxSuggestions = 5).getOrThrow()
+        val fivePrompt = (broad.lastRequest?.input as AIInput.Text).text
+        assertTrue("N=5 asks for up to 5, broadly", fivePrompt.contains("up to 5") && fivePrompt.contains("broadly"))
+    }
 }

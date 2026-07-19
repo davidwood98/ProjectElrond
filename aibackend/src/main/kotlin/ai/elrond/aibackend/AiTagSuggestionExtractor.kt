@@ -60,8 +60,19 @@ class AiTagSuggestionExtractor(
             "EXISTING tags you may REUSE if one is a strong fit (prefer reusing over inventing a " +
                 "near-duplicate): " + existingTags.joinToString(", ") + "\n\n"
         }
-        return "${vocabulary}Give up to $maxSuggestions tags for this notebook — reuse the existing " +
-            "tags above where they fit, and/or add new ones.\n\nNOTEBOOK CONTENT:\n$noteContent"
+        // The user's max-suggestions setting is also a BREADTH dial: 1 = very selective (anti-noise),
+        // high = capture the notebook's several distinct themes. Scale the ask accordingly (FA-24d).
+        val breadth = when {
+            maxSuggestions <= 1 ->
+                "Return ONLY the single strongest, most defining tag — be extremely selective. If no " +
+                    "one theme clearly defines the whole notebook, return an empty array []."
+            maxSuggestions >= 4 ->
+                "Return up to $maxSuggestions tags, aiming to cover the notebook's main DISTINCT " +
+                    "themes broadly (several, not just one) — but only genuinely fitting ones."
+            else -> "Return up to $maxSuggestions of the most fitting tags."
+        }
+        return "$vocabulary$breadth Reuse the existing tags above where they fit, and/or add new " +
+            "ones.\n\nNOTEBOOK CONTENT:\n$noteContent"
     }
 
     companion object {
@@ -83,7 +94,8 @@ class AiTagSuggestionExtractor(
             - You are given the existing tags. If one of them is a strong fit, RETURN IT VERBATIM
               (reuse it) rather than inventing a near-duplicate — e.g. if "settings" exists, return
               "settings", not "user settings". Otherwise propose a new tag.
-            - Prefer FEWER, high-confidence tags. If nothing broadly describes the notebook, return [].
+            - How many to return is specified per request (a breadth dial); within that, only include
+              tags you are confident broadly describe the notebook. If nothing does, return [].
         """.trimIndent()
     }
 }

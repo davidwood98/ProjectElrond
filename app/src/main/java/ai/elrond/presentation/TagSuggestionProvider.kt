@@ -139,6 +139,13 @@ class TagSuggestionProvider @Inject constructor(
         suggestion.suggestionId?.let { suggestionRepository.markHandled(it) }
     }
 
+    /**
+     * A tag was removed from a notebook — forget its (handled) AI suggestion so the model may propose
+     * it again if later content warrants, instead of it being permanently blocked (FA-24d).
+     */
+    suspend fun forgetRemovedTag(notebookId: String, tagName: String) =
+        suggestionRepository.forgetTagSuggestion(notebookId, tagName)
+
     companion object {
         const val DEFAULT_LIMIT = 5
     }

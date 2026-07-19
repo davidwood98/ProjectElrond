@@ -126,23 +126,34 @@ class TagViewModel @Inject constructor(
     }
 
     /** Immediate removal — the picker's explicit untick (no undo window in a modal dialog). */
-    fun removeTag(notebookId: String, tagId: String) {
+    fun removeTag(notebookId: String, tagId: String, tagName: String = "") {
         // An immediate removal supersedes any pending window for the same pill.
         cancelUntag(notebookId, tagId)
-        viewModelScope.launch { tagRepository.removeTag(notebookId, tagId) }
+        viewModelScope.launch {
+            tagRepository.removeTag(notebookId, tagId)
+            forgetRemovedTag(notebookId, tagName)
+        }
     }
 
     /** Starts the 2s cancellable grey-out for a pill; no DB write until the window elapses. */
-    fun beginUntag(notebookId: String, tagId: String) {
+    fun beginUntag(notebookId: String, tagId: String, tagName: String = "") {
         val key = pillKey(notebookId, tagId)
         if (key in pendingJobs) return // idempotent while already pending
         _pendingRemovalKeys.update { it + key }
         pendingJobs[key] = viewModelScope.launch {
             delay(UNTAG_WINDOW_MS)
-            runCatching { tagRepository.removeTag(notebookId, tagId) }
+            runCatching {
+                tagRepository.removeTag(notebookId, tagId)
+                forgetRemovedTag(notebookId, tagName)
+            }
             pendingJobs.remove(key)
             _pendingRemovalKeys.update { it - key }
         }
+    }
+
+    /** After a tag is removed, drop its AI suggestion block so the model can re-propose it (FA-24d). */
+    private suspend fun forgetRemovedTag(notebookId: String, tagName: String) {
+        if (tagName.isNotBlank()) tagSuggestionProvider.forgetRemovedTag(notebookId, tagName)
     }
 
     /** Tapping the greyed pill during the window: cancel — the removal never reached the DB. */

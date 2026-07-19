@@ -160,6 +160,18 @@ class SuggestionRepositoryTest {
     }
 
     @Test
+    fun `forgetTagSuggestion lifts the block so an accepted-then-removed tag can be re-suggested`() = runTest {
+        repo.add(listOf(tag("thermodynamics")))
+        val id = repo.observeTagSuggestions("nb1").first().single().id
+        repo.markHandled(id) // accepted → handled row blocks re-suggestion
+        assertTrue("thermodynamics" in repo.existingTagContents("nb1"))
+
+        repo.forgetTagSuggestion("nb1", "Thermodynamics") // tag removed (case-insensitive)
+
+        assertFalse("thermodynamics" in repo.existingTagContents("nb1"))
+    }
+
+    @Test
     fun `trimActiveTagSuggestions keeps the newest limit and evicts the oldest, sparing handled rows`() = runTest {
         val clock = java.util.concurrent.atomic.AtomicLong(1L)
         val timed = SuggestionRepository(db.pendingSuggestionDao(), clock = { clock.getAndIncrement() })

@@ -476,7 +476,7 @@ fun NotesSection(
             allTags = tagsByFrequency,
             assignedTagIds = assignedIds,
             onToggle = { tag ->
-                if (tag.id in assignedIds) tagViewModel.removeTag(notebook.notebookId, tag.id)
+                if (tag.id in assignedIds) tagViewModel.removeTag(notebook.notebookId, tag.id, tag.name)
                 else tagViewModel.assignTag(notebook.notebookId, tag.id)
             },
             onCreateAndAssign = { tagViewModel.createAndAssignTag(notebook.notebookId, it) },

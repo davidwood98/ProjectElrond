@@ -2377,6 +2377,30 @@ aibackend)** + `assembleDebugAndroidTest` builds.
   reopen; AI tags survive the to-do run and roll oldest-out at the limit; the sheet waits for a pause;
   no more "do the urgent task" non-tasks.
 
+### FA-24d round 6 — re-suggest after removal + breadth scales with the N slider (2026-07-19)
+
+Two follow-ups from device questions. **No schema change — DB stays v22. 630 JVM tests pass (595 app
++ 35 aibackend).**
+
+- **Accepted-then-removed tags are no longer permanently blocked.** Accepting an AI tag `markHandled`s
+  its `PendingSuggestion(TAG)` row (kept, `dismissed=1`), which the runner's `existingTagContents`
+  de-dup treats as "already decided" — and that survived tag removal, leaving a phantom block (the tag
+  gone from `tags`, yet un-suggestable). Now removing a tag calls `SuggestionRepository.forgetTagSuggestion`
+  (new `deleteTagSuggestionByContent` DAO — deletes the notebook's TAG rows for that name), so the AI
+  can re-propose it if later content warrants. Wired through `TagViewModel.removeTag`/`beginUntag` (new
+  optional `tagName` param, default "" so existing tests/callers are unaffected) →
+  `TagSuggestionProvider.forgetRemovedTag`; the header-pill untag window and both pickers pass the name.
+- **The "Max AI tag suggestions" slider is now a BREADTH dial in the prompt** (was: a silent cap while
+  the prompt said "prefer FEWER"). `AiTagSuggestionExtractor.buildUserPrompt` scales with `maxSuggestions`:
+  N=1 → "return ONLY the single strongest tag, be extremely selective" (max anti-noise); N≥4 → "up to N,
+  cover the notebook's main DISTINCT themes broadly"; middle → "up to N most fitting". Answers the
+  device finding that dense notes yielded only ~1 tag: nothing forced filling the cap, and the old
+  system prompt actively biased toward fewer — that bias line is gone (count/breadth is now per-request).
+- Tests: `SuggestionRepositoryTest` (forget lifts the block), `AiTagSuggestionExtractorTest` (prompt
+  scales with N), `TagViewModelTest` (remove forgets the suggestion). **Device-verify pending:** remove
+  an AI-suggested tag, write more of that theme → it can reappear; slide the AI count to 1 (terse) vs 5
+  (broad) and confirm suggestion volume tracks it on dense notes.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):

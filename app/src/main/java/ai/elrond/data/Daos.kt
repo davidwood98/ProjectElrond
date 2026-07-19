@@ -446,6 +446,17 @@ interface PendingSuggestionDao {
     )
     suspend fun trimActiveTagsForNotebook(notebookId: String, limit: Int)
 
+    /**
+     * Forget a notebook's TAG suggestion(s) for [content] (FA-24d): when a tag is removed, its
+     * handled row is deleted so the AI can propose it again if later content warrants — otherwise an
+     * accepted-then-removed tag stays permanently blocked from re-suggestion.
+     */
+    @Query(
+        "DELETE FROM pending_suggestions WHERE notebookId = :notebookId AND type = 'TAG' " +
+            "AND lower(trim(content)) = :content",
+    )
+    suspend fun deleteTagSuggestionByContent(notebookId: String, content: String)
+
     @Query("SELECT * FROM pending_suggestions WHERE id = :id")
     suspend fun getById(id: String): PendingSuggestionEntity?
 

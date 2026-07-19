@@ -101,6 +101,16 @@ class TagViewModelTest {
     }
 
     @Test
+    fun `removing a tag forgets its AI suggestion so it can be re-proposed`() = runTest(dispatcher) {
+        val vm = TagViewModel(repository, suggestionProvider)
+        vm.removeTag("nb1", "t1", "thermodynamics")
+        runCurrent()
+
+        coVerify(exactly = 1) { repository.removeTag("nb1", "t1") }
+        coVerify(exactly = 1) { suggestionProvider.forgetRemovedTag("nb1", "thermodynamics") }
+    }
+
+    @Test
     fun `pendingRemovalTagIdsFor scopes keys to one notebook as bare tag ids`() = runTest(dispatcher) {
         every { repository.observeNotebookTags() } returns flowOf(
             mapOf(

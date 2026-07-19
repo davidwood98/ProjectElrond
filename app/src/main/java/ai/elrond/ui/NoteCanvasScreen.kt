@@ -493,7 +493,7 @@ fun NoteCanvasScreen(
             tags = headerTags,
             pendingRemovalTagIds = pendingRemovalTagIds,
             onBeginUntag = { tag ->
-                headerNotebookId?.let { tagViewModel.beginUntag(it, tag.id) }
+                headerNotebookId?.let { tagViewModel.beginUntag(it, tag.id, tag.name) }
             },
             onCancelUntag = { tag ->
                 headerNotebookId?.let { tagViewModel.cancelUntag(it, tag.id) }
@@ -536,7 +536,7 @@ fun NoteCanvasScreen(
                 assignedTagIds = headerTags.map { it.id }.toSet(),
                 onToggle = { tag ->
                     if (tag.id in headerTags.map { it.id }.toSet()) {
-                        tagViewModel.removeTag(pickerNotebookId, tag.id)
+                        tagViewModel.removeTag(pickerNotebookId, tag.id, tag.name)
                     } else {
                         tagViewModel.assignTag(pickerNotebookId, tag.id)
                     }
