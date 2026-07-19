@@ -88,23 +88,27 @@ class TagSuggestionRunnerTest {
 
         assertEquals(0, count)
         assertTrue(!extracted)
-        coVerify(exactly = 0) { repo.clearActiveTagSuggestions(any()) }
+        coVerify(exactly = 0) { repo.trimActiveTagSuggestions(any(), any()) }
         coVerify(exactly = 0) { repo.add(any()) }
     }
 
     @Test
-    fun `changed content clears un-actioned suggestions before re-running`() = runTest {
+    fun `changed content accumulates new suggestions and trims to the limit, never wholesale-clears`() = runTest {
         val repo = mockk<SuggestionRepository>(relaxed = true)
         coEvery { repo.existingTagContents("nb") } returns emptySet()
 
-        runner(
-            text = "new content",
-            extractor = extractorReturning("biology"),
-            repo = repo,
-            lastHash = "stale-hash",
+        TagSuggestionRunner(
+            aggregateNotebookText = { "new content" },
+            tagExtractor = extractorReturning("biology"),
+            existingTagNames = { emptyList() },
+            suggestionRepository = repo,
+            loadHash = { "stale-hash" },
+            saveHash = { _, _ -> },
+            maxSuggestions = 4,
         ).run("nb", "p1")
 
-        coVerify(exactly = 1) { repo.clearActiveTagSuggestions("nb") }
+        coVerify(exactly = 1) { repo.add(any()) }
+        coVerify(exactly = 1) { repo.trimActiveTagSuggestions("nb", 4) } // rolling window, not a wipe
     }
 
     @Test

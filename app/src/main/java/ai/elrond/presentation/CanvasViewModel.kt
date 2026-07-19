@@ -115,6 +115,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -767,6 +770,25 @@ class CanvasViewModel(
         } else {
             MutableStateFlow<List<PendingSuggestion>>(emptyList()).asStateFlow()
         }
+
+    /** Bumped on every finished pen stroke — drives the "don't interrupt writing" gate below. */
+    private val strokeActivity = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /**
+     * The extraction confirmation sheet must NEVER pop up mid-writing (FA-24d device feedback: it
+     * interrupted between letters). This gates [pendingSuggestions] on the pen being idle for at
+     * least [POPUP_IDLE_DELAY_MS]: each stroke restarts the timer (holding the sheet closed), and
+     * only after the pause does the sheet surface. The UI observes THIS flow, not [pendingSuggestions].
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val visibleSuggestions: StateFlow<List<PendingSuggestion>> =
+        combine(
+            pendingSuggestions,
+            strokeActivity
+                .flatMapLatest { flow { emit(false); delay(POPUP_IDLE_DELAY_MS); emit(true) } }
+                .onStart { emit(true) },
+        ) { pending, idle -> if (idle) pending else emptyList() }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // --- Undo / redo (stroke history) ---
 
@@ -1816,6 +1838,7 @@ class CanvasViewModel(
         clearSelection() // a fresh pen stroke isn't part of any lasso selection
         contentDirtyForExtraction = true // genuinely new ink — eligible for background extraction
         thumbnailDirty = true // ink changed — the note-card thumbnail is now stale
+        strokeActivity.tryEmit(Unit) // restart the "idle before showing the extraction sheet" timer
         // Thin the new stroke's points to the standard spacing (cheaper mesh build + redraw + storage),
         // then cut a non-solid line type into its dash/dot segments — grouped, so the lasso treats the
         // whole patterned line as one object (FA-23). One undo (the snapshot above) removes it all.
@@ -3340,6 +3363,9 @@ class CanvasViewModel(
 
         /** Fallback y for a re-sent query when the error note's position is unknown. */
         private const val RESEND_FALLBACK_Y: Float = 120f
+
+        /** Pen-idle time before the extraction sheet may surface, so it never interrupts writing (FA-24d). */
+        private const val POPUP_IDLE_DELAY_MS: Long = 1_000L
 
         /** Outlives the ViewModel for the onCleared() persistence flush. */
         private val flushScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

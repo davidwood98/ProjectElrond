@@ -14,6 +14,7 @@ import ai.elrond.domain.Tag
 import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -38,27 +40,55 @@ class TagSuggestionProviderTest {
         noteRepository, recognitionCache, suggestionRepository,
     )
 
+    @Before
+    fun stubReactiveLinks() {
+        // No outgoing links by default; individual tests override. Without this the combine never
+        // emits (relaxed mock returns an empty Flow that completes without emitting).
+        every { notebookLinkRepository.observeLinksFromNotebook(any()) } returns flowOf(emptyList())
+    }
+
     private fun tag(id: String, name: String = id) = Tag(id, name, 0)
 
     private fun aiPending(name: String, id: String = name) =
         PendingSuggestion(pageId = "", type = SuggestionType.TAG, content = name, x = 0f, y = 0f, id = id, notebookId = "nb")
 
     @Test
-    fun `merges Level 1 existing tags with Level 2 AI, dropping an AI duplicate of an existing tag`() = runTest {
+    fun `when AI agrees with a Level 1 tag it renders as AI_EXISTING (bordered), not plain Level 1`() = runTest {
         coEvery { tagRepository.observeTags() } returns flowOf(listOf(tag("physics")))
         coEvery { tagRepository.observeNotebookTags() } returns flowOf(mapOf("nb2" to listOf(tag("physics"))))
         coEvery { subjectRepository.observeNoteSubjects() } returns flowOf(mapOf("nb" to "s", "nb2" to "s"))
         coEvery { suggestionRepository.observeTagSuggestions("nb") } returns
-            flowOf(listOf(aiPending("biology"), aiPending("physics"))) // physics dup of existing tag
+            flowOf(listOf(aiPending("biology"), aiPending("physics"))) // AI also endorses the L1 "physics"
         coEvery { noteRepository.pageIdsForNotebook("nb") } returns emptyList()
 
         val result = provider().observe("nb").first()
 
-        // AI first (so Level 1 can't starve it), then Level 1; the AI "physics" duplicate is dropped.
+        // "physics" surfaces once, as AI_EXISTING (the AI-agreement border), not a plain Level 1 pill.
         assertEquals(
-            listOf(SuggestionOrigin.AI to "biology", SuggestionOrigin.EXISTING to "physics"),
+            listOf(SuggestionOrigin.AI to "biology", SuggestionOrigin.AI_EXISTING to "physics"),
             result.map { it.origin to it.name },
         )
+    }
+
+    @Test
+    fun `a placed link's tags surface via the reactive outgoing-links signal`() = runTest {
+        coEvery { tagRepository.observeTags() } returns flowOf(listOf(tag("personal")))
+        coEvery { tagRepository.observeNotebookTags() } returns flowOf(mapOf("target" to listOf(tag("personal"))))
+        coEvery { subjectRepository.observeNoteSubjects() } returns flowOf(emptyMap())
+        coEvery { suggestionRepository.observeTagSuggestions("nb") } returns flowOf(emptyList())
+        coEvery { noteRepository.pageIdsForNotebook("nb") } returns emptyList()
+        every { notebookLinkRepository.observeLinksFromNotebook("nb") } returns flowOf(
+            listOf(
+                ai.elrond.domain.NotebookLink(
+                    id = "l1", targetNotebookId = "target", x = 0f, y = 0f,
+                    widthPx = 1f, linkText = "T", createdAt = 0L,
+                ),
+            ),
+        )
+
+        val result = provider().observe("nb").first()
+
+        assertEquals(listOf(SuggestionOrigin.EXISTING to "personal"), result.map { it.origin to it.name })
     }
 
     @Test

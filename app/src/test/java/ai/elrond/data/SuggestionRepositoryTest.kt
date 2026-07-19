@@ -160,16 +160,20 @@ class SuggestionRepositoryTest {
     }
 
     @Test
-    fun `clearActiveTagSuggestions drops un-actioned rows but keeps handled ones`() = runTest {
-        repo.add(listOf(tag("physics"), tag("revision")))
-        val physicsId = repo.observeTagSuggestions("nb1").first().first { it.content == "physics" }.id
-        repo.markHandled(physicsId)
+    fun `trimActiveTagSuggestions keeps the newest limit and evicts the oldest, sparing handled rows`() = runTest {
+        val clock = java.util.concurrent.atomic.AtomicLong(1L)
+        val timed = SuggestionRepository(db.pendingSuggestionDao(), clock = { clock.getAndIncrement() })
+        // Three active TAG suggestions with strictly increasing createdAt (oldest → newest).
+        timed.add(listOf(tag("oldest")))
+        timed.add(listOf(tag("middle")))
+        timed.add(listOf(tag("newest")))
 
-        repo.clearActiveTagSuggestions("nb1")
+        timed.trimActiveTagSuggestions("nb1", limit = 2)
 
-        // The un-actioned "revision" is gone; the handled "physics" still de-dups future runs.
-        assertTrue(repo.observeTagSuggestions("nb1").first().isEmpty())
-        assertTrue("physics" in repo.existingTagContents("nb1"))
-        assertFalse("revision" in repo.existingTagContents("nb1"))
+        // Oldest evicted; the two newest survive.
+        assertEquals(
+            setOf("middle", "newest"),
+            timed.observeTagSuggestions("nb1").first().map { it.content }.toSet(),
+        )
     }
 }

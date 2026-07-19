@@ -3,6 +3,7 @@ package ai.elrond.data
 import ai.elrond.domain.NotebookLink
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /**
  * Repository for on-canvas notebook link boxes (FA-24 Phase 1).
@@ -29,6 +30,10 @@ class NotebookLinkRepository(
     /** Raw backlink rows for [notebookId]; the caller resolves source titles. */
     fun observeBacklinks(notebookId: String): Flow<List<BacklinkRow>> =
         linkDao.observeBacklinks(notebookId)
+
+    /** Outgoing links from a notebook's pages (FA-24d) — reactive, for the Level 1 link-graph signal. */
+    fun observeLinksFromNotebook(notebookId: String): Flow<List<NotebookLink>> =
+        linkDao.observeLinksFromNotebook(notebookId).map { rows -> rows.map(NotebookLinkEntity::toDomain) }
 
     fun newLinkId(): String = newId()
 

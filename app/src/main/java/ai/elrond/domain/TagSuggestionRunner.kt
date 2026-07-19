@@ -46,9 +46,6 @@ class TagSuggestionRunner(
         val hash = text.hashCode().toString()
         if (hash == loadHash(notebookId)) return 0
 
-        // Content changed → drop stale un-actioned suggestions, then re-evaluate. Handled rows stay.
-        suggestionRepository.clearActiveTagSuggestions(notebookId)
-
         val existing = existingTagNames()
         val names = tagExtractor.extract(text, existing, maxSuggestions).getOrNull().orEmpty()
         // Ran (or attempted) the model this pass → remember the text so an unchanged next save skips.
@@ -80,6 +77,10 @@ class TagSuggestionRunner(
             }
         }
         suggestionRepository.add(pending)
+        // Rolling window: newest suggestions accumulate; once over the cap, the OLDEST are evicted
+        // (a content change no longer wipes the set — an old suggestion is only replaced once the
+        // limit is reached, FA-24d device round 5).
+        suggestionRepository.trimActiveTagSuggestions(notebookId, maxSuggestions)
         return pending.size
     }
 }

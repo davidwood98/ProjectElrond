@@ -349,6 +349,16 @@ interface NotebookLinkDao {
             "WHERE nl.targetNotebookId = :notebookId ORDER BY nl.createdAt DESC",
     )
     fun observeBacklinks(notebookId: String): Flow<List<BacklinkRow>>
+
+    /**
+     * Outgoing links FROM a notebook's pages (FA-24d) — a reactive source so a freshly-placed link
+     * re-runs the Level 1 link-graph signal automatically, without reopening the notebook.
+     */
+    @Query(
+        "SELECT * FROM notebook_links WHERE sourcePageId IN " +
+            "(SELECT id FROM note_pages WHERE notebookId = :notebookId)",
+    )
+    fun observeLinksFromNotebook(notebookId: String): Flow<List<NotebookLinkEntity>>
 }
 
 @Dao
@@ -423,12 +433,18 @@ interface PendingSuggestionDao {
     suspend fun tagContentsForNotebook(notebookId: String): List<String>
 
     /**
-     * Delete a notebook's un-actioned TAG suggestions (FA-24d refresh-on-change): when the content
-     * changes, stale un-tapped suggestions are cleared before re-running. Accepted/dismissed rows
-     * (dismissed = 1) are kept so handled-once de-dup still holds.
+     * Roll the active TAG suggestions forward (FA-24d): keep only the newest [limit] un-actioned ones,
+     * deleting the oldest beyond that. New suggestions accumulate (newest last) and only start evicting
+     * the oldest once the cap is hit — never a wholesale wipe on every content change. Handled rows
+     * (dismissed = 1) are untouched, so handled-once de-dup still holds.
      */
-    @Query("DELETE FROM pending_suggestions WHERE notebookId = :notebookId AND type = 'TAG' AND dismissed = 0")
-    suspend fun deleteActiveTagsForNotebook(notebookId: String)
+    @Query(
+        "DELETE FROM pending_suggestions WHERE notebookId = :notebookId AND type = 'TAG' " +
+            "AND dismissed = 0 AND id NOT IN (" +
+            "SELECT id FROM pending_suggestions WHERE notebookId = :notebookId AND type = 'TAG' " +
+            "AND dismissed = 0 ORDER BY createdAt DESC LIMIT :limit)",
+    )
+    suspend fun trimActiveTagsForNotebook(notebookId: String, limit: Int)
 
     @Query("SELECT * FROM pending_suggestions WHERE id = :id")
     suspend fun getById(id: String): PendingSuggestionEntity?

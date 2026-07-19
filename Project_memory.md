@@ -2339,6 +2339,44 @@ prior rounds, both fixed. **No schema change — DB stays v22; tag test suites g
   **Device-verify pending:** a "spider graph" notebook suggests a new "spider graph" tag; AI tags
   persist on a text-heavy notebook instead of being crowded out by Level 1.
 
+### FA-24d round 5 — QA-fixture device pass fixes (2026-07-19)
+
+Five issues from a structured device pass against `docs/FA-24d-test-fixture-plan.md`. **No schema
+change — DB stays v22** (DAO-query + logic + prompt changes). **627 JVM tests pass (593 app + 34
+aibackend)** + `assembleDebugAndroidTest` builds.
+
+- **Link placement now triggers a Level 1 pass automatically (was: only on reopen).** The link-graph
+  signal read `notebook_links` via a suspend call inside `mapLatest`, so nothing re-ran when a link
+  was placed. Added `NotebookLinkDao.observeLinksFromNotebook(notebookId)` (a reactive Flow of the
+  notebook's outgoing links) as a **5th flow in `TagSuggestionProvider`'s `combine`**; placing a link
+  (persisted on autosave) now invalidates it and re-runs Level 1 live.
+- **AI new tags no longer wiped by the background to-do run.** `TagSuggestionRunner` used to
+  `clearActiveTagSuggestions` on every content change, so an unrelated save (e.g. the to-do
+  auto-extraction pass) cleared good AI tags. Replaced with a **rolling window**: new suggestions
+  accumulate (newest last = rightmost pill), and only once the AI-limit is hit does the OLDEST get
+  evicted — `SuggestionRepository.trimActiveTagSuggestions(notebookId, limit)` (DAO keeps newest
+  `limit` by `createdAt`, deletes older). `clearActiveTagSuggestions`/`deleteActiveTagsForNotebook`
+  removed.
+- **When the AI agrees with a Level 1 tag, it shows the AI_EXISTING border.** Removed the provider's
+  "drop an AI row that matches a Level 1 name" filter; the AI-first merge + name de-dup now keeps the
+  `AI_EXISTING` (bordered) pill over the plain Level 1 one, so "AI endorses your existing `work` tag"
+  is visible instead of an indistinguishable Level 1 pill.
+- **To-do extraction UX (FA-2 tune, surfaced here):**
+  - **Sheet never interrupts writing.** New `CanvasViewModel.visibleSuggestions` gates
+    `pendingSuggestions` on the pen being idle ≥ `POPUP_IDLE_DELAY_MS` (1s): each finished stroke
+    (`strokeActivity` + `flatMapLatest`) restarts the timer; the sheet only surfaces after the pause.
+    `NoteCanvasScreen` observes this gated flow.
+  - **Faster trigger:** `ExtractionScheduler` initial delay 5s→3s (the rest of the latency is ML Kit
+    recognition + Anthropic inference, not this coalescing window).
+  - **To-dos must have a real action + object.** `AiTaskExtractor` prompt now rejects urgency/importance
+    restatements with no concrete action ("do the urgent task", "this is important") and requires a
+    named subject/object per task.
+- Tests: provider (reactive-link surfacing, AI-agreement→AI_EXISTING), runner (rolling accumulate +
+  trim, no wholesale clear), `SuggestionRepositoryTest` (trim keeps newest-N evicts oldest, spares
+  handled). **Device-verify pending:** link placement surfaces the link-graph Level 1 tag without
+  reopen; AI tags survive the to-do run and roll oldest-out at the limit; the sheet waits for a pause;
+  no more "do the urgent task" non-tasks.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):

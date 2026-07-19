@@ -80,12 +80,16 @@ class AiTaskExtractor(
 
             Return ONLY a JSON array (no prose, no markdown, no code fences). Each
             element: {"content": string, "priority": 0-3, "dueDate": "YYYY-MM-DD" or null}.
-            - content: a concise, imperative task ("Email Sarah the report").
+            - content: a concise, imperative task naming a CONCRETE action AND its object —
+              WHAT to do and to/about WHAT ("Email Sarah the report", "Book the meeting room").
             - priority: 0 none, 1 low, 2 medium, 3 high — infer from urgency words.
             - dueDate: only if the note clearly implies a date; otherwise null.
 
             Only include genuine tasks, action items, or commitments — NOT questions,
-            facts, or general notes. If there are none, return [].
+            facts, or general notes. A statement of urgency or importance with NO concrete
+            action is NOT a task (e.g. "this is urgent", "do the urgent task", "top priority")
+            — skip it entirely. Every task must have a real subject/object; if you cannot name
+            what is actually being done, do not emit it. If there are none, return [].
         """.trimIndent()
     }
 }

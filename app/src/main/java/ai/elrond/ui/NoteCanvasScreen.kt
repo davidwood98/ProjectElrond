@@ -172,7 +172,8 @@ fun NoteCanvasScreen(
     val pendingExtraction by viewModel.pendingExtraction.collectAsStateWithLifecycle()
     val todoCount by todoViewModel.activeCount.collectAsStateWithLifecycle()
     var showTodoPanel by remember { mutableStateOf(false) }
-    val pendingSuggestions by viewModel.pendingSuggestions.collectAsStateWithLifecycle()
+    // FA-24d: the idle-gated flow — the sheet only surfaces once the pen has paused, never mid-writing.
+    val pendingSuggestions by viewModel.visibleSuggestions.collectAsStateWithLifecycle()
     val hasNewExtractedItems by settingsViewModel.hasNewExtractedItems.collectAsStateWithLifecycle()
     val transientMessage by viewModel.transientMessage.collectAsStateWithLifecycle()
     // Prefix `/Q` listening state — drives the bottom-of-canvas listening indicator.

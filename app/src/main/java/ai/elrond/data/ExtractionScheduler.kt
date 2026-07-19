@@ -14,8 +14,12 @@ import java.util.concurrent.TimeUnit
 /** Enqueues background auto-extraction for a saved note page (FA-2). */
 object ExtractionScheduler {
 
-    /** Short delay after a save so a burst of edits coalesces into one run (with REPLACE). */
-    private const val INITIAL_DELAY_SECONDS = 5L
+    /**
+     * Short delay after a save so a burst of edits coalesces into one run (with REPLACE). Lowered
+     * 5s→3s (FA-24d device feedback: extraction felt slow); the bulk of the remaining latency is
+     * ML Kit recognition + the Anthropic inference call, not this coalescing window.
+     */
+    private const val INITIAL_DELAY_SECONDS = 3L
 
     fun enqueue(context: Context, pageId: String) {
         // NETWORK_TYPE_NOT_REQUIRED so the job isn't gated on network (the AI call retries if

@@ -6,6 +6,7 @@ import ai.elrond.data.RecognitionCacheRepository
 import ai.elrond.data.SubjectRepository
 import ai.elrond.data.SuggestionRepository
 import ai.elrond.data.TagRepository
+import ai.elrond.domain.NotebookLink
 import ai.elrond.domain.PendingSuggestion
 import ai.elrond.domain.SuggestedTag
 import ai.elrond.domain.SuggestionOrigin
@@ -45,6 +46,7 @@ class TagSuggestionProvider @Inject constructor(
         val notebookTags: Map<String, List<Tag>>,
         val noteSubjects: Map<String, String>,
         val aiPending: List<PendingSuggestion>,
+        val outgoingLinks: List<NotebookLink>,
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -54,8 +56,10 @@ class TagSuggestionProvider @Inject constructor(
             tagRepository.observeNotebookTags(),
             subjectRepository.observeNoteSubjects(),
             suggestionRepository.observeTagSuggestions(notebookId),
-        ) { allTags, notebookTags, noteSubjects, aiPending ->
-            Inputs(allTags, notebookTags, noteSubjects, aiPending)
+            // Reactive so placing a link re-runs the link-graph signal without reopening (FA-24d).
+            notebookLinkRepository.observeLinksFromNotebook(notebookId),
+        ) { allTags, notebookTags, noteSubjects, aiPending, outgoingLinks ->
+            Inputs(allTags, notebookTags, noteSubjects, aiPending, outgoingLinks)
         }.mapLatest { build(notebookId, limit, it) }
 
     private suspend fun build(notebookId: String, limit: Int, i: Inputs): List<SuggestedTag> {
@@ -69,16 +73,15 @@ class TagSuggestionProvider @Inject constructor(
                 .flatMap { sib -> i.notebookTags[sib].orEmpty().map { it.id } }
         }
 
-        // Signal 2: notebooks this one links to (page-scoped links → target notebooks' tags).
-        val pageIds = noteRepository.pageIdsForNotebook(notebookId)
-        val linkedTagIds = pageIds
-            .flatMap { notebookLinkRepository.loadForPage(it) }
+        // Signal 2: notebooks this one links to (reactive outgoing links → target notebooks' tags).
+        val linkedTagIds = i.outgoingLinks
             .mapNotNull { it.targetNotebookId }
             .flatMap { target -> i.notebookTags[target].orEmpty().map { it.id } }
 
         // Signal 3: whole-word match against the notebook's content AND its (user-given) title, so a
         // named-but-empty notebook still gets title-relevant suggestions. usageCounts is only a
         // deterministic tie-break now (the old frequency fallback was removed — see the engine).
+        val pageIds = noteRepository.pageIdsForNotebook(notebookId)
         val usageCounts = i.notebookTags.values.flatten().groupingBy { it.id }.eachCount()
         val text = pageIds
             .flatMap { recognitionCache.getForPage(it).map { line -> line.text } }
@@ -99,14 +102,14 @@ class TagSuggestionProvider @Inject constructor(
         // Classify each AI (Level 2) row. It's an endorsed-EXISTING tag only when it's the SAME tag
         // (exact/plural) as one that exists — a more-specific suggestion like "spider graph" is NOT
         // swallowed by a generic existing "graph"; it stays a new tag. Drop a row that duplicates a
-        // tag the notebook ALREADY HAS (aggressive subset match — no point re-offering a variant of
-        // an assigned tag), or one Level 1 is already surfacing (same tag → Level 1 wins the tie).
+        // tag the notebook ALREADY HAS (aggressive subset match — no point re-offering a variant of an
+        // assigned tag). A row that matches a Level 1 candidate is KEPT: when the AI agrees with a
+        // Level 1 existing tag, the merge below shows the AI_EXISTING (bordered) pill for it, so the
+        // user sees the AI endorsed one of their tags rather than a plain Level 1 pill (FA-24d).
         val assignedNames = assigned.map { it.name }
-        val level1Names = level1.map { it.name }
         val level2 = i.aiPending.mapNotNull { row ->
             when {
                 TagMatching.nearDuplicateOfAny(row.content, assignedNames) -> null
-                TagMatching.sameTagAsAny(row.content, level1Names) -> null
                 else -> {
                     val existing = i.allTags.firstOrNull { TagMatching.isSameTag(it.name, row.content) }
                     if (existing != null) {
@@ -119,8 +122,8 @@ class TagSuggestionProvider @Inject constructor(
         }
 
         // AI suggestions FIRST so a text-heavy notebook's Level 1 matches can't starve them out of the
-        // cap (the user sized the AI count deliberately); Level 1 fills the remaining slots. De-dup by
-        // name, cap at [limit].
+        // cap (the user sized the AI count deliberately), AND so a tag both tiers agree on renders as
+        // the AI_EXISTING (bordered) pill rather than the plain Level 1 one. De-dup by name, cap.
         val seen = mutableSetOf<String>()
         return (level2 + level1).filter { seen.add(it.name.trim().lowercase()) }.take(limit)
     }

@@ -57,9 +57,9 @@ class SuggestionRepository(
     suspend fun existingTagContents(notebookId: String): Set<String> =
         dao.tagContentsForNotebook(notebookId).map { it.trim().lowercase() }.toSet()
 
-    /** Refresh-on-change: drop a notebook's un-actioned TAG suggestions before a re-run (FA-24d). */
-    suspend fun clearActiveTagSuggestions(notebookId: String) =
-        dao.deleteActiveTagsForNotebook(notebookId)
+    /** Roll active TAG suggestions forward: keep the newest [limit], evict the oldest beyond it (FA-24d). */
+    suspend fun trimActiveTagSuggestions(notebookId: String, limit: Int) =
+        dao.trimActiveTagsForNotebook(notebookId, limit)
 
     suspend fun add(suggestions: List<PendingSuggestion>) {
         if (suggestions.isEmpty()) return
