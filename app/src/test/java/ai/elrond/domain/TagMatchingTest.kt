@@ -17,9 +17,24 @@ class TagMatchingTest {
     }
 
     @Test
-    fun `word-subset collapses in either direction`() {
+    fun `word-subset collapses in either direction for isNearDuplicate`() {
         assertTrue(TagMatching.isNearDuplicate("settings", "user settings"))
         assertTrue(TagMatching.isNearDuplicate("user settings", "settings"))
+    }
+
+    @Test
+    fun `isSameTag tolerates case and plural but NOT word-subset`() {
+        assertTrue(TagMatching.isSameTag("Physics", "physics"))
+        assertTrue(TagMatching.isSameTag("revision", "revisions"))
+        // A more-specific tag is a DIFFERENT tag under isSameTag (so "spider graph" survives "graph").
+        assertFalse(TagMatching.isSameTag("graph", "spider graph"))
+        assertFalse(TagMatching.isSameTag("settings", "user settings"))
+    }
+
+    @Test
+    fun `sameTagAsAny scans by exact-or-plural only`() {
+        assertTrue(TagMatching.sameTagAsAny("revisions", listOf("physics", "revision")))
+        assertFalse(TagMatching.sameTagAsAny("spider graph", listOf("graph", "physics")))
     }
 
     @Test

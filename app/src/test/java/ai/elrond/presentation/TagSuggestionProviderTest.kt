@@ -54,8 +54,9 @@ class TagSuggestionProviderTest {
 
         val result = provider().observe("nb").first()
 
+        // AI first (so Level 1 can't starve it), then Level 1; the AI "physics" duplicate is dropped.
         assertEquals(
-            listOf(SuggestionOrigin.EXISTING to "physics", SuggestionOrigin.AI to "biology"),
+            listOf(SuggestionOrigin.AI to "biology", SuggestionOrigin.EXISTING to "physics"),
             result.map { it.origin to it.name },
         )
     }
@@ -73,30 +74,44 @@ class TagSuggestionProviderTest {
 
         val result = provider().observe("nb").first()
 
+        // AI first: the endorsed-existing + new AI tags precede the Level 1 subject match.
         assertEquals(
             listOf(
-                Triple(SuggestionOrigin.EXISTING, "physics", "physics"),
                 Triple(SuggestionOrigin.AI_EXISTING, "thermodynamics", "thermo"),
                 Triple(SuggestionOrigin.AI, "entropy", null),
+                Triple(SuggestionOrigin.EXISTING, "physics", "physics"),
             ),
             result.map { Triple(it.origin, it.name, it.tag?.id) },
         )
     }
 
     @Test
-    fun `an AI near-duplicate of an existing tag collapses onto that existing tag`() = runTest {
-        coEvery { tagRepository.observeTags() } returns flowOf(listOf(tag("settings")))
+    fun `an AI exact-or-plural match of an existing tag collapses onto it`() = runTest {
+        coEvery { tagRepository.observeTags() } returns flowOf(listOf(tag("revision")))
         coEvery { tagRepository.observeNotebookTags() } returns flowOf(emptyMap())
         coEvery { subjectRepository.observeNoteSubjects() } returns flowOf(emptyMap())
-        coEvery { suggestionRepository.observeTagSuggestions("nb") } returns flowOf(listOf(aiPending("user settings")))
+        coEvery { suggestionRepository.observeTagSuggestions("nb") } returns flowOf(listOf(aiPending("revisions")))
         coEvery { noteRepository.pageIdsForNotebook("nb") } returns emptyList()
 
         val result = provider().observe("nb").first()
 
-        assertEquals(1, result.size)
         assertEquals(SuggestionOrigin.AI_EXISTING, result.single().origin)
-        assertEquals("settings", result.single().name)
-        assertEquals("settings", result.single().tag?.id)
+        assertEquals("revision", result.single().name)
+    }
+
+    @Test
+    fun `a more-specific AI tag is NOT swallowed by a generic existing tag`() = runTest {
+        // "graph" exists (on another notebook), AI proposes the new concept "spider graph".
+        coEvery { tagRepository.observeTags() } returns flowOf(listOf(tag("graph")))
+        coEvery { tagRepository.observeNotebookTags() } returns flowOf(mapOf("other" to listOf(tag("graph"))))
+        coEvery { subjectRepository.observeNoteSubjects() } returns flowOf(emptyMap())
+        coEvery { suggestionRepository.observeTagSuggestions("nb") } returns flowOf(listOf(aiPending("spider graph")))
+        coEvery { noteRepository.pageIdsForNotebook("nb") } returns emptyList()
+
+        val result = provider().observe("nb").first()
+
+        assertEquals(SuggestionOrigin.AI, result.single().origin) // new tag, not AI_EXISTING
+        assertEquals("spider graph", result.single().name)
     }
 
     @Test

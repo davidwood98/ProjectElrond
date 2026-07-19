@@ -19,9 +19,20 @@ object TagMatching {
     private fun stemmedTokens(name: String): Set<String> = words(name).mapTo(mutableSetOf()) { stem(it) }
 
     /**
-     * Two tag names are near-duplicates when, after lowercasing + singular/plural folding, their word
-     * sets are equal OR one is a subset of the other — so "revision"/"revisions" and
-     * "settings"/"user settings" both collapse. Empty-token names never match.
+     * The SAME tag, tolerating case + singular/plural only — "revision"/"revisions" match, but
+     * "graph"/"spider graph" do NOT. Use this to decide whether an AI suggestion IS an existing tag
+     * (so a more-specific new tag like "spider graph" isn't swallowed by a generic "graph").
+     */
+    fun isSameTag(a: String, b: String): Boolean {
+        val sa = stemmedTokens(a)
+        val sb = stemmedTokens(b)
+        return sa.isNotEmpty() && sa == sb
+    }
+
+    /**
+     * Near-duplicates: [isSameTag] PLUS word-subset either way, so "settings"/"user settings" also
+     * collapse. Deliberately aggressive — use only to avoid re-offering a variant of a tag the
+     * notebook ALREADY HAS, never to reclassify a genuinely more-specific suggestion.
      */
     fun isNearDuplicate(a: String, b: String): Boolean {
         val sa = stemmedTokens(a)
@@ -30,7 +41,11 @@ object TagMatching {
         return sa == sb || sa.containsAll(sb) || sb.containsAll(sa)
     }
 
-    /** True if [name] near-duplicates any of [existing]. */
+    /** True if [name] is the same tag as any of [others] (case + plural only). */
+    fun sameTagAsAny(name: String, others: Collection<String>): Boolean =
+        others.any { isSameTag(name, it) }
+
+    /** True if [name] near-duplicates any of [existing] (aggressive; for already-assigned tags). */
     fun nearDuplicateOfAny(name: String, existing: Collection<String>): Boolean =
         existing.any { isNearDuplicate(name, it) }
 }

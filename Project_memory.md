@@ -2315,6 +2315,30 @@ existing tag and invent new ones. **No schema change — DB stays v22. 589 app +
   **Device-verify pending:** an existing tag the content doesn't literally name still gets suggested
   (bordered pill); tapping it assigns the existing tag.
 
+### FA-24d round 4 — AI new tags were vanishing (2026-07-19)
+
+Device bug: Level 2 AI *new* tags stopped appearing (e.g. a notebook full of "spider graph" never
+suggested "spider graph"; on a text-heavy notebook they vanished on refresh). Two regressions from the
+prior rounds, both fixed. **No schema change — DB stays v22; tag test suites green.**
+
+- **Level 1 starved Level 2.** The merge was `(level1 + level2).take(5)`. Round 2's title-as-content
+  signal made text-heavy notebooks produce ≥5 Level 1 existing-tag matches, filling every slot before
+  any AI suggestion. **Fix:** merge **AI first** (`level2 + level1`), so the user-sized AI suggestions
+  are never crowded out; Level 1 fills the remaining slots.
+- **Word-subset near-dup swallowed specific new tags.** Round 3 classified an AI suggestion as
+  "endorse existing" via `isNearDuplicate` (which includes word-subset), so a generic existing "graph"
+  (on any notebook) collapsed a new "spider graph" into "graph". **Fix:** split the matcher —
+  `TagMatching.isSameTag` (case + singular/plural only, **no** subset) is used to classify an AI
+  suggestion as an existing tag and to de-dup against Level 1; the aggressive subset `isNearDuplicate`
+  is now used **only** to drop a suggestion that duplicates a tag the notebook ALREADY HAS (assigned).
+  So "revisions"→existing "revision" still collapses, but "spider graph" survives alongside "graph",
+  and "user settings" is only suppressed when "settings" is actually on the notebook.
+- Runner within-batch de-dup also switched subset→`isSameTag`, so the AI returning both "graph" and
+  "spider graph" keeps both. Tests: `TagMatchingTest` (+isSameTag/sameTagAsAny), provider (AI-first
+  order, spider-graph-not-swallowed, exact/plural collapse), runner (unchanged behaviour reverified).
+  **Device-verify pending:** a "spider graph" notebook suggests a new "spider graph" tag; AI tags
+  persist on a text-heavy notebook instead of being crowded out by Level 1.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):

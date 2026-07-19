@@ -60,11 +60,12 @@ class TagSuggestionRunner(
         val pending = names.mapNotNull { name ->
             val norm = name.trim().lowercase()
             when {
-                // Drop empties, exact re-suggestions, and near-duplicates of a name already kept this
-                // pass ("revision"/"revisions"). Names that match an EXISTING tag are KEPT — the
-                // provider classifies them as an endorsed-existing suggestion, not a new tag.
+                // Drop empties, exact re-suggestions, and the SAME tag already kept this pass
+                // ("revision"/"revisions"); a more-specific name ("spider graph" vs "graph") is kept.
+                // Names that match an EXISTING tag are KEPT — the provider classifies them as an
+                // endorsed-existing suggestion, not a new tag.
                 norm.isEmpty() || norm in alreadySuggested -> null
-                TagMatching.nearDuplicateOfAny(name, accepted) -> null
+                TagMatching.sameTagAsAny(name, accepted) -> null
                 else -> {
                     accepted += name.trim()
                     PendingSuggestion(
