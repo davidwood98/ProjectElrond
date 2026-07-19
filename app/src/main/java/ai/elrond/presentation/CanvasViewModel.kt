@@ -3364,8 +3364,13 @@ class CanvasViewModel(
         /** Fallback y for a re-sent query when the error note's position is unknown. */
         private const val RESEND_FALLBACK_Y: Float = 120f
 
-        /** Pen-idle time before the extraction sheet may surface, so it never interrupts writing (FA-24d). */
-        private const val POPUP_IDLE_DELAY_MS: Long = 1_000L
+        /**
+         * Pen-idle time before the extraction sheet may surface, so it never interrupts writing
+         * (FA-24d). This gates only the POPUP display — the extraction pipeline (recognition + AI)
+         * runs independently and is never delayed by it. 1s was too short (a normal think-pause
+         * mid-writing tripped it); 2.5s requires a deliberate pause.
+         */
+        private const val POPUP_IDLE_DELAY_MS: Long = 2_500L
 
         /** Outlives the ViewModel for the onCleared() persistence flush. */
         private val flushScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
