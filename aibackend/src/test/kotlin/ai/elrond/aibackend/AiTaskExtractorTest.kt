@@ -86,6 +86,29 @@ class AiTaskExtractorTest {
     }
 
     @Test
+    fun `existing tasks are delivered to the model for de-dup`() = runTest {
+        val provider = providerReturning("[]")
+        AiTaskExtractor(provider).extract(
+            "notes",
+            existingTasks = listOf("Email Sarah the report", "  ", "Book meeting room"),
+        )
+
+        val prompt = (provider.lastRequest!!.input as AIInput.Text).text
+        assertTrue(prompt.contains("ALREADY ON LIST"))
+        assertTrue(prompt.contains("Email Sarah the report"))
+        assertTrue(prompt.contains("Book meeting room"))
+    }
+
+    @Test
+    fun `no existing tasks keeps the prompt free of the already-on-list block`() = runTest {
+        val provider = providerReturning("[]")
+        AiTaskExtractor(provider).extract("notes", existingTasks = listOf("   ", ""))
+
+        val prompt = (provider.lastRequest!!.input as AIInput.Text).text
+        assertFalse(prompt.contains("ALREADY ON LIST"))
+    }
+
+    @Test
     fun `no reference date keeps the prompt free of a today anchor`() = runTest {
         val provider = providerReturning("[]")
         AiTaskExtractor(provider).extract("notes")

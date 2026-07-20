@@ -61,8 +61,11 @@ class CanvasViewModelExtractionTest {
     fun tearDown() = Dispatchers.resetMain()
 
     private class FakeExtractor(private val tasks: List<ExtractedTask>) : TaskExtractor {
-        override suspend fun extract(noteContent: String, referenceDate: String?): Result<List<ExtractedTask>> =
-            Result.success(tasks)
+        override suspend fun extract(
+            noteContent: String,
+            referenceDate: String?,
+            existingTasks: List<String>,
+        ): Result<List<ExtractedTask>> = Result.success(tasks)
     }
 
     private fun viewModel(

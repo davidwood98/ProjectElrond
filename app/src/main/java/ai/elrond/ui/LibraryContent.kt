@@ -56,7 +56,6 @@ import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
@@ -795,6 +794,7 @@ fun TodoBoardSection(
     // Shared key so the List/Kanban choice persists across rotation (see NotesSection's note).
     var kanban by rememberSaveable(key = "library.todoKanban") { mutableStateOf(false) }
     var editingDueFor by remember { mutableStateOf<TodoItem?>(null) }
+    var editingTitleFor by remember { mutableStateOf<TodoItem?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         LibraryActionBar(onToggleSidebar = onToggleSidebar, onOpenSettings = onOpenSettings)
@@ -829,15 +829,17 @@ fun TodoBoardSection(
             } else {
                 Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
                     items.forEach { item ->
-                        TodoListRow(
+                        TodoTile(
                             item = item,
                             onToggle = { todoViewModel.setCompleted(item.id, it) },
-                            onSetStatus = { todoViewModel.setStatus(item.id, it) },
                             onSetPriority = { todoViewModel.edit(item.id, item.content, it, item.dueAt) },
+                            onSetStatus = { todoViewModel.setStatus(item.id, it) },
+                            onEditTitle = { editingTitleFor = item },
                             onEditDue = { editingDueFor = item },
                             onDelete = { todoViewModel.delete(item.id) },
-                            onOpenNote = { item.sourcePageId?.let(onOpenNote) },
+                            onOpenSource = { item.sourcePageId?.let(onOpenNote) },
                             sourceLabel = item.sourcePageId?.let { sourceLabels[it] },
+                            compact = false,
                         )
                         Spacer(Modifier.height(10.dp))
                     }
@@ -859,6 +861,16 @@ fun TodoBoardSection(
             item = item,
             onSet = { millis -> todoViewModel.edit(item.id, item.content, item.priority, millis); editingDueFor = null },
             onDismiss = { editingDueFor = null },
+        )
+    }
+
+    editingTitleFor?.let { item ->
+        SubjectNameDialog(
+            title = "Edit task",
+            initial = item.content,
+            confirmLabel = "Save",
+            onConfirm = { todoViewModel.edit(item.id, it, item.priority, item.dueAt); editingTitleFor = null },
+            onDismiss = { editingTitleFor = null },
         )
     }
 }
@@ -888,62 +900,6 @@ private fun SegmentedToggle(options: List<Pair<String, Boolean>>, onSelect: (Str
     }
 }
 
-@Composable
-private fun TodoListRow(
-    item: TodoItem,
-    onToggle: (Boolean) -> Unit,
-    onSetStatus: (TodoStatus) -> Unit,
-    onSetPriority: (TodoPriority) -> Unit,
-    onEditDue: () -> Unit,
-    onDelete: () -> Unit,
-    onOpenNote: () -> Unit,
-    sourceLabel: String? = null,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, Neutral300),
-        color = MaterialTheme.colorScheme.surface,
-    ) {
-        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
-            // Checkbox with the priority dot directly beneath it (FA-15).
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Checkbox(checked = item.isCompleted, onCheckedChange = onToggle)
-                TodoPriorityDot(item.priority, onSetPriority)
-            }
-            Column(modifier = Modifier.weight(1f).padding(start = 8.dp, top = 10.dp)) {
-                Text(
-                    item.content,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    textDecoration = if (item.isCompleted) TextDecoration.LineThrough else null,
-                    color = if (item.isCompleted) Neutral500 else MaterialTheme.colorScheme.onSurface,
-                )
-                if (item.isAiExtracted && item.hasSourceLink) {
-                    AiSourceLink(
-                        title = sourceLabel ?: item.sourcePageTitle.orEmpty(),
-                        onClick = onOpenNote,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
-            }
-            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(top = 8.dp)) {
-                TodoStatusPill(item.status, onSetStatus)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = item.dueAt?.let { todoDueLabel(it) } ?: "Set date",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (item.dueAt != null) MaterialTheme.colorScheme.onSurfaceVariant else Neutral500,
-                    modifier = Modifier.clickable(onClick = onEditDue),
-                )
-            }
-            androidx.compose.material3.IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Filled.Delete, contentDescription = "Delete task", tint = Neutral500, modifier = Modifier.size(18.dp))
-            }
-        }
-    }
-}
 
 @Composable
 private fun KanbanBoard(

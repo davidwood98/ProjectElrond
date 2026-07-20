@@ -28,7 +28,14 @@ interface TaskExtractor {
      * @param referenceDate the device's "today" as a human-readable string (e.g.
      *        "Friday 2026-06-05") used to anchor relative dates ("this Monday",
      *        "tomorrow"). Null disables relative-date guidance (back-compat).
+     * @param existingTasks the titles already on the to-do list. The model is told to
+     *        skip anything that duplicates OR is semantically similar to one of these,
+     *        so re-phrasings of an already-captured task aren't re-offered (FA-24e).
      * @return tasks found in [noteContent]; empty list when there are none.
      */
-    suspend fun extract(noteContent: String, referenceDate: String? = null): Result<List<ExtractedTask>>
+    suspend fun extract(
+        noteContent: String,
+        referenceDate: String? = null,
+        existingTasks: List<String> = emptyList(),
+    ): Result<List<ExtractedTask>>
 }

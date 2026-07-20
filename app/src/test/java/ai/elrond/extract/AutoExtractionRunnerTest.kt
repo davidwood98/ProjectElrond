@@ -190,8 +190,14 @@ class AutoExtractionRunnerTest {
     /** Counts extractor invocations so a skipped run is observable. */
     private class CountingTasks(private val tasks: List<ExtractedTask>) : TaskExtractor {
         var calls = 0
-        override suspend fun extract(noteContent: String, referenceDate: String?): Result<List<ExtractedTask>> {
+        var lastExistingTasks: List<String> = emptyList()
+        override suspend fun extract(
+            noteContent: String,
+            referenceDate: String?,
+            existingTasks: List<String>,
+        ): Result<List<ExtractedTask>> {
             calls++
+            lastExistingTasks = existingTasks
             return Result.success(tasks)
         }
     }
@@ -252,8 +258,19 @@ class AutoExtractionRunnerTest {
         assertEquals("p1" to "note text", saved)
     }
 
+    @Test
+    fun `existing to-do titles are passed to the extractor for de-dup`() = runTest {
+        todoRepository.addManual("Buy milk")
+        val tasks = CountingTasks(listOf(ExtractedTask("Buy eggs")))
+        gatedRunner(tasks, loadLastText = { null })
+            .run("p1", confirmTodo = false, confirmCalendar = false)
+
+        assertTrue(tasks.lastExistingTasks.contains("buy milk"))
+    }
+
     private fun fakeTasks(tasks: List<ExtractedTask>) = object : TaskExtractor {
-        override suspend fun extract(noteContent: String, referenceDate: String?) = Result.success(tasks)
+        override suspend fun extract(noteContent: String, referenceDate: String?, existingTasks: List<String>) =
+            Result.success(tasks)
     }
 
     private fun fakeEvents(events: List<ExtractedEvent>) = object : CalendarEventExtractor {

@@ -2401,6 +2401,44 @@ Two follow-ups from device questions. **No schema change — DB stays v22. 630 J
   an AI-suggested tag, write more of that theme → it can reappear; slide the AI count to 1 (terse) vs 5
   (broad) and confirm suggestion volume tracks it on dense notes.
 
+## FA-24e — to-do de-dup + editable titles (device feedback, 2026-07-20)
+
+Two office-device bugs. **No schema change — DB stays v22.**
+
+- **Duplicate / near-duplicate extracted to-dos.** Both extraction paths (`CanvasViewModel.offerExtraction`
+  for `/Q`/lasso and the background `AutoExtractionRunner`) de-duped ONLY by exact normalized string
+  (`trim().lowercase()`) against `TodoRepository.existingContents()`, and `AiTaskExtractor` was given zero
+  knowledge of the existing list. Since the model re-phrases the same underlying task each run, exact-match
+  dedup sailed past the paraphrases (e.g. accepted "QA/QC module check for hardware issues" then re-offered
+  "Check QA/QC module monitor for touch screen issues"). Fix: `TaskExtractor.extract` gained a third
+  `existingTasks: List<String> = emptyList()` param (default keeps back-compat); `AiTaskExtractor` injects
+  the list into the **USER** prompt (not the cached system prefix) under an "ALREADY ON LIST" block telling
+  the model to skip anything that's essentially the same action even if worded differently. Both callers
+  fetch `existingContents()` **before** extracting and pass it through (`AutoExtractionRunner` reuses the
+  same set for its post-extract `seen` de-dup — one fewer DAO call). The exact-string de-dup stays as a
+  cheap backstop.
+- **Poor extraction quality.** Same edit reworks the `SYSTEM_PROMPT`: synthesise ONE concrete action from
+  fragmentary/exploratory notes + arrows/asides (the QA/QC monitor example is spelled out in-prompt), and
+  collapse a note + its follow-up detail into the same task instead of splitting into near-duplicates.
+- **To-do titles were uneditable.** Backend already existed (`TodoRepository.editContent` / `TodoViewModel.edit`);
+  the UI just never exposed it. Now tapping a task title opens the shared `SubjectNameDialog` ("Edit task",
+  Save) — the same dialog notebook rename uses — matching the user's requested UX. Applied to BOTH tile
+  surfaces: the canvas `TodoPanel` drawer and the to-do viewer screen's **List** view (`TodoBoardSection`).
+  The **Kanban** card/menu is deliberately left alone (rename stays a List/panel affordance per device feedback).
+- **De-duplicated the two to-do tiles into one `TodoTile` composable** (in `TodoStatusStyle.kt`, alongside the
+  other shared leaf composables). The canvas drawer's `TodoRow` and the viewer's `LibraryContent.TodoListRow`
+  were near-identical chrome; both were deleted and now call `TodoTile(..., compact = <bool>)`. `compact = true`
+  = narrow-drawer look (status by tile-fill wash, single-line ellipsised title, due chip inline under the title);
+  `compact = false` = wide-viewer look (`TodoStatusPill` + right-hand due column, wrapping title). Outer
+  tile spacing is the caller's `modifier`. A private `TodoDueChip` holds the shared due-date affordance. So a
+  common change (like the tap-to-rename above) now lands in ONE place. Harmonised three incidental details in
+  the merge (both now: completed title = `Neutral500`, delete tint = `onSurfaceVariant`, due chip = `Medium`
+  weight). Orphaned imports pruned from both files; build clean, no unused-import warnings.
+- Tests: `AiTaskExtractorTest` (existing tasks reach the prompt / absent when list blank),
+  `AutoExtractionRunnerTest` (existing to-do titles passed through to the extractor). All changed-area JVM
+  tests green. **Device-verify pending:** accept an AI to-do, add related notes → the re-phrased same task
+  is NOT re-offered; tap a to-do title → rename dialog saves.
+
 ## Calendar architecture (Phase 5 — data/provider layer; view UI added in Phase 6)
 
 Swappable calendar integration behind `CalendarProvider` (`app/.../data/`):

@@ -1,13 +1,20 @@
 package ai.elrond.ui
 
+import ai.elrond.domain.TodoItem
 import ai.elrond.domain.TodoPriority
 import ai.elrond.domain.TodoStatus
+import ai.elrond.ui.theme.Neutral300
+import ai.elrond.ui.theme.Neutral500
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -16,12 +23,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,6 +43,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.time.Instant
 import java.time.LocalDate
@@ -148,4 +160,119 @@ internal fun TodoAddRow(onAdd: (String, TodoPriority) -> Unit, modifier: Modifie
             Icon(Icons.Filled.Add, contentDescription = "Add task")
         }
     }
+}
+
+/**
+ * The single to-do tile shared by BOTH the canvas [TodoPanel] and the Library to-do viewer's List
+ * view, so its chrome + interactions (tap-title-to-rename, priority dot, due chip, delete, AI source
+ * link) live in one place — a change here reaches both surfaces. [compact] selects the narrow-drawer
+ * look (status shown by a light tile-fill wash, single-line ellipsised title, due chip inline under
+ * the title) vs the wide-viewer look (a [TodoStatusPill] + a right-hand due column, wrapping title).
+ * The Kanban card stays separate by design. Outer spacing between tiles is the caller's [modifier].
+ */
+@Composable
+internal fun TodoTile(
+    item: TodoItem,
+    onToggle: (Boolean) -> Unit,
+    onSetPriority: (TodoPriority) -> Unit,
+    onSetStatus: (TodoStatus) -> Unit,
+    onEditTitle: () -> Unit,
+    onEditDue: () -> Unit,
+    onDelete: () -> Unit,
+    onOpenSource: () -> Unit,
+    sourceLabel: String?,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    // Compact drawer encodes in-progress by a light tile wash (no pill fits the narrow width); the
+    // wide viewer shows an explicit status pill instead, so its tile stays plain.
+    val tileColor = if (compact && item.status == TodoStatus.IN_PROGRESS) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, Neutral300),
+        color = tileColor,
+    ) {
+        Row(
+            modifier = Modifier.padding(if (compact) 12.dp else 14.dp),
+            verticalAlignment = if (compact) Alignment.CenterVertically else Alignment.Top,
+        ) {
+            // Checkbox with the priority dot directly beneath it (FA-15).
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Checkbox(checked = item.isCompleted, onCheckedChange = onToggle)
+                TodoPriorityDot(item.priority, onSetPriority)
+            }
+            Column(modifier = Modifier.weight(1f).padding(start = 8.dp, top = if (compact) 0.dp else 10.dp)) {
+                Text(
+                    text = item.content,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    // Compact: one line + ellipsis so every drawer tile is the same height. Wide: wraps.
+                    maxLines = if (compact) 1 else Int.MAX_VALUE,
+                    overflow = TextOverflow.Ellipsis,
+                    textDecoration = if (item.isCompleted) TextDecoration.LineThrough else null,
+                    color = if (item.isCompleted) Neutral500 else MaterialTheme.colorScheme.onSurface,
+                    // Tap the title to rename the task, matching the notebook-title rename UX.
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onEditTitle),
+                )
+                if (compact) {
+                    // Source link + due chip sit inline under the title in the narrow drawer.
+                    Row(
+                        modifier = Modifier.padding(top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        if (item.isAiExtracted && item.hasSourceLink) {
+                            AiSourceLink(
+                                title = sourceLabel ?: item.sourcePageTitle.orEmpty(),
+                                onClick = onOpenSource,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                        }
+                        TodoDueChip(item, onEditDue)
+                    }
+                } else if (item.isAiExtracted && item.hasSourceLink) {
+                    AiSourceLink(
+                        title = sourceLabel ?: item.sourcePageTitle.orEmpty(),
+                        onClick = onOpenSource,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
+            if (!compact) {
+                // Wide viewer: status pill + due date stacked at the right edge.
+                Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(top = 8.dp)) {
+                    TodoStatusPill(item.status, onSetStatus)
+                    Spacer(Modifier.height(6.dp))
+                    TodoDueChip(item, onEditDue)
+                }
+            }
+            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "Delete task",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Tappable due-date chip ("Set date" when unset) — the due affordance for both tile layouts. */
+@Composable
+private fun TodoDueChip(item: TodoItem, onEditDue: () -> Unit) {
+    Text(
+        text = item.dueAt?.let { todoDueLabel(it) } ?: "Set date",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Medium,
+        color = if (item.dueAt != null) MaterialTheme.colorScheme.onSurfaceVariant else Neutral500,
+        modifier = Modifier.clickable(onClick = onEditDue),
+    )
 }

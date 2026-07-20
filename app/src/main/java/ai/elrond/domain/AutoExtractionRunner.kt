@@ -72,7 +72,10 @@ class AutoExtractionRunner(
         val today = Instant.ofEpochMilli(clock()).atZone(zone).toLocalDate()
         val referenceDate = "${today.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.ENGLISH)} $today"
 
-        val tasks = taskExtractor?.extract(fullText, referenceDate)?.getOrNull().orEmpty()
+        // Existing to-do titles feed the extractor so the model skips re-phrasings of tasks
+        // already captured (FA-24e); the same set backs the exact-match de-dup below.
+        val existingTodos = runCatching { todoRepository.existingContents() }.getOrDefault(emptySet())
+        val tasks = taskExtractor?.extract(fullText, referenceDate, existingTodos.toList())?.getOrNull().orEmpty()
         val events = eventExtractor?.extract(fullText, referenceDate)?.getOrNull().orEmpty()
         // Ran the extractors this pass → remember the text so an unchanged next save skips.
         saveLastText(pageId, fullText)
@@ -83,7 +86,7 @@ class AutoExtractionRunner(
         // Keys are namespaced by type ("TODO:" / "EVENT:") so a task and an event with the same
         // text don't collide and silently drop one of them.
         val seen = mutableSetOf<String>().apply {
-            addAll(runCatching { todoRepository.existingContents() }.getOrDefault(emptySet()).map { "TODO:$it" })
+            addAll(existingTodos.map { "TODO:$it" })
             addAll(runCatching { calendarRepository.suggestedTitles() }.getOrDefault(emptySet()).map { "EVENT:$it" })
             addAll(runCatching { suggestionRepository.existingTypedContents(pageId) }.getOrDefault(emptySet()))
         }

@@ -3085,11 +3085,11 @@ class CanvasViewModel(
         val today = java.time.LocalDate.now(java.time.ZoneId.systemDefault())
         val referenceDate =
             "${today.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.ENGLISH)} $today"
-        val extracted = extractor.extract(pageText, referenceDate).getOrNull().orEmpty()
-        if (extracted.isEmpty()) return ExtractionOffer.NONE
-
-        // Items already on the to-do list always block a re-offer (and trigger the notify below).
+        // Items already on the to-do list always block a re-offer (and trigger the notify below);
+        // they also feed the extractor so the model skips re-phrasings of captured tasks (FA-24e).
         val onTodoList = runCatching { todoRepository.existingContents() }.getOrDefault(emptySet())
+        val extracted = extractor.extract(pageText, referenceDate, onTodoList.toList()).getOrNull().orEmpty()
+        if (extracted.isEmpty()) return ExtractionOffer.NONE
         // A written `/Q` also suppresses lines the user explicitly rejected; a lasso does not.
         val rejected = if (trigger == ExtractionTrigger.QUERY) {
             suggestionRepository?.let { runCatching { it.rejectedContents(pageId) }.getOrDefault(emptySet()) }.orEmpty()
